@@ -1,0 +1,63 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "tokenkick"
+version = "1.0.0"
+description = "Local CLI for tracking AI coding quota windows, planning reset coverage, and optional explicit provider-native kicks."
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+authors = [
+    { name = "Paul Kahle" },
+]
+keywords = ["ai-coding", "claude", "cli", "codex", "developer-tools", "mcp", "quota", "rate-limit"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Topic :: Software Development",
+    "Topic :: System :: Monitoring",
+    "Topic :: Utilities",
+]
+dependencies = [
+    "click>=8.1",
+    "rich>=13.0",
+    "httpx>=0.27",
+    "InquirerPy>=0.3.4",
+    "prompt_toolkit>=3.0",
+    "mcp>=1.9",
+    "tomli>=2.0; python_version<'3.11'",
+]
+
+[project.optional-dependencies]
+notify = ["httpx"]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov",
+    "ruff",
+]
+
+[project.scripts]
+tk = "tokenkick.cli:cli"
+tokenkick = "tokenkick.cli:cli"
+tk-mcp = "tokenkick.mcp_server:main"
+
+[project.urls]
+Homepage = "https://github.com/noriworks/tokenkick"
+Documentation = "https://github.com/noriworks/tokenkick#readme"
+Repository = "https://github.com/noriworks/tokenkick"
+Issues = "https://github.com/noriworks/tokenkick/issues"
+Security = "https://github.com/noriworks/tokenkick/security/policy"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.pytest.ini_options]
+testpaths = ["."]
+python_files = ["test_*.py"]

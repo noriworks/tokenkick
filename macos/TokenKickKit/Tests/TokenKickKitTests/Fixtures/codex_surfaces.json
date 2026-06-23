@@ -1,0 +1,84 @@
+{
+  "schema_version": 1,
+  "read_only": true,
+  "label": "codex (fixture)",
+  "account_key": "manual|codex|fixture",
+  "provider_home": "/Users/fixture/.codex",
+  "order": [
+    "repo",
+    "legacy",
+    "repo-skip"
+  ],
+  "demotion": {
+    "enabled": true,
+    "after_strong_clusters": 5,
+    "min_active_surfaces": 2,
+    "min_kept_anchor_rate": 0.95,
+    "measurement_clusters": 20,
+    "rescue_cooldown_strong_clusters": 20,
+    "force_keep": [
+      "repo"
+    ],
+    "force_prune": [
+      "interactive-like"
+    ],
+    "strong_cluster_count": 7,
+    "demoted": {
+      "interactive-like": {
+        "reason": "redundant"
+      }
+    },
+    "rescues": {},
+    "last_reintroduction": null
+  },
+  "surfaces": [
+    {
+      "surface": "repo",
+      "rank": 1,
+      "state": "force-kept",
+      "demotion_reason": null,
+      "rescue_cooldown_remaining_strong_clusters": null,
+      "score": 4.25,
+      "attempts": 8,
+      "confirmed": 5,
+      "timing_matches": 1,
+      "external_possible": 0,
+      "no_generation": 1,
+      "failures": 1,
+      "last_attempt_at": 1781200000.0,
+      "last_confirmed_at": 1781200300.0
+    },
+    {
+      "surface": "legacy",
+      "rank": 2,
+      "state": "active",
+      "demotion_reason": null,
+      "rescue_cooldown_remaining_strong_clusters": null,
+      "score": 2.0,
+      "attempts": 4,
+      "confirmed": 2,
+      "timing_matches": 0,
+      "external_possible": 0,
+      "no_generation": 0,
+      "failures": 0,
+      "last_attempt_at": null,
+      "last_confirmed_at": null
+    },
+    {
+      "surface": "interactive-like",
+      "rank": null,
+      "state": "force-pruned",
+      "demotion_reason": "manual override",
+      "rescue_cooldown_remaining_strong_clusters": null,
+      "score": -1.0,
+      "attempts": 2,
+      "confirmed": 0,
+      "timing_matches": 0,
+      "external_possible": 0,
+      "no_generation": 1,
+      "failures": 1,
+      "last_attempt_at": null,
+      "last_confirmed_at": null
+    }
+  ]
+}

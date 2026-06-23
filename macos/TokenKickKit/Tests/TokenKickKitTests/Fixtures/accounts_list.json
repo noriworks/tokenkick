@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "ok": true,
+  "error_code": null,
+  "message": null,
+  "warnings": [],
+  "payload": {
+    "accounts": [
+      {
+        "label": "codex (fixture)",
+        "provider": "codex",
+        "visible": true,
+        "kickable": true,
+        "monitor_only": false,
+        "auto_kick": true,
+        "weekly_auto_kick": true,
+        "session_auto_kick": true,
+        "notifications_enabled": true,
+        "notifications_route": "\u274c disabled",
+        "kick_model": "default",
+        "status_probe_enabled": false
+      },
+      {
+        "label": "gemini (fixture)",
+        "provider": "gemini",
+        "visible": true,
+        "kickable": false,
+        "monitor_only": true,
+        "auto_kick": false,
+        "weekly_auto_kick": false,
+        "session_auto_kick": false,
+        "notifications_enabled": true,
+        "notifications_route": "\u274c disabled",
+        "kick_model": "\u2014",
+        "status_probe_enabled": false
+      }
+    ]
+  }
+}

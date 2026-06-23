@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "read_only": true,
+  "applied": false,
+  "built_at": "2026-06-11T12:00:00Z",
+  "work_window": {
+    "start": "2026-06-11T19:00:00Z",
+    "end": "2026-06-11T21:30:00Z",
+    "timezone": "UTC"
+  },
+  "cache_age_seconds": 0,
+  "accounts_considered": [],
+  "segments": [
+    {
+      "account_key": "manual|codex|fixture",
+      "account_label": "codex (fixture)",
+      "provider": "codex",
+      "start": "2026-06-11T19:00:00Z",
+      "end": "2026-06-11T21:30:00Z",
+      "source": "planned_fresh_session",
+      "usable_session_minutes": 150,
+      "kick_at": "2026-06-11T19:00:00Z",
+      "note": "kick at 19:00"
+    }
+  ],
+  "planned_kicks": [
+    {
+      "account_key": "manual|codex|fixture",
+      "account_label": "codex (fixture)",
+      "provider": "codex",
+      "kick_at": "2026-06-11T19:00:00Z",
+      "work_start": "2026-06-11T19:00:00Z",
+      "work_end": "2026-06-11T21:30:00Z",
+      "segment_start": "2026-06-11T19:00:00Z",
+      "segment_end": "2026-06-11T21:30:00Z",
+      "usable_session_minutes": 150,
+      "reason": "orchestrated",
+      "window_basis": "session",
+      "purpose": "coverage"
+    }
+  ],
+  "coverage_gaps": [],
+  "diff": {
+    "adds": [],
+    "replaces_orchestrated": [],
+    "unchanged_orchestrated": [],
+    "conflicts_unmanaged": [],
+    "skipped": [],
+    "removes_orchestrated": []
+  },
+  "skipped_accounts": [],
+  "limitations": [],
+  "message": "read-only plan; no pending kicks were changed"
+}

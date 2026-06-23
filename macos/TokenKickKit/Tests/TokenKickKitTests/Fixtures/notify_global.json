@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "ok": true,
+  "error_code": null,
+  "message": "ntfy notifications enabled.",
+  "warnings": [],
+  "payload": {
+    "global_enabled": true,
+    "destination": "ntfy:fixture-topic",
+    "backends": [
+      "ntfy"
+    ],
+    "accounts": [
+      {
+        "label": "codex (fixture)",
+        "provider": "codex",
+        "notifications_enabled": true,
+        "backends": null,
+        "route": "\u2705 ntfy"
+      },
+      {
+        "label": "gemini (fixture)",
+        "provider": "gemini",
+        "notifications_enabled": true,
+        "backends": null,
+        "route": "\u2705 ntfy"
+      }
+    ]
+  }
+}

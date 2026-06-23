@@ -1,0 +1,11 @@
+# TokenKick
+
+For AI agents operating TokenKick, read `docs/AGENT_PLAYBOOK.md` first.
+
+Useful references:
+
+- `docs/AGENT_PLAYBOOK.md`: safe headless agent operating guide.
+- `docs/MCP.md`: first-party MCP server setup and safety contract.
+- `docs/TOKENKICK_COMMANDS.md`: command reference.
+- `docs/HOW_TOKENKICK_WORKS.md`: system behavior and state files.
+- `docs/README.md`: user-facing overview.

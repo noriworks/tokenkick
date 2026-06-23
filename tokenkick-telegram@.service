@@ -1,0 +1,19 @@
+[Unit]
+Description=TokenKick Telegram remote status listener
+After=network.target
+
+[Service]
+Type=simple
+User=%i
+ExecStart=/usr/local/bin/tk remote telegram
+Restart=on-failure
+RestartSec=30
+Environment=HOME=/home/%i
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=tokenkick-telegram
+
+[Install]
+WantedBy=multi-user.target

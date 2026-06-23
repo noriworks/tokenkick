@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "ok": false,
+  "error_code": "usage_error",
+  "message": "No such command 'frobnicate'.",
+  "warnings": [],
+  "payload": null
+}

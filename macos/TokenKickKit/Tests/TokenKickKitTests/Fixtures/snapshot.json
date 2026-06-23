@@ -1,0 +1,147 @@
+{
+  "schema_version": 1,
+  "ok": true,
+  "error_code": null,
+  "message": null,
+  "warnings": [
+    "No readable status cache; run setup or a status refresh."
+  ],
+  "payload": {
+    "generated_at": "2026-06-11T11:04:00.624634+00:00",
+    "core": {
+      "version": "1.9.18",
+      "executable": "/Users/fixture/tokenkick/.venv/bin/tk",
+      "python_executable": "/Users/fixture/tokenkick/.venv/bin/python3.14",
+      "python_version": "3.14.5",
+      "app_mode": true
+    },
+    "runtime": {
+      "external_tk": null
+    },
+    "paths": {
+      "config_dir": "/Users/fixture/.tokenkick",
+      "config_file": "/Users/fixture/.tokenkick/config.json",
+      "status_cache_file": "/Users/fixture/.tokenkick/status-cache.json",
+      "daemon_pidfile": "/Users/fixture/.tokenkick/daemon.pid",
+      "daemon_log_file": "/Users/fixture/.tokenkick/daemon.log",
+      "history_file": "/Users/fixture/.tokenkick/history.jsonl"
+    },
+    "daemon": {
+      "running": false,
+      "pid": null,
+      "version": null,
+      "executable": null,
+      "installed_version": "1.9.18",
+      "version_match": null,
+      "executable_match": null,
+      "pidfile_exists": false,
+      "stale_pidfile": false,
+      "uptime_seconds": null,
+      "poll_interval_minutes": 5,
+      "pidfile_path": "/Users/fixture/.tokenkick/daemon.pid",
+      "log_path": "/Users/fixture/.tokenkick/daemon.log"
+    },
+    "status": {
+      "cached": false,
+      "cached_at": null,
+      "refresh_error": null,
+      "refresh_in_progress": false,
+      "schema_version": 1,
+      "accounts": []
+    },
+    "pending_kicks": [],
+    "schedule": {
+      "enabled": false,
+      "timezone": null,
+      "scheduling_target": "auto",
+      "default": {
+        "enabled": false
+      },
+      "accounts": {}
+    },
+    "advisories": [],
+    "reset_observations": [],
+    "notifications": {
+      "enabled": false,
+      "backends": [
+        "ntfy"
+      ],
+      "destination": "global disabled",
+      "accounts": [
+        {
+          "label": "codex (fixture)",
+          "provider": "codex",
+          "notifications_enabled": true,
+          "backends": null,
+          "route": "\u274c disabled"
+        },
+        {
+          "label": "gemini (fixture)",
+          "provider": "gemini",
+          "notifications_enabled": true,
+          "backends": null,
+          "route": "\u274c disabled"
+        }
+      ]
+    },
+    "codex_strategy": {
+      "schema_version": 1,
+      "strategy": "patient_adaptive_ladder",
+      "enabled": false,
+      "config_enabled": false,
+      "active_order": [
+        "legacy",
+        "repo-skip",
+        "repo",
+        "interactive-like"
+      ],
+      "effective_kicking_order": [
+        "legacy",
+        "repo-skip",
+        "repo",
+        "interactive-like"
+      ],
+      "effective_kicking_order_summary": "legacy, repo-skip, repo, interactive-like",
+      "effective_kicking_order_by_account": {
+        "codex (fixture)": [
+          "legacy",
+          "repo-skip",
+          "repo",
+          "interactive-like"
+        ]
+      },
+      "effective_kicking_order_errors": {},
+      "configured_order": [],
+      "default_order": [
+        "legacy",
+        "repo-skip",
+        "repo",
+        "interactive-like"
+      ],
+      "active_gap_seconds": 90.0,
+      "configured_gap_seconds": 90,
+      "auto_demotion": {
+        "state": "all_off",
+        "summary": "all off (0/1 Codex accounts)",
+        "enabled_count": 0,
+        "disabled_count": 1,
+        "total_codex_accounts": 1,
+        "enabled_labels": [],
+        "disabled_labels": [
+          "codex (fixture)"
+        ]
+      },
+      "applies_to": "auto/scheduled Codex kicks only",
+      "enabled_behavior": "Burst ladder fires the configured set at the gap with no early-stop.",
+      "disabled_behavior": "Patient adaptive ladder uses verified retries and the 900s retry backoff."
+    },
+    "update": {
+      "schema_version": 1,
+      "installed_version": "1.9.18",
+      "daemon_version": null,
+      "daemon_running": false,
+      "match": true,
+      "daemon_pid": null
+    }
+  }
+}

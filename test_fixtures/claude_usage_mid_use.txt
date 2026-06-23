@@ -1,0 +1,13 @@
+Settings: Usage
+
+Signed in as [email]
+Organization: [id]
+Plan: [plan]
+
+Current session
+9% used
+Resets in 1h 38m
+
+Current week
+20% used
+Resets in 5d 16h

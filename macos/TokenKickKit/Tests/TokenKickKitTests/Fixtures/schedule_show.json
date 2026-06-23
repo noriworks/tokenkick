@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "ok": true,
+  "error_code": null,
+  "message": null,
+  "warnings": [],
+  "payload": {
+    "enabled": true,
+    "timezone": "Europe/Berlin",
+    "scheduling_target": "auto",
+    "default": {
+      "enabled": true,
+      "weekdays": "09:00-17:00"
+    },
+    "accounts": {
+      "codex (fixture)": {
+        "enabled": true,
+        "weekends": "10:00-14:00"
+      }
+    },
+    "pending_kicks": [
+      {
+        "key": "manual|codex|fixture",
+        "account_label": "codex (fixture)",
+        "kick_at": "2026-06-11T10:00:00Z",
+        "reason": "scheduled",
+        "purpose": "coverage"
+      }
+    ]
+  }
+}

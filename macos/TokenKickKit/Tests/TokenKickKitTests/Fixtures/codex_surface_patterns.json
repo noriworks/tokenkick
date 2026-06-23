@@ -1,0 +1,32 @@
+{
+  "scope_label": "codex (fixture)",
+  "eligible_clusters": 8,
+  "evaluated_samples": 6,
+  "baseline": {
+    "samples": 6,
+    "top1_hits": 3,
+    "top2_hits": 5,
+    "top1_rate": 0.5,
+    "top2_rate": 0.8333333333
+  },
+  "candidates": {
+    "previous_same_account_surface": {
+      "samples": 6,
+      "top1_hits": 4,
+      "top2_hits": 5,
+      "top1_rate": 0.6666666667,
+      "top2_rate": 0.8333333333,
+      "top1_lift_hits": 1,
+      "top2_lift_hits": 0,
+      "top1_lift_rate": 0.1666666667,
+      "top2_lift_rate": 0.0
+    }
+  },
+  "ignored": {
+    "missing_surface": 1
+  },
+  "verdict": {
+    "message": "No stable sequence pattern detected."
+  },
+  "sequence_hints": []
+}

@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "strategy": "patient_adaptive_ladder",
+  "enabled": false,
+  "config_enabled": false,
+  "active_order": [
+    "legacy",
+    "repo-skip",
+    "repo",
+    "interactive-like"
+  ],
+  "effective_kicking_order": [
+    "legacy",
+    "repo-skip",
+    "repo",
+    "interactive-like"
+  ],
+  "effective_kicking_order_summary": "legacy, repo-skip, repo, interactive-like",
+  "effective_kicking_order_by_account": {
+    "codex (fixture)": [
+      "legacy",
+      "repo-skip",
+      "repo",
+      "interactive-like"
+    ]
+  },
+  "effective_kicking_order_errors": {},
+  "configured_order": [],
+  "default_order": [
+    "legacy",
+    "repo-skip",
+    "repo",
+    "interactive-like"
+  ],
+  "active_gap_seconds": 90.0,
+  "configured_gap_seconds": 90,
+  "auto_demotion": {
+    "state": "mixed",
+    "summary": "mixed (1 on, 1 off)",
+    "enabled_count": 1,
+    "disabled_count": 1,
+    "total_codex_accounts": 2,
+    "enabled_labels": [
+      "codex (fixture)"
+    ],
+    "disabled_labels": [
+      "codex (other)"
+    ]
+  },
+  "applies_to": "auto/scheduled Codex kicks only",
+  "enabled_behavior": "Burst ladder fires the configured set at the gap with no early-stop.",
+  "disabled_behavior": "Patient adaptive ladder uses verified retries and the 900s retry backoff."
+}

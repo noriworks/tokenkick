@@ -1,0 +1,19 @@
+[Unit]
+Description=TokenKick — AI quota window kicker
+After=network.target
+
+[Service]
+Type=simple
+User=%i
+ExecStart=/usr/local/bin/tk daemon
+Restart=on-failure
+RestartSec=30
+Environment=HOME=/home/%i
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=tokenkick
+
+[Install]
+WantedBy=multi-user.target

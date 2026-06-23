@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "ok": false,
+  "error_code": "mutation_failed",
+  "message": "Account \"nope\" not found.",
+  "warnings": [],
+  "payload": null
+}

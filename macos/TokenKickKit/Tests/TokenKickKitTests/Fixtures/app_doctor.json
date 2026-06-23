@@ -1,0 +1,282 @@
+{
+  "schema_version": 1,
+  "ok": true,
+  "error_code": null,
+  "message": null,
+  "warnings": [
+    "Neither codex nor claude was found on PATH; provider discovery will fail from this environment."
+  ],
+  "payload": {
+    "environment": {
+      "executable": "/Users/fixture/tokenkick/.venv/bin/tk",
+      "python_executable": "/Users/fixture/tokenkick/.venv/bin/python3.14",
+      "python_version": "3.14.5",
+      "platform": "darwin",
+      "cwd": "/Users/fixture/tokenkick",
+      "path_env": "/usr/bin:/bin",
+      "app_mode": true,
+      "core_version": "1.9.18"
+    },
+    "provider_clis": {
+      "codex": {
+        "found": false,
+        "path": null
+      },
+      "claude": {
+        "found": false,
+        "path": null
+      },
+      "gemini": {
+        "found": false,
+        "path": null
+      }
+    },
+    "state": {
+      "config_dir": "/Users/fixture/.tokenkick",
+      "config_dir_exists": true,
+      "config_dir_writable": true,
+      "config_file": "/Users/fixture/.tokenkick/config.json",
+      "config_file_exists": true,
+      "config_loadable": true,
+      "config_error": null
+    },
+    "daemon": {
+      "running": false,
+      "pid": null,
+      "version": null,
+      "executable": null,
+      "installed_version": "1.9.18",
+      "version_match": null,
+      "executable_match": null,
+      "pidfile_exists": false,
+      "stale_pidfile": false,
+      "uptime_seconds": null,
+      "poll_interval_minutes": 5,
+      "pidfile_path": "/Users/fixture/.tokenkick/daemon.pid",
+      "log_path": "/Users/fixture/.tokenkick/daemon.log"
+    },
+    "doctor": {
+      "summary": {
+        "ok": 0,
+        "warn": 8,
+        "fail": 1,
+        "accounts": 2,
+        "cache_status": "missing"
+      },
+      "config": {
+        "path": "/Users/fixture/.tokenkick/config.json",
+        "accounts": 2,
+        "poll_interval_minutes": 5,
+        "notifications_enabled": false,
+        "schedule_enabled": false,
+        "claude_direct_usage_enabled": true,
+        "codex_fire_all_surfaces": false,
+        "codex_fire_all_surfaces_active": false,
+        "codex_fire_all_surface_gap_seconds": 90,
+        "codex_fire_all_surface_order": [],
+        "codex_fire_all_surface_order_active": [
+          "legacy",
+          "repo-skip",
+          "repo",
+          "interactive-like"
+        ],
+        "codex_fire_all_surface_order_error": null
+      },
+      "cache": {
+        "path": "/Users/fixture/.tokenkick/status-cache.json",
+        "exists": false,
+        "status": "missing",
+        "state_counts": {
+          "fresh": 0,
+          "active": 0,
+          "waiting": 0,
+          "unknown": 0
+        },
+        "fresh": 0,
+        "current": 0,
+        "stale": 0,
+        "unknown": 0,
+        "oldest_entry_age_seconds": null,
+        "oldest_entry_age": "unknown",
+        "refresh_lock": {
+          "status": "not_running",
+          "path": "/Users/fixture/.tokenkick/status-cache-refresh.pid"
+        }
+      },
+      "daemon": {
+        "path": "/Users/fixture/.tokenkick/daemon.pid",
+        "status": "not_running",
+        "pid": null,
+        "installed_version": "1.9.18",
+        "daemon_version": null
+      },
+      "schedule": {
+        "enabled": false,
+        "account_schedules": 0,
+        "pending_kicks": 0,
+        "pending": [],
+        "scheduling_target": "auto"
+      },
+      "notifications": {
+        "enabled": false,
+        "backend": "ntfy",
+        "enabled_backends": [
+          "ntfy"
+        ],
+        "ntfy_topic": null,
+        "telegram_chat_id": null,
+        "telegram_bot_token": null
+      },
+      "accounts": [
+        {
+          "label": "codex (fixture)",
+          "provider": "codex",
+          "source": "codex-direct",
+          "source_detail": null,
+          "state": "unknown",
+          "stale": false,
+          "refresh_error": null,
+          "visible": true,
+          "auto_kick": true,
+          "weekly_auto_kick": true,
+          "session_auto_kick": true,
+          "kick_model": null,
+          "checks": [
+            {
+              "level": "FAIL",
+              "code": "codex_home_missing",
+              "message": "codex (fixture): configured Codex home does not exist",
+              "fix": "run `tk setup`"
+            },
+            {
+              "level": "WARN",
+              "code": "codex_sessions_missing",
+              "message": "codex (fixture): sessions directory missing",
+              "fix": null
+            },
+            {
+              "level": "WARN",
+              "code": "codex_identity_missing",
+              "message": "codex (fixture): Codex identity not readable",
+              "fix": null
+            },
+            {
+              "level": "WARN",
+              "code": "account_cache_missing",
+              "message": "codex (fixture): no cached status available",
+              "fix": "run `tk status --refresh`"
+            }
+          ]
+        },
+        {
+          "label": "gemini (fixture)",
+          "provider": "gemini",
+          "source": "manual",
+          "source_detail": null,
+          "state": "unknown",
+          "stale": false,
+          "refresh_error": null,
+          "visible": true,
+          "auto_kick": false,
+          "weekly_auto_kick": false,
+          "session_auto_kick": false,
+          "kick_model": null,
+          "checks": [
+            {
+              "level": "INFO",
+              "code": "gemini_monitor_only",
+              "message": "gemini (fixture): monitor-only (daily RPD reset at midnight PT; kicks have no effect)",
+              "fix": null
+            },
+            {
+              "level": "WARN",
+              "code": "gemini_binary_missing",
+              "message": "gemini (fixture): gemini binary not found",
+              "fix": null
+            },
+            {
+              "level": "WARN",
+              "code": "gemini_oauth_creds_missing",
+              "message": "gemini (fixture): Gemini OAuth credentials not found",
+              "fix": null
+            },
+            {
+              "level": "INFO",
+              "code": "gemini_direct_not_implemented",
+              "message": "gemini (fixture): Gemini direct quota is not implemented yet",
+              "fix": null
+            },
+            {
+              "level": "WARN",
+              "code": "account_cache_missing",
+              "message": "gemini (fixture): no cached status available",
+              "fix": "run `tk status --refresh`"
+            }
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "level": "INFO",
+          "code": "codex_surface_dispatch_mode",
+          "message": "Codex surface dispatch: sequential adaptive ladder; fire-all order ignored (legacy, repo-skip, repo, interactive-like).",
+          "fix": null
+        },
+        {
+          "level": "WARN",
+          "code": "cache_missing",
+          "message": "Status cache is missing.",
+          "fix": "run `tk status --refresh`"
+        },
+        {
+          "level": "INFO",
+          "code": "daemon_not_running",
+          "message": "daemon: not running",
+          "fix": null
+        },
+        {
+          "level": "INFO",
+          "code": "schedule_disabled",
+          "message": "schedule: disabled",
+          "fix": null
+        },
+        {
+          "level": "INFO",
+          "code": "notifications_disabled",
+          "message": "notifications: disabled",
+          "fix": null
+        },
+        {
+          "level": "WARN",
+          "code": "codexbar_binary_missing",
+          "message": "CodexBar binary not found",
+          "fix": null
+        },
+        {
+          "level": "INFO",
+          "code": "codexbar_snapshot_missing",
+          "message": "CodexBar widget snapshot not found",
+          "fix": null
+        },
+        {
+          "level": "INFO",
+          "code": "codexbar_history_missing",
+          "message": "CodexBar history directory not found",
+          "fix": null
+        },
+        {
+          "level": "INFO",
+          "code": "global_reset_correlation_limited",
+          "message": "codex: global reset correlation needs 2+ visible accounts; found 1",
+          "fix": null
+        },
+        {
+          "level": "INFO",
+          "code": "global_reset_correlation_limited",
+          "message": "gemini: global reset correlation needs 2+ visible accounts; found 1",
+          "fix": null
+        }
+      ]
+    }
+  }
+}

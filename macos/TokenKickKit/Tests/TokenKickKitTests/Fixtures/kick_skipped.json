@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "ok": true,
+  "error_code": null,
+  "message": "Skipping \"codex (fixture)\": state is unknown, not fresh.",
+  "warnings": [],
+  "payload": {
+    "action": "kick",
+    "account": "codex (fixture)",
+    "dry_run": false,
+    "decision": "skipped",
+    "reason_code": "not_fresh",
+    "kicked": false,
+    "event": null
+  }
+}

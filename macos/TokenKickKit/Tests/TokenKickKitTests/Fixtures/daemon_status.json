@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "ok": true,
+  "error_code": null,
+  "message": null,
+  "warnings": [],
+  "payload": {
+    "daemon": {
+      "running": false,
+      "pid": null,
+      "version": null,
+      "executable": null,
+      "installed_version": "1.9.18",
+      "version_match": null,
+      "executable_match": null,
+      "pidfile_exists": false,
+      "stale_pidfile": false,
+      "uptime_seconds": null,
+      "poll_interval_minutes": 5,
+      "pidfile_path": "/Users/fixture/.tokenkick/daemon.pid",
+      "log_path": "/Users/fixture/.tokenkick/daemon.log"
+    }
+  }
+}

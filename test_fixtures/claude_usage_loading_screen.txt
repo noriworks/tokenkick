@@ -1,0 +1,26 @@
+Settings  Status  Config  Usage Stats
+
+Session
+
+Total cost: $0.0000
+Total duration (API): 0s
+Total duration (wall): 1s
+Usage: 0 input, 0 output, 0 cache read, 0 cache write
+
+Loading usage data...
+
+Esc to cancel
+
+Curret session
+0% used
+Reses 6:40pm (Europe/Berlin)
+
+Current week (all models)
+████████████ 24% used
+Resets in 5d 1h
+
+What's contributing to your limits usage?
+Approximate, based on local sessions on this machine.
+
+Usage credits
+Usage credits are off - /usage-credits to turn them on
