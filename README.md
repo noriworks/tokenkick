@@ -74,9 +74,9 @@ The demo output above is generated from synthetic data with:
 
 ## Provider Support
 
-Codex and Claude are kickable in this release. Gemini, Antigravity,
-OpenRouter, and other unverified providers are monitor-only until their status
-and safe kick behavior are verified.
+Codex and Claude are kickable in this release. Gemini and Antigravity are
+monitor-only. Other providers are unsupported until their status shape and safe
+kick behavior are verified.
 
 TokenKick does not increase quota, bypass limits, or evade provider
 restrictions. It helps you notice and act on quota windows you already have.

@@ -17,5 +17,6 @@ Initial public release of TokenKick.
   Telegram remote status.
 - Provides MCP tools for cached status reads, plan previews, guarded schedule
   changes, and approved orchestration.
-- Keeps Gemini, Antigravity, OpenRouter, and unverified providers monitor-only.
+- Keeps Gemini and Antigravity monitor-only; other unverified providers remain
+  unsupported unless documented otherwise.
 - Includes README disclaimers, `SECURITY.md`, and `CONTRIBUTING.md`.

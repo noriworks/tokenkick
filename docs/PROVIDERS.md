@@ -16,7 +16,6 @@ restrictions.
 | Claude Code | Claude CLI `/usage` when direct usage is enabled; passive fallback/cache otherwise | Yes | 5h session + weekly, first-use anchored | `/usage` is useful but not purely passive. Daemon background refresh avoids silently running it; due session anchors are tracked as kick-history events. |
 | Antigravity | Direct local probe plus optional CodexBar fallback where available | Monitor-only today | 5h + weekly observed | Kicking is not implemented in this release. Treat status as advisory until direct behavior is proven. |
 | Gemini CLI | Optional CodexBar monitoring data where configured | No | Daily RPD, fixed midnight PT reset | Monitor-only. Not first-use anchored, so a kick does not start a useful rolling window. |
-| OpenRouter | Config/API-style monitoring only where available | Monitor-only | Provider/account dependent | API credit/rate-limit semantics are not a Codex/Claude-style first-use anchored coding session. |
 | Cursor / Copilot / other coding tools | Not directly verified in this release | Monitor-only or unsupported | Provider dependent | Add only after a stable identity source, readable status, and legitimate tiny anchor request are verified. |
 
 ## Codex
@@ -129,8 +128,8 @@ first-use anchored rolling window, so a tiny request does not create the kind of
 window TokenKick is designed to anchor. Hide or remove Gemini entries if you do
 not want to see them in status views.
 
-## Antigravity And OpenRouter
+## Antigravity
 
-Antigravity and OpenRouter are monitor-only until TokenKick can verify a stable
-local identity source, readable quota state, first-use anchored window behavior,
-and a legitimate minimal provider-native anchor request.
+Antigravity is monitor-only until TokenKick can verify stable local identity,
+readable quota state, first-use anchored window behavior, and a legitimate
+minimal provider-native anchor request.
