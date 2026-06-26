@@ -1,11 +1,15 @@
 """Tests for direct provider integrations."""
 
+from types import SimpleNamespace
+
 import pytest
 
 from tokenkick.direct import (
+    ClaudeAuthStatus,
     CODEX_PROVIDER_USAGE_ENDPOINT,
     CODEX_PROVIDER_USAGE_TRANSPORT,
     CodexProviderUsageError,
+    claude_auth_status,
     read_codex_provider_usage,
 )
 
@@ -42,3 +46,24 @@ def test_read_codex_provider_usage_uses_codex_home_transport(monkeypatch, tmp_pa
     assert usage.endpoint == CODEX_PROVIDER_USAGE_ENDPOINT
     assert usage.transport == CODEX_PROVIDER_USAGE_TRANSPORT
     assert usage.elapsed_ms >= 0
+
+
+def test_claude_auth_status_reports_relogin_hint(monkeypatch):
+    def fake_run(*args, **kwargs):
+        assert args[0] == ["/usr/bin/claude", "auth", "status"]
+        assert kwargs["timeout"] == 5.0
+        return SimpleNamespace(
+            returncode=1,
+            stdout='{"loggedIn":false,"authMethod":"none","apiProvider":"firstParty"}\n',
+            stderr="",
+        )
+
+    monkeypatch.setattr("tokenkick.direct.subprocess.run", fake_run)
+
+    status = claude_auth_status("/usr/bin/claude")
+
+    assert isinstance(status, ClaudeAuthStatus)
+    assert status.logged_in is False
+    assert status.auth_method == "none"
+    assert status.api_provider == "firstParty"
+    assert "claude auth login --claudeai" in status.message

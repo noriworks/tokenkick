@@ -44,6 +44,7 @@ from .direct import (
     CODEX_PROVIDER_USAGE_TIMEOUT_SECONDS,
     CodexProviderUsageError,
     CodexProviderUsageRead,
+    claude_auth_status,
     codex_login_status,
     probe_claude_status,
     read_codex_provider_usage,
@@ -1208,6 +1209,27 @@ def _fetch_claude_cli_usage(
             _set_claude_cli_usage_cache(status)
         return status
 
+    auth_status = claude_auth_status(binary)
+    if auth_status is not None and auth_status.logged_in is False:
+        message = auth_status.message or (
+            "Claude CLI is not logged in. Run `claude auth login --claudeai` as "
+            "the same user that runs TokenKick, then run `tk status --refresh`."
+        )
+        _record_claude_probe_error(
+            claude_probe_context,
+            ClaudeProbeErrorCategory.NOT_AUTHENTICATED,
+            message,
+        )
+        status = AccountStatus(
+            label=account.label,
+            state=AccountState.UNKNOWN,
+            error=message,
+            source_detail=CLAUDE_CLI_USAGE_SOURCE_DETAIL,
+        )
+        if use_cache:
+            _set_claude_cli_usage_cache(status)
+        return status
+
     try:
         raw = _capture_claude_usage(binary)
         status = _parse_claude_usage_output(account.label, raw)
@@ -1787,9 +1809,9 @@ def _extract_claude_usage_error(text: str) -> str | None:
     lower = text.lower()
     compact = "".join(lower.split())
     if "token_expired" in lower or "token has expired" in lower:
-        return "Claude CLI token expired. Run `claude login` to refresh."
+        return "Claude CLI token expired. Run `claude auth login --claudeai` to refresh."
     if "authentication_error" in lower or "not authenticated" in lower:
-        return "Claude CLI authentication error. Run `claude login`."
+        return "Claude CLI authentication error. Run `claude auth login --claudeai`."
     if "rate_limit_error" in lower or "rate limited" in lower or "ratelimited" in compact:
         return "Claude CLI usage endpoint is rate limited right now. Please try again later."
     if "failed to load usage data" in lower or "failedtoloadusagedata" in compact:
@@ -1825,9 +1847,10 @@ def _claude_direct_unavailable_message(
         "Claude CLI /usage directly."
     )
     options = (
-        "Install or refresh CodexBar for the v0.4 fallback, enable the explicit "
-        "Claude probe for this account (consumes quota), or run tk status --refresh "
-        "after opening Claude CLI once."
+        "Re-authenticate Claude with `claude auth login --claudeai` as the same user "
+        "that runs TokenKick, then run `tk status --refresh`. If you intentionally "
+        "avoid direct /usage, install or refresh CodexBar for the v0.4 fallback or "
+        "enable the explicit Claude probe for this account (consumes quota)."
     )
     if usage_error and codexbar_error:
         return (

@@ -9,6 +9,8 @@ from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from tokenkick.antigravity import (
     is_antigravity_language_server,
     parse_lsof_listening_ports,
@@ -25,7 +27,7 @@ from tokenkick.codexbar_source import (
     _parse_codexbar_json,
     _run_codexbar_json,
 )
-from tokenkick.direct import CODEX_PROVIDER_USAGE_SOURCE_DETAIL, DirectIdentity
+from tokenkick.direct import CODEX_PROVIDER_USAGE_SOURCE_DETAIL, ClaudeAuthStatus, DirectIdentity
 from tokenkick.models import (
     AccountConfig,
     AccountState,
@@ -810,6 +812,36 @@ def test_claude_cli_usage_failure_survives_codexbar_fallback_timeout(monkeypatch
     assert "Claude CLI /usage timed out" in status.error
     assert context.last_direct_probe_error is not None
     assert context.last_direct_probe_error.category == ClaudeProbeErrorCategory.TIMEOUT
+
+
+def test_claude_cli_usage_fails_fast_when_auth_status_is_logged_out(monkeypatch):
+    account = _claude_account()
+    context = ClaudeProbeContext()
+    monkeypatch.setattr("tokenkick.sources.shutil.which", lambda name: "/usr/bin/claude")
+    monkeypatch.setattr(
+        "tokenkick.sources.claude_auth_status",
+        lambda _binary: ClaudeAuthStatus(
+            logged_in=False,
+            auth_method="none",
+            api_provider="firstParty",
+            message=(
+                "Claude CLI is not logged in. Run `claude auth login --claudeai` "
+                "as the same user that runs TokenKick, then run `tk status --refresh`."
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        "tokenkick.sources._capture_claude_usage",
+        lambda _binary: pytest.fail("logged-out Claude should not open /usage"),
+    )
+
+    with claude_cli_usage_refresh_allowed():
+        status = _fetch_claude_cli_usage(account, context)
+
+    assert status.state == AccountState.UNKNOWN
+    assert "claude auth login --claudeai" in status.error
+    assert context.last_direct_probe_error is not None
+    assert context.last_direct_probe_error.category == ClaudeProbeErrorCategory.NOT_AUTHENTICATED
 
 
 def test_claude_cli_usage_timeout_records_redacted_raw_capture(monkeypatch):

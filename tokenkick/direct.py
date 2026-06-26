@@ -48,6 +48,16 @@ class CodexProviderUsageRead:
     elapsed_ms: int
 
 
+@dataclass(frozen=True)
+class ClaudeAuthStatus:
+    """Claude CLI auth status without exposing credentials."""
+
+    logged_in: bool | None
+    auth_method: str | None = None
+    api_provider: str | None = None
+    message: str | None = None
+
+
 class CodexProviderUsageError(RuntimeError):
     """Expected failure while reading Codex provider usage directly."""
 
@@ -263,6 +273,67 @@ def codex_login_status() -> str:
     if result.returncode == 0:
         return output or "Codex is logged in."
     return output or f"codex auth status exited {result.returncode}."
+
+
+def claude_auth_status(
+    binary: str = "claude",
+    *,
+    timeout_seconds: float = 5.0,
+) -> ClaudeAuthStatus | None:
+    """Return Claude CLI auth state when `claude auth status` is available."""
+    try:
+        result = subprocess.run(
+            [binary, "auth", "status"],
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        return None
+
+    output = (result.stdout or result.stderr or "").strip()
+    data = _json_object_from_output(output)
+    if data is None:
+        if result.returncode != 0 and "not logged" in output.lower():
+            return ClaudeAuthStatus(
+                logged_in=False,
+                message=_claude_auth_login_hint(),
+            )
+        return None
+
+    logged_in = data.get("loggedIn")
+    if not isinstance(logged_in, bool):
+        return None
+    return ClaudeAuthStatus(
+        logged_in=logged_in,
+        auth_method=_string_value(data.get("authMethod")),
+        api_provider=_string_value(data.get("apiProvider")),
+        message=None if logged_in else _claude_auth_login_hint(),
+    )
+
+
+def _claude_auth_login_hint() -> str:
+    return (
+        "Claude CLI is not logged in. Run `claude auth login --claudeai` as the "
+        "same user that runs TokenKick, then run `tk status --refresh`."
+    )
+
+
+def _json_object_from_output(output: str) -> dict[str, Any] | None:
+    if not output:
+        return None
+    try:
+        data = json.loads(output)
+    except json.JSONDecodeError:
+        start = output.find("{")
+        end = output.rfind("}")
+        if start < 0 or end <= start:
+            return None
+        try:
+            data = json.loads(output[start : end + 1])
+        except json.JSONDecodeError:
+            return None
+    return data if isinstance(data, dict) else None
 
 
 def probe_claude_status() -> tuple[bool, str | None]:

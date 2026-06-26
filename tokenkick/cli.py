@@ -43,6 +43,8 @@ from .models import (
     AccountState,
     AccountStatus,
     ClaudeProbeContext,
+    ClaudeProbeError,
+    ClaudeProbeErrorCategory,
     CODEX_FIRE_ALL_SURFACE_NAMES,
     CONFIG_DIR,
     CONFIG_FILE,
@@ -1967,6 +1969,8 @@ def _claude_predicted_session_due_status(
     entry = entries.get(account_key_string(account))
     if not isinstance(entry, dict):
         return None
+    if _claude_cached_due_blocked_by_direct_probe_error(entry):
+        return None
     status = entry.get("status")
     if not isinstance(status, AccountStatus):
         return None
@@ -1982,6 +1986,31 @@ def _claude_predicted_session_due_status(
         replace(status, label=account.label, stale=False, stale_seconds=None, error=None),
         "claude_session_due_from_cache",
     )
+
+
+def _claude_cached_due_blocked_by_direct_probe_error(entry: dict) -> bool:
+    error = entry.get("last_direct_probe_error")
+    if not isinstance(error, ClaudeProbeError):
+        return False
+    if error.category == ClaudeProbeErrorCategory.DISABLED:
+        return True
+
+    last_probe = _cached_claude_probe_time(entry.get("last_direct_probe_at"))
+    last_success = _cached_claude_probe_time(entry.get("last_direct_success_at"))
+    if last_probe is None:
+        return False
+    if last_success is None:
+        return True
+    return last_probe >= last_success
+
+
+def _cached_claude_probe_time(value: object) -> datetime | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        return from_utc_iso(value)
+    except ValueError:
+        return None
 
 
 def _apply_claude_predicted_session_due_statuses(
@@ -4955,6 +4984,12 @@ def _run_claude_usage_touch(
         ), None
 
     if status.state == AccountState.UNKNOWN:
+        _save_status_cache(
+            [account],
+            {account_key_string(account): status},
+            _failures_by_key_from_status_pairs([account], [status]),
+            daemon_log=daemon_log,
+        )
         return KickEvent(
             label=account.label,
             timestamp=event_timestamp,

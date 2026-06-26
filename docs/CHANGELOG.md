@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.0.1
+
+- Detect logged-out Claude CLI state with `claude auth status` before opening
+  the `/usage` TUI, and tell users to run `claude auth login --claudeai` as the
+  TokenKick user before refreshing status.
+- Persist failed Claude `/usage` session touches into the status cache so the
+  daemon stops rebuilding stale due-session auto-kick targets after a newer
+  direct probe failure.
+
 ## v1.0.0
 
 Initial public release of TokenKick.

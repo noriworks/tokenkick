@@ -7462,6 +7462,39 @@ def test_claude_predicted_due_status_waits_until_cached_reset_due():
     assert statuses_by_key[key].state == AccountState.UNKNOWN
 
 
+def test_claude_predicted_due_status_stops_after_newer_direct_probe_failure():
+    account = AccountConfig(label="claude", provider="claude", auto_kick=True, session_auto_kick=True)
+    key = account_key_string(account)
+    statuses_by_key = {
+        key: AccountStatus(label="claude", state=AccountState.UNKNOWN, error="refresh failed")
+    }
+    entries = {
+        key: {
+            "status": AccountStatus(
+                label="claude",
+                state=AccountState.ACTIVE,
+                used_percent=73.0,
+                window_minutes=10080,
+                session_used_percent=99.0,
+                session_resets_in_seconds=0,
+                session_window_minutes=300,
+                source_detail="claude-cli-usage",
+            ),
+            "last_direct_success_at": "2026-05-28T10:00:00Z",
+            "last_direct_probe_at": "2026-05-28T12:00:00Z",
+            "last_direct_probe_error": ClaudeProbeError(
+                ClaudeProbeErrorCategory.NOT_AUTHENTICATED,
+                "Claude CLI is not logged in. Run `claude auth login --claudeai`.",
+            ),
+        }
+    }
+
+    _apply_claude_predicted_session_due_statuses([account], statuses_by_key, entries)
+
+    assert statuses_by_key[key].state == AccountState.UNKNOWN
+    assert synthetic_status_reason(statuses_by_key[key]) is None
+
+
 def test_codex_predicted_due_status_replaces_failed_direct_refresh():
     account = AccountConfig(
         label="codex",
@@ -8108,6 +8141,59 @@ def test_claude_usage_touch_persists_direct_success_timestamp(monkeypatch, tmp_p
     assert entry["last_direct_probe_at"] == observed_at
     assert entry["last_direct_success_at"] == observed_at
     assert entry["last_direct_success_status"].source_detail == "claude-cli-usage"
+
+
+def test_claude_usage_touch_persists_direct_failure_context(monkeypatch, tmp_path):
+    account = AccountConfig(
+        label="claude",
+        provider="claude",
+        source=DataSource.CLAUDE_DIRECT,
+        auto_kick=True,
+        session_auto_kick=True,
+    )
+    observed_at = "2026-05-30T10:00:00Z"
+    status = AccountStatus(
+        label="claude",
+        state=AccountState.UNKNOWN,
+        error=(
+            "Claude CLI is not logged in. Run `claude auth login --claudeai` as the "
+            "same user that runs TokenKick, then run `tk status --refresh`."
+        ),
+        source_detail="claude-cli-usage",
+    )
+    setattr(
+        status,
+        "_claude_probe_context",
+        ClaudeProbeContext(
+            last_direct_probe_at=observed_at,
+            last_direct_probe_error=ClaudeProbeError(
+                ClaudeProbeErrorCategory.NOT_AUTHENTICATED,
+                status.error,
+            ),
+        ),
+    )
+
+    monkeypatch.setattr("tokenkick.cli.STATUS_CACHE_FILE", tmp_path / "status-cache.json")
+    monkeypatch.setattr("tokenkick.cli.CONFIG_DIR", tmp_path)
+    monkeypatch.setattr("tokenkick.cli._status_cache_observed_at", lambda: observed_at)
+    monkeypatch.setattr("tokenkick.cli._fetch_status", lambda _account, _config=None: status)
+
+    event, _status = _run_claude_usage_touch(
+        account,
+        Config(accounts=[account]),
+        kind="session",
+        kick_type="session",
+        success_response="ok",
+        failure_prefix="failed",
+    )
+
+    entries = _load_status_cache_entries()
+    entry = entries[account_key_string(account)]
+    assert event.success is False
+    assert "claude auth login --claudeai" in event.error
+    assert entry["status"].state == AccountState.UNKNOWN
+    assert entry["last_direct_probe_at"] == observed_at
+    assert entry["last_direct_probe_error"].category == ClaudeProbeErrorCategory.NOT_AUTHENTICATED
 
 
 def test_run_session_auto_kick_respects_existing_schedule(monkeypatch):
