@@ -72,8 +72,8 @@ def _render_plan_demo() -> None:
     from rich.table import Table
 
     console = _demo_console(width=132, height=34)
+    console.print("[bold]Token[green]Kick[/green] plan[/bold] --work-window 18:30-23:30", justify="center")
     table = Table(
-        title='TokenKick plan --work-window 18:30-23:30',
         box=box.ROUNDED,
         show_lines=False,
         expand=True,

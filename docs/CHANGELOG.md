@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.0.4
+
+- Match the README plan demo's `TokenKick` header styling to the status demo's
+  branded bold/green treatment.
+
 ## v1.0.3
 
 - Fix README demo gallery rendering so CLI/TUI screenshots are full-width and
