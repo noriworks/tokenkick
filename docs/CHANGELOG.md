@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.0.2
+
+- Expand the GitHub README with clearer product positioning, agent-safe command
+  guidance, provider support notes, macOS app links, and a synthetic demo
+  gallery.
+- Add generated README demo assets for work-window planning and the beta macOS
+  app, alongside the existing synthetic CLI status screenshot.
+- Clarify the `llms.txt` entry point so agents start from the playbook and
+  avoid undocumented scheduling or quota-consuming actions.
+
 ## v1.0.1
 
 - Detect logged-out Claude CLI state with `claude auth status` before opening

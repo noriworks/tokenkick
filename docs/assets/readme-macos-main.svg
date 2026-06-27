@@ -1,0 +1,51 @@
+<svg width="1440" height="920" viewBox="0 0 1440 920" xmlns="http://www.w3.org/2000/svg">
+  <rect width="1440" height="920" rx="18" fill="#f5f5f7"/>
+  <rect x="1" y="1" width="1438" height="918" rx="18" fill="none" stroke="#c7c7cc"/>
+  <rect x="0" y="0" width="1440" height="58" rx="18" fill="#f2f2f4"/>
+  <circle cx="28" cy="29" r="7" fill="#ff5f57"/>
+  <circle cx="52" cy="29" r="7" fill="#febc2e"/>
+  <circle cx="76" cy="29" r="7" fill="#28c840"/>
+  <text x="120" y="37" font-size="17" font-weight="700" fill="#1d1d1f" font-family="-apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif">TokenKick</text>
+  <rect x="0" y="58" width="260" height="862" fill="#ececf0"/>
+  <rect x="18" y="86" width="224" height="38" rx="8" fill="#d9e8ff"/>
+  <text x="42" y="111" font-size="15" font-weight="700" fill="#0b57d0" font-family="-apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif">Status</text>
+  <text x="42" y="161" font-size="15" font-weight="400" fill="#47474f" font-family="-apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif">Kick</text>
+  <text x="42" y="207" font-size="15" font-weight="400" fill="#47474f" font-family="-apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif">Planner</text>
+  <text x="42" y="253" font-size="15" font-weight="400" fill="#47474f" font-family="-apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif">Schedule</text>
+  <text x="42" y="299" font-size="15" font-weight="400" fill="#47474f" font-family="-apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif">Accounts</text>
+  <text x="42" y="345" font-size="15" font-weight="400" fill="#47474f" font-family="-apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif">History</text>
+  <text x="42" y="391" font-size="15" font-weight="400" fill="#47474f" font-family="-apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif">Diagnostics</text>
+  <text x="42" y="855" font-size="13" font-weight="400" fill="#6e6e73" font-family="-apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif">Synthetic demo data</text>
+  <rect x="260" y="58" width="1180" height="862" fill="#fbfbfd"/>
+  <text x="308" y="126" font-size="32" font-weight="750" fill="#1d1d1f" font-family="-apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif">Status</text>
+  <text x="308" y="158" font-size="15" font-weight="400" fill="#6e6e73" font-family="-apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif">Local quota windows, daemon state, and next safe action.</text>
+  <rect x="1024" y="103" width="150" height="30" rx="15" fill="#e7f6ec" stroke="none"/><text x="1039" y="124" font-size="13" font-weight="600" fill="#137333" font-family="-apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif">Daemon running</text>
+  <rect x="1190" y="103" width="154" height="30" rx="15" fill="#e8f0fe" stroke="none"/><text x="1205" y="124" font-size="13" font-weight="600" fill="#185abc" font-family="-apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif">Cache current</text>
+  <rect x="308" y="198" width="1036" height="426" rx="12" fill="#ffffff" stroke="#d7d7dc"/>
+  <text x="334" y="236" font-size="13" font-weight="700" fill="#6e6e73" font-family="-apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif">Account</text>
+  <text x="604" y="236" font-size="13" font-weight="700" fill="#6e6e73" font-family="-apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif">State</text>
+  <text x="792" y="236" font-size="13" font-weight="700" fill="#6e6e73" font-family="-apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif">Resets</text>
+  <text x="1012" y="236" font-size="13" font-weight="700" fill="#6e6e73" font-family="-apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif">Used</text>
+  <text x="1130" y="236" font-size="13" font-weight="700" fill="#6e6e73" font-family="-apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif">Action</text>
+  <line x1="308" y1="258" x2="1344" y2="258" stroke="#e1e1e6"/>
+  <circle cx="342" cy="307" r="8" fill="#34c759"/><text x="364" y="313" font-size="16" font-weight="650" fill="#1d1d1f" font-family="-apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif">codex-spark (lab)</text>
+  <text x="604" y="313" font-size="16" font-weight="400" fill="#137333" font-family="-apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif">Weekly ready</text><text x="792" y="301" font-size="14" font-weight="400" fill="#6e6e73" font-family="-apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif">weekly in 6d 7h</text><text x="792" y="325" font-size="14" font-weight="400" fill="#137333" font-family="-apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif">session ready</text>
+  <text x="1012" y="313" font-size="16" font-weight="650" fill="#137333" font-family="-apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif">8%</text><text x="1130" y="313" font-size="16" font-weight="650" fill="#1d1d1f" font-family="-apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif">Kick now</text>
+  <line x1="334" y1="354" x2="1318" y2="354" stroke="#eeeeF2"/>
+  <circle cx="342" cy="405" r="8" fill="#ff9f0a"/><text x="364" y="411" font-size="16" font-weight="650" fill="#1d1d1f" font-family="-apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif">claude (personal)</text>
+  <text x="604" y="411" font-size="16" font-weight="400" fill="#a15c00" font-family="-apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif">Session exhausted</text><text x="792" y="399" font-size="14" font-weight="400" fill="#6e6e73" font-family="-apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif">weekly in 2d 4h</text><text x="792" y="423" font-size="14" font-weight="400" fill="#6e6e73" font-family="-apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif">session in 42m</text>
+  <text x="1012" y="411" font-size="16" font-weight="650" fill="#a15c00" font-family="-apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif">76%</text><text x="1130" y="411" font-size="16" font-weight="400" fill="#6e6e73" font-family="-apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif">Wait for session</text>
+  <line x1="334" y1="452" x2="1318" y2="452" stroke="#eeeeF2"/>
+  <circle cx="342" cy="503" r="8" fill="#0a84ff"/><text x="364" y="509" font-size="16" font-weight="650" fill="#1d1d1f" font-family="-apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif">codex (work)</text>
+  <text x="604" y="509" font-size="16" font-weight="400" fill="#185abc" font-family="-apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif">Active</text><text x="792" y="497" font-size="14" font-weight="400" fill="#6e6e73" font-family="-apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif">weekly in 5d 0h</text><text x="792" y="521" font-size="14" font-weight="400" fill="#6e6e73" font-family="-apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif">session in 2h 35m</text>
+  <text x="1012" y="509" font-size="16" font-weight="650" fill="#185abc" font-family="-apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif">42%</text><text x="1130" y="509" font-size="16" font-weight="400" fill="#6e6e73" font-family="-apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif">Use if needed</text>
+  <rect x="308" y="660" width="492" height="170" rx="12" fill="#ffffff" stroke="#d7d7dc"/>
+  <text x="334" y="699" font-size="18" font-weight="750" fill="#1d1d1f" font-family="-apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif">Next action</text>
+  <text x="334" y="731" font-size="15" font-weight="400" fill="#3a3a3c" font-family="-apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif">Kick codex-spark (lab) now, or let the daemon schedule it.</text>
+  <rect x="334" y="762" width="132" height="30" rx="15" fill="#1d1d1f" stroke="none"/><text x="349" y="783" font-size="13" font-weight="600" fill="#ffffff" font-family="-apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif">Kick now</text>
+  <rect x="482" y="762" width="170" height="30" rx="15" fill="#f2f2f4" stroke="#d1d1d6"/><text x="497" y="783" font-size="13" font-weight="600" fill="#1d1d1f" font-family="-apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif">Open planner</text>
+  <rect x="832" y="660" width="512" height="170" rx="12" fill="#ffffff" stroke="#d7d7dc"/>
+  <text x="858" y="699" font-size="18" font-weight="750" fill="#1d1d1f" font-family="-apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif">Agent contract</text>
+  <text x="858" y="731" font-size="15" font-weight="400" fill="#3a3a3c" font-family="-apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif">Cached status is safe for repeated reads.</text>
+  <text x="858" y="759" font-size="15" font-weight="400" fill="#3a3a3c" font-family="-apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif">Live refreshes are explicit; kicks require opt-in consent.</text>
+</svg>

@@ -1,6 +1,9 @@
 # TokenKick
 
-For AI agents operating TokenKick, read `docs/AGENT_PLAYBOOK.md` first.
+For AI agents operating TokenKick, read `docs/AGENT_PLAYBOOK.md` first. Use
+cached JSON reads for routine checks, avoid quota-consuming commands until the
+user has approved the exact command, and do not invent scheduler behavior that
+is not documented there.
 
 Useful references:
 
