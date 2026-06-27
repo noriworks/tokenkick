@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.0.6
+
+- Point the README at a new generated plan demo SVG filename so GitHub's image
+  proxy cannot reuse the stale pre-branding asset.
+
 ## v1.0.5
 
 - Add a README cache-busting version query for the plan demo SVG so GitHub's
