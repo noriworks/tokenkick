@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.0.5
+
+- Add a README cache-busting version query for the plan demo SVG so GitHub's
+  image proxy refreshes the corrected branding.
+
 ## v1.0.4
 
 - Match the README plan demo's `TokenKick` header styling to the status demo's

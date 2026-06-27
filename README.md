@@ -72,7 +72,7 @@ The screenshots below use synthetic demo data and can be regenerated with:
 
 ### Work-window planning
 
-![Synthetic TokenKick plan preview](docs/assets/readme-plan-demo.svg)
+![Synthetic TokenKick plan preview](docs/assets/readme-plan-demo.svg?v=1.0.5)
 
 | macOS app main window | macOS menu bar popover |
 |---|---|
