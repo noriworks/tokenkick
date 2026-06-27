@@ -46,6 +46,18 @@ Your job is to translate the user's intent into safe, existing `tk` commands.
 - Do not invent commands. In particular, there is no one-shot per-account
   direct-fire scheduler and no autonomous multi-account choreography mode.
 
+## MCP Surface
+
+If the host agent supports MCP, prefer TokenKick's first-party MCP server over
+shelling out manually. It wraps the public `tk` JSON/app-mode commands,
+classifies tool risk, redacts path-like fields by default, and requires
+preview tokens before mutations or quota-consuming actions.
+
+Read [MCP.md](MCP.md) for setup commands, supported clients, tool names, risk
+levels, preview-token execution, and the exact safety contract. Do not hand-edit
+MCP client files unless the user explicitly asks; use TokenKick's `tk mcp`
+install/repair/status commands from that document.
+
 ## Setup And Onboarding
 
 For a fresh machine, setup is discovery plus save. It is not permission to

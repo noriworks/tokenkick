@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.0.7
+
+- Link the agent playbook to the dedicated MCP documentation and summarize the
+  MCP safety model for MCP-capable agents.
+- Add docs coverage so the agent playbook keeps its MCP pointer and
+  preview-token guidance.
+
 ## v1.0.6
 
 - Point the README at a new generated plan demo SVG filename so GitHub's image

@@ -49,7 +49,11 @@ def test_agent_playbook_and_llms_pointer_are_present():
     assert "usable_session_tier_defaults" in playbook
     assert "rough, unverified starting" in playbook
     assert "no one-shot per-account" in playbook
+    assert "## MCP Surface" in playbook
+    assert "[MCP.md](MCP.md)" in playbook
+    assert "preview tokens" in playbook
     assert "docs/AGENT_PLAYBOOK.md" in llms
+    assert "docs/MCP.md" in llms
 
 
 def test_agent_playbook_recheck_uses_cached_status():
