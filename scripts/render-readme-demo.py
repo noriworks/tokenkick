@@ -25,13 +25,27 @@ MACOS_POPOVER_PATH = ASSET_DIR / "readme-macos-popover.svg"
 def _sanitize_svg(svg: str) -> str:
     """Keep README demo SVG self-contained and independent of CDN fonts."""
     svg = re.sub(r"\s*@font-face\s*\{[^{}]*\}", "", svg, flags=re.DOTALL)
-    return svg.replace(
+    svg = svg.replace(
         "font-family: Fira Code, monospace",
         'font-family: "SFMono-Regular", Menlo, Consolas, monospace',
     ).replace(
         "font-family: Fira Code, monospace;",
         'font-family: "SFMono-Regular", Menlo, Consolas, monospace;',
     )
+    return _add_svg_dimensions(svg)
+
+
+def _add_svg_dimensions(svg: str) -> str:
+    """Give GitHub a real intrinsic size for Rich SVG screenshots."""
+    svg_tag = re.search(r"<svg\b[^>]*>", svg)
+    if svg_tag is None or ' width="' in svg_tag.group(0):
+        return svg
+    viewbox = re.search(r'viewBox="0 0 ([0-9.]+) ([0-9.]+)"', svg_tag.group(0))
+    if viewbox is None:
+        return svg
+    width = round(float(viewbox.group(1)))
+    height = round(float(viewbox.group(2)))
+    return svg.replace("<svg ", f'<svg width="{width}" height="{height}" ', 1)
 
 
 def _demo_console(*, width: int = 144, height: int = 40):

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "tokenkick"
-version = "1.0.2"
+version = "1.0.3"
 description = "Local CLI for tracking AI coding quota windows, planning reset coverage, and optional explicit provider-native kicks."
 readme = "README.md"
 license = "MIT"

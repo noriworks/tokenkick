@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.0.3
+
+- Fix README demo gallery rendering so CLI/TUI screenshots are full-width and
+  readable on GitHub.
+- Add explicit intrinsic dimensions to generated terminal demo SVGs so GitHub
+  does not render them as tiny default-size SVG thumbnails.
+
 ## v1.0.2
 
 - Expand the GitHub README with clearer product positioning, agent-safe command

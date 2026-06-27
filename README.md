@@ -66,9 +66,13 @@ The screenshots below use synthetic demo data and can be regenerated with:
 .venv/bin/python scripts/render-readme-demo.py
 ```
 
-| CLI status | Work-window planning |
-|---|---|
-| ![Synthetic TokenKick status dashboard](docs/assets/readme-status-demo.svg) | ![Synthetic TokenKick plan preview](docs/assets/readme-plan-demo.svg) |
+### CLI / TUI status
+
+![Synthetic TokenKick status dashboard](docs/assets/readme-status-demo.svg)
+
+### Work-window planning
+
+![Synthetic TokenKick plan preview](docs/assets/readme-plan-demo.svg)
 
 | macOS app main window | macOS menu bar popover |
 |---|---|
