@@ -2544,6 +2544,33 @@ def test_discover_direct_accounts_reads_antigravity_cli_identity(tmp_path, monke
     assert statuses[0].state == AccountState.UNKNOWN
 
 
+def test_discover_direct_accounts_adds_antigravity_cli_without_identity(tmp_path, monkeypatch):
+    app_dir = tmp_path / ".gemini" / "antigravity-cli"
+    app_dir.mkdir(parents=True)
+    monkeypatch.setattr("tokenkick.cli.Path.home", lambda: tmp_path)
+    monkeypatch.setattr("tokenkick.cli.read_codex_identity", lambda _home: None)
+    monkeypatch.setattr("tokenkick.cli.read_claude_identity", lambda: None)
+    monkeypatch.setattr("tokenkick.discovery.antigravity_cli_binary", lambda: "/usr/bin/agy")
+    monkeypatch.setattr("tokenkick.discovery.read_antigravity_cli_identity", lambda: None)
+    monkeypatch.setattr("tokenkick.discovery.antigravity_cli_app_dir", lambda: app_dir)
+    monkeypatch.setattr(
+        "tokenkick.cli.fetch_status",
+        lambda account: AccountStatus(label=account.label, state=AccountState.UNKNOWN),
+    )
+
+    accounts, statuses = _discover_direct_accounts()
+
+    assert [account.provider for account in accounts] == ["antigravity"]
+    assert accounts[0].label == "antigravity"
+    assert accounts[0].source == DataSource.ANTIGRAVITY_CLI
+    assert accounts[0].identity_email is None
+    assert accounts[0].codexbar_account is None
+    assert accounts[0].provider_home == str(app_dir)
+    assert accounts[0].auto_kick is False
+    assert accounts[0].session_auto_kick is False
+    assert statuses[0].state == AccountState.UNKNOWN
+
+
 def test_merge_discovered_accounts_aliases_antigravity_cli_to_codexbar():
     cli_account = AccountConfig(
         label="dev",

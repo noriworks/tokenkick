@@ -426,12 +426,10 @@ def _append_antigravity_cli_account(
     accounts: list[AccountConfig],
     statuses: list[AccountStatus],
 ) -> None:
-    """Discover a logged-in Antigravity CLI account without requiring CodexBar."""
+    """Discover an Antigravity CLI monitor account without requiring CodexBar."""
     if not antigravity_cli_binary():
         return
     email = read_antigravity_cli_identity()
-    if email is None:
-        return
     label = _label_from_email(email) or "antigravity"
     account = AccountConfig(
         label=label,

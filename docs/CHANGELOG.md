@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.18.6
+
+- Discover Antigravity as a monitor-only account when the `agy` CLI is present
+  even if the CLI does not expose a readable account email file.
+
 ## v1.18.5
 
 - Find Antigravity CLI installs in common user-local paths such as
