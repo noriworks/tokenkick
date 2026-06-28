@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.19.0
+
+- Expand Antigravity status rows into Gemini and Claude/GPT quota targets, each
+  showing its 5-hour and weekly bucket instead of compressing all four buckets
+  into one account summary.
+- Add JSON `quota_targets` for Antigravity rows while preserving raw
+  `quota_windows` and monitor-only safety.
+
 ## v1.18.9
 
 - Keep Antigravity monitor-only refresh failures out of the automatic-kick

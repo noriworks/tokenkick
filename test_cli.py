@@ -4946,6 +4946,193 @@ def test_status_table_antigravity_refresh_failure_is_monitor_only_not_blocking(m
     assert "automatic kicks are blocked" not in rendered
 
 
+def _antigravity_quota_windows() -> list[dict]:
+    return [
+        {
+            "id": "antigravity-quota-summary-gemini-5h",
+            "title": "Gemini Models Five Hour Limit",
+            "family": "gemini",
+            "window_kind": "session",
+            "used_percent": 66.0,
+            "resets_at": 1_780_007_920.0,
+            "resets_in_seconds": 2 * 3600 + 12 * 60,
+            "window_minutes": 300,
+            "source": "antigravity-cli",
+        },
+        {
+            "id": "antigravity-quota-summary-gemini-weekly",
+            "title": "Gemini Models Weekly Limit",
+            "family": "gemini",
+            "window_kind": "weekly",
+            "used_percent": 51.0,
+            "resets_at": 1_780_104_400.0,
+            "resets_in_seconds": 24 * 3600 + 5 * 3600,
+            "window_minutes": 10080,
+            "source": "antigravity-cli",
+        },
+        {
+            "id": "antigravity-quota-summary-3p-5h",
+            "title": "Claude and GPT models Five Hour Limit",
+            "family": "claude_gpt",
+            "window_kind": "session",
+            "used_percent": 0.0,
+            "resets_at": 1_780_017_940.0,
+            "resets_in_seconds": 4 * 3600 + 58 * 60,
+            "window_minutes": 300,
+            "source": "antigravity-cli",
+        },
+        {
+            "id": "antigravity-quota-summary-3p-weekly",
+            "title": "Claude and GPT models Weekly Limit",
+            "family": "claude_gpt",
+            "window_kind": "weekly",
+            "used_percent": 4.0,
+            "resets_at": 1_780_104_400.0,
+            "resets_in_seconds": 24 * 3600 + 5 * 3600,
+            "window_minutes": 10080,
+            "source": "antigravity-cli",
+        },
+    ]
+
+
+def test_status_table_expands_antigravity_quota_families(monkeypatch):
+    output = io.StringIO()
+    account = AccountConfig(
+        label="antigravity",
+        provider="antigravity",
+        source=DataSource.ANTIGRAVITY_CLI,
+    )
+    status = AccountStatus(
+        label=account.label,
+        state=AccountState.ACTIVE,
+        used_percent=66.0,
+        resets_in_seconds=2 * 3600 + 12 * 60,
+        window_minutes=300,
+        session_used_percent=66.0,
+        session_resets_in_seconds=2 * 3600 + 12 * 60,
+        session_window_minutes=300,
+        quota_windows=_antigravity_quota_windows(),
+        source_detail="antigravity-cli",
+    )
+
+    monkeypatch.setattr(
+        "tokenkick.cli.console",
+        Console(file=output, width=160, color_system=None),
+    )
+    monkeypatch.setattr("tokenkick.status_rendering.load_pending_kicks", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr("tokenkick.cli.load_kick_history", lambda limit=200: [])
+
+    _render_status_table([status], [account])
+
+    rendered = output.getvalue()
+    assert "antigravity" in rendered
+    assert "quota buckets" in rendered
+    assert "Gemini" in rendered
+    assert "Claude/GPT" in rendered
+    assert "5h in 2h 12m" in rendered
+    assert "5h in 4h 58m" in rendered
+    assert "5h  66%" in rendered
+    assert "5h   0%" in rendered
+    assert "weekly  51% in 1d 5h" in rendered
+    assert "weekly   4% in 1d 5h" in rendered
+    assert "Monitor only" in rendered
+    assert "session in 2h 12m" not in rendered
+
+
+def test_status_table_keeps_antigravity_partial_windows_on_summary_row(monkeypatch):
+    output = io.StringIO()
+    account = AccountConfig(
+        label="antigravity",
+        provider="antigravity",
+        source=DataSource.ANTIGRAVITY_CLI,
+    )
+    status = AccountStatus(
+        label=account.label,
+        state=AccountState.ACTIVE,
+        used_percent=66.0,
+        resets_in_seconds=2 * 3600 + 12 * 60,
+        window_minutes=300,
+        session_used_percent=66.0,
+        session_resets_in_seconds=2 * 3600 + 12 * 60,
+        session_window_minutes=300,
+        quota_windows=_antigravity_quota_windows()[:-1],
+        source_detail="antigravity-cli",
+    )
+
+    monkeypatch.setattr(
+        "tokenkick.cli.console",
+        Console(file=output, width=160, color_system=None),
+    )
+    monkeypatch.setattr("tokenkick.status_rendering.load_pending_kicks", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr("tokenkick.cli.load_kick_history", lambda limit=200: [])
+
+    _render_status_table([status], [account])
+
+    rendered = output.getvalue()
+    assert "quota buckets" not in rendered
+    assert "Gemini" not in rendered
+    assert "Claude/GPT" not in rendered
+    assert "session in 2h 12m" in rendered
+
+
+def test_status_json_includes_antigravity_quota_targets(monkeypatch):
+    account = AccountConfig(
+        label="antigravity",
+        provider="antigravity",
+        source=DataSource.ANTIGRAVITY_CLI,
+    )
+    status = AccountStatus(
+        label=account.label,
+        state=AccountState.ACTIVE,
+        used_percent=66.0,
+        resets_in_seconds=2 * 3600 + 12 * 60,
+        window_minutes=300,
+        session_used_percent=66.0,
+        session_resets_in_seconds=2 * 3600 + 12 * 60,
+        session_window_minutes=300,
+        quota_windows=_antigravity_quota_windows(),
+        source_detail="antigravity-cli",
+    )
+
+    monkeypatch.setattr("tokenkick.cli.Config.load", lambda: Config(accounts=[account]))
+    monkeypatch.setattr(
+        "tokenkick.cli._refresh_status_cache_fast",
+        lambda _config: ([account], [status], False, "loaded", []),
+    )
+    monkeypatch.setattr("tokenkick.cli._load_status_cache", lambda _config: None)
+    monkeypatch.setattr("tokenkick.cli._status_cache_observed_at", lambda: "2026-06-28T12:00:00Z")
+    monkeypatch.setattr("tokenkick.cli._save_status_cache", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("tokenkick.status_rendering.load_pending_kicks", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr("tokenkick.cli.load_kick_history", lambda limit=200: [])
+
+    result = CliRunner().invoke(cli, ["status", "--json-output", "--refresh"])
+
+    assert result.exit_code == 0
+    row = _status_json_accounts(result.output)[0]
+    assert row["provider"] == "antigravity"
+    assert row["monitor_only"] is True
+    assert row["kickable"] is False
+    assert len(row["quota_windows"]) == 4
+    assert [target["family"] for target in row["quota_targets"]] == ["gemini", "claude_gpt"]
+
+    gemini, claude_gpt = row["quota_targets"]
+    assert gemini["id"] == "antigravity:gemini"
+    assert gemini["title"] == "Gemini"
+    assert gemini["session"]["id"] == "antigravity-quota-summary-gemini-5h"
+    assert gemini["weekly"]["id"] == "antigravity-quota-summary-gemini-weekly"
+    assert gemini["session_used_percent"] == 66.0
+    assert gemini["session_resets_in_seconds"] == 2 * 3600 + 12 * 60
+    assert gemini["weekly_used_percent"] == 51.0
+    assert gemini["weekly_resets_in_seconds"] == 24 * 3600 + 5 * 3600
+
+    assert claude_gpt["id"] == "antigravity:claude_gpt"
+    assert claude_gpt["title"] == "Claude/GPT"
+    assert claude_gpt["session"]["id"] == "antigravity-quota-summary-3p-5h"
+    assert claude_gpt["weekly"]["id"] == "antigravity-quota-summary-3p-weekly"
+    assert claude_gpt["session_used_percent"] == 0.0
+    assert claude_gpt["weekly_used_percent"] == 4.0
+
+
 def test_status_table_prioritizes_weekly_exhausted_over_refresh_failure(monkeypatch):
     output = io.StringIO()
     account = AccountConfig(

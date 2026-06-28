@@ -141,6 +141,102 @@ def _format_antigravity_quota_reset(window: dict) -> str:
     return f"[dim]{label}[/dim]  {_format_relative_reset(seconds, include_days=include_days)}"
 
 
+def _antigravity_quota_targets(status: AccountStatus) -> list[dict]:
+    windows = status.quota_windows
+    if not isinstance(windows, list):
+        return []
+    by_family: dict[str, dict[str, dict]] = {}
+    for window in windows:
+        if not isinstance(window, dict):
+            continue
+        family = window.get("family")
+        kind = window.get("window_kind")
+        if family not in {"gemini", "claude_gpt"} or kind not in {"session", "weekly"}:
+            continue
+        by_family.setdefault(str(family), {})[str(kind)] = window
+
+    required = {
+        "gemini": {"session", "weekly"},
+        "claude_gpt": {"session", "weekly"},
+    }
+    if any(set(by_family.get(family, {})) != kinds for family, kinds in required.items()):
+        return []
+
+    targets: list[dict] = []
+    for family in ("gemini", "claude_gpt"):
+        family_windows = by_family.get(family)
+        if family_windows is None:
+            return []
+        session = family_windows.get("session")
+        weekly = family_windows.get("weekly")
+        targets.append(
+            {
+                "id": f"antigravity:{family}",
+                "provider": "antigravity",
+                "family": family,
+                "title": _antigravity_family_title(family),
+                "session": session,
+                "weekly": weekly,
+                "session_used_percent": (
+                    _numeric_float(session.get("used_percent"))
+                    if isinstance(session, dict)
+                    else None
+                ),
+                "session_resets_in_seconds": (
+                    _numeric_int(session.get("resets_in_seconds"))
+                    if isinstance(session, dict)
+                    else None
+                ),
+                "session_resets_at": (
+                    _numeric_float(session.get("resets_at"))
+                    if isinstance(session, dict)
+                    else None
+                ),
+                "weekly_used_percent": (
+                    _numeric_float(weekly.get("used_percent"))
+                    if isinstance(weekly, dict)
+                    else None
+                ),
+                "weekly_resets_in_seconds": (
+                    _numeric_int(weekly.get("resets_in_seconds"))
+                    if isinstance(weekly, dict)
+                    else None
+                ),
+                "weekly_resets_at": (
+                    _numeric_float(weekly.get("resets_at"))
+                    if isinstance(weekly, dict)
+                    else None
+                ),
+            }
+        )
+    return targets
+
+
+def _antigravity_family_title(family: str) -> str:
+    if family == "gemini":
+        return "Gemini"
+    if family == "claude_gpt":
+        return "Claude/GPT"
+    return family
+
+
+def _format_antigravity_target_session_reset(target: dict) -> str:
+    seconds = _numeric_int(target.get("session_resets_in_seconds"))
+    return f"[dim]5h[/dim] {_format_relative_reset(seconds, include_days=False)}"
+
+
+def _format_antigravity_target_session_used(target: dict) -> str:
+    used = _format_used_percent(_numeric_float(target.get("session_used_percent")))
+    return f"[dim]5h[/dim] {used}"
+
+
+def _format_antigravity_target_weekly_summary(target: dict) -> str:
+    used = _format_used_percent(_numeric_float(target.get("weekly_used_percent")))
+    seconds = _numeric_int(target.get("weekly_resets_in_seconds"))
+    reset = _format_relative_reset(seconds, include_days=True)
+    return f"[dim]weekly[/dim] {used} {reset}"
+
+
 def _numeric_float(value) -> float | None:
     try:
         return None if value is None else float(value)
@@ -251,6 +347,10 @@ def _status_rows_as_dict(
             row["schedule_enabled"] = bool(schedule and schedule.enabled)
             row["schedule_weekdays"] = schedule.weekdays if schedule is not None else None
             row["schedule_weekends"] = schedule.weekends if schedule is not None else None
+            if account.provider == "antigravity":
+                quota_targets = _antigravity_quota_targets(status)
+                if quota_targets:
+                    row["quota_targets"] = quota_targets
         if isinstance(row.get("used_percent"), (int, float)):
             row["weekly_used_percent"] = row["used_percent"]
             row["weekly_headroom_percent"] = max(0.0, 100.0 - float(row["used_percent"]))
@@ -417,6 +517,37 @@ def _render_status_table(
             codex_unconfirmed_session=codex_unconfirmed_session,
             cached_refresh_unavailable=claude_cached_refresh_unavailable,
         )
+        if provider == "antigravity" and (quota_targets := _antigravity_quota_targets(s)):
+            row = [
+                s.label,
+                state_display,
+                "[dim]quota buckets[/dim]",
+                "—",
+            ]
+            if show_queued_column:
+                row.append(queued_by_label.get(s.label, "—"))
+            row.append(
+                _status_table_action(
+                    s,
+                    providers_by_label,
+                    account,
+                    refresh_failed=refresh_failed,
+                )
+            )
+            table.add_row(*row)
+            for target in quota_targets:
+                target_row = [
+                    "",
+                    f"[dim]{target['title']}[/dim]",
+                    _format_antigravity_target_session_reset(target),
+                    _format_antigravity_target_session_used(target),
+                ]
+                if show_queued_column:
+                    target_row.append("")
+                target_row.append(_format_antigravity_target_weekly_summary(target))
+                table.add_row(*target_row)
+            continue
+
         row = [
             s.label,
             state_display,
