@@ -120,6 +120,41 @@ def _format_used_labeled_cell(
     return f"[dim]{label}[/dim] {value}"
 
 
+def _format_antigravity_quota_label(window: dict) -> str:
+    family = window.get("family")
+    kind = window.get("window_kind")
+    if family == "gemini":
+        family_text = "Gemini"
+    elif family == "claude_gpt":
+        family_text = "Claude/GPT"
+    else:
+        family_text = str(window.get("title") or "Antigravity")
+    kind_text = "weekly" if kind == "weekly" else "5h"
+    return f"{family_text} {kind_text}"
+
+
+def _format_antigravity_quota_reset(window: dict) -> str:
+    kind = window.get("window_kind")
+    seconds = _numeric_int(window.get("resets_in_seconds"))
+    label = "weekly" if kind == "weekly" else "session"
+    include_days = kind == "weekly"
+    return f"[dim]{label}[/dim]  {_format_relative_reset(seconds, include_days=include_days)}"
+
+
+def _numeric_float(value) -> float | None:
+    try:
+        return None if value is None else float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _numeric_int(value) -> int | None:
+    try:
+        return None if value is None else int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _format_openrouter_balance(status: AccountStatus) -> str:
     if status.balance_remaining is None or status.balance_limit is None:
         return _format_used_percent(status.used_percent)
@@ -210,6 +245,7 @@ def _status_rows_as_dict(
             row["auto_kick"] = account.auto_kick
             row["weekly_auto_kick"] = bool(account.weekly_auto_kick)
             row["session_auto_kick"] = bool(account.session_auto_kick)
+            row["monitor_only"] = _cli()._is_monitor_only_provider(account.provider)
             row["visible"] = account.visible
             schedule = schedule_for_account(config.schedule, account.label) if config is not None else None
             row["schedule_enabled"] = bool(schedule and schedule.enabled)
@@ -411,6 +447,20 @@ def _render_status_table(
             session_row.append("")
         session_row.append("")
         table.add_row(*session_row)
+        if verbose and provider == "antigravity" and isinstance(s.quota_windows, list):
+            for window in s.quota_windows:
+                if not isinstance(window, dict):
+                    continue
+                quota_row = [
+                    "",
+                    _format_antigravity_quota_label(window),
+                    _format_antigravity_quota_reset(window),
+                    _format_used_percent(_numeric_float(window.get("used_percent"))),
+                ]
+                if show_queued_column:
+                    quota_row.append("")
+                quota_row.append("")
+                table.add_row(*quota_row)
 
     _cli().console.print(table)
 

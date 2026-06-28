@@ -21,6 +21,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 
+from .antigravity import (
+    antigravity_status_from_extra_rate_windows,
+    has_complete_antigravity_quota_windows,
+)
 from .models import AccountConfig, AccountState, AccountStatus
 from .source_utils import (
     _determine_state,
@@ -42,6 +46,8 @@ CODEXBAR_ALL_ACCOUNTS_CMD = [
     "--format",
     "json",
 ]
+CODEXBAR_PROVIDER_USAGE_CMD_PREFIX = ["codexbar", "usage", "--provider"]
+CODEXBAR_PROVIDER_USAGE_CMD_SUFFIX = ["--format", "json"]
 CODEXBAR_LEGACY_CMD = ["codexbar", "--format", "json", "--pretty"]
 CODEXBAR_TIMEOUT_SECONDS = 20
 CODEXBAR_STALENESS_THRESHOLD_SECONDS = 900
@@ -127,14 +133,12 @@ def _fetch_codexbar_cli(
 ) -> AccountStatus:
     """Read rate-limit data via CodexBar's CLI."""
     provider = account.codexbar_provider or account.provider
-    direct_error: str | None = None
     if provider == "antigravity":
-        from .sources import _fetch_antigravity_direct
-
-        direct_status = _fetch_antigravity_direct(account)
-        if direct_status.state != AccountState.UNKNOWN:
-            return direct_status
-        direct_error = direct_status.error
+        return _fetch_antigravity_codexbar_cli(
+            account,
+            codexbar_staleness_threshold_seconds=codexbar_staleness_threshold_seconds,
+            codexbar_rejection_threshold_seconds=codexbar_rejection_threshold_seconds,
+        )
 
     if provider != "codex":
         local_status = _fetch_codexbar_local_status(
@@ -177,8 +181,7 @@ def _fetch_codexbar_cli(
         return AccountStatus(
             label=account.label,
             state=AccountState.UNKNOWN,
-            error=_codexbar_fallback_error(error, direct_error)
-            or "Could not parse rate limit data from CodexBar response",
+            error=error or "Could not parse rate limit data from CodexBar response",
         )
 
     status = _parse_codexbar_json(
@@ -195,6 +198,71 @@ def _fetch_codexbar_cli(
         codexbar_rejection_threshold_seconds=codexbar_rejection_threshold_seconds,
     )
     return local_status or _ensure_status_metadata(status, "codexbar-cli")
+
+
+def _fetch_antigravity_codexbar_cli(
+    account: AccountConfig,
+    *,
+    codexbar_staleness_threshold_seconds: int,
+    codexbar_rejection_threshold_seconds: int,
+) -> AccountStatus:
+    """Prefer complete CodexBar Antigravity buckets, with local summary fallback."""
+    provider = "antigravity"
+    summary_status: AccountStatus | None = None
+    first_error: str | None = None
+
+    for loader in (
+        lambda: _load_codexbar_provider_json(provider),
+        _load_codexbar_legacy_json,
+    ):
+        data, error = loader()
+        first_error = first_error or error
+        if data is None:
+            continue
+        status = _parse_codexbar_json(
+            account.label,
+            data,
+            provider=provider,
+            account=account.codexbar_account,
+        )
+        if status.state == AccountState.UNKNOWN:
+            first_error = first_error or status.error
+            continue
+        status = _ensure_status_metadata(status, "codexbar-cli")
+        if has_complete_antigravity_quota_windows(status):
+            return status
+        summary_status = summary_status or status
+
+    local_status = _fetch_codexbar_local_status(
+        account,
+        codexbar_staleness_threshold_seconds=codexbar_staleness_threshold_seconds,
+        codexbar_rejection_threshold_seconds=codexbar_rejection_threshold_seconds,
+    )
+    if local_status is not None:
+        if (
+            local_status.state != AccountState.UNKNOWN
+            and has_complete_antigravity_quota_windows(local_status)
+        ):
+            return local_status
+        if local_status.state != AccountState.UNKNOWN:
+            summary_status = summary_status or local_status
+        else:
+            first_error = first_error or local_status.error
+
+    from .sources import _fetch_antigravity_direct
+
+    direct_status = _fetch_antigravity_direct(account)
+    if direct_status.state != AccountState.UNKNOWN:
+        if has_complete_antigravity_quota_windows(direct_status):
+            return direct_status
+        return summary_status or direct_status
+
+    return summary_status or AccountStatus(
+        label=account.label,
+        state=AccountState.UNKNOWN,
+        error=_codexbar_fallback_error(first_error, direct_status.error)
+        or "Could not parse Antigravity quota data.",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -251,6 +319,13 @@ def _fetch_codexbar_http(
 def _load_codexbar_all_accounts_json() -> tuple[Any | None, str | None]:
     """Load CodexBar's full multi-account Codex usage output when available."""
     return _run_codexbar_json(CODEXBAR_ALL_ACCOUNTS_CMD)
+
+
+def _load_codexbar_provider_json(provider: str) -> tuple[Any | None, str | None]:
+    """Load CodexBar's provider-specific usage output when available."""
+    return _run_codexbar_json(
+        [*CODEXBAR_PROVIDER_USAGE_CMD_PREFIX, provider, *CODEXBAR_PROVIDER_USAGE_CMD_SUFFIX]
+    )
 
 
 def _load_codexbar_legacy_json() -> tuple[Any | None, str | None]:
@@ -753,6 +828,15 @@ def _parse_codexbar_json(
             state=AccountState.UNKNOWN,
             error=error.get("message") or "CodexBar provider returned an error",
         )
+
+    if provider == "antigravity":
+        antigravity_status = antigravity_status_from_extra_rate_windows(
+            label,
+            data,
+            window_source="codexbar",
+        )
+        if antigravity_status is not None:
+            return antigravity_status
 
     window = _select_codexbar_rate_window(data)
     session_window = _select_codexbar_session_window(data)

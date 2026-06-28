@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from .antigravity import (
+    antigravity_status_from_extra_rate_windows,
     is_antigravity_language_server,
     is_language_server_command,
     lsof_binary,
@@ -2106,6 +2107,9 @@ def _parse_antigravity_user_status(label: str, data: dict) -> AccountStatus:
     user_status = data.get("userStatus")
     if not isinstance(user_status, dict):
         raise _AntigravityProbeError("Antigravity GetUserStatus response is missing userStatus.")
+    named_status = _parse_antigravity_named_windows(label, data, user_status)
+    if named_status is not None:
+        return named_status
     configs = _nested_get(user_status, ("cascadeModelConfigData", "clientModelConfigs"))
     quotas = _antigravity_model_quotas(configs if isinstance(configs, list) else [])
     if not quotas:
@@ -2115,11 +2119,32 @@ def _parse_antigravity_user_status(label: str, data: dict) -> AccountStatus:
 
 def _parse_antigravity_command_model_configs(label: str, data: dict) -> AccountStatus:
     _raise_for_antigravity_response_code(data)
+    named_status = _parse_antigravity_named_windows(label, data)
+    if named_status is not None:
+        return named_status
     configs = data.get("clientModelConfigs")
     quotas = _antigravity_model_quotas(configs if isinstance(configs, list) else [])
     if not quotas:
         raise _AntigravityProbeError("Antigravity model config response has no quota models.")
     return _antigravity_status_from_quotas(label, quotas)
+
+
+def _parse_antigravity_named_windows(label: str, *payloads: dict) -> AccountStatus | None:
+    for payload in payloads:
+        status = antigravity_status_from_extra_rate_windows(
+            label,
+            payload,
+            window_source=ANTIGRAVITY_SOURCE_DETAIL,
+            source_detail=ANTIGRAVITY_SOURCE_DETAIL,
+        )
+        if status is None:
+            continue
+        if status.state == AccountState.UNKNOWN:
+            raise _AntigravityProbeError(
+                status.error or "Antigravity named quota windows could not be parsed."
+            )
+        return status
+    return None
 
 
 def _raise_for_antigravity_response_code(data: dict) -> None:

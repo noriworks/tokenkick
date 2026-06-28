@@ -12470,6 +12470,22 @@ def test_kick_label_rejects_gemini_monitor_only(monkeypatch):
     assert "daily reset at midnight Pacific" in result.output
 
 
+def test_kick_label_rejects_antigravity_monitor_only(monkeypatch):
+    accounts = [AccountConfig(label="antigravity", provider="antigravity")]
+    monkeypatch.setattr("tokenkick.cli.Config.load", lambda: Config(accounts=accounts))
+    monkeypatch.setattr("tokenkick.cli._load_accounts", lambda config: accounts)
+    monkeypatch.setattr(
+        "tokenkick.cli._fetch_status",
+        lambda *_args, **_kwargs: pytest.fail("Antigravity kick must not fetch or run"),
+    )
+
+    result = CliRunner().invoke(cli, ["kick", "antigravity"])
+
+    assert result.exit_code == 1
+    assert "Antigravity is monitor-only" in result.output
+    assert "Kicking is disabled" in result.output
+
+
 def test_manual_kick_allows_active_weekly_when_session_ready(monkeypatch):
     account = AccountConfig(label="codex (reserve)", provider="codex")
     moved_status = AccountStatus(
@@ -17752,6 +17768,26 @@ def test_auto_toggles_reject_gemini(monkeypatch):
     assert "Gemini is monitor-only; auto-kick cannot be enabled." in auto_result.output
     assert "Gemini is monitor-only; auto-kick cannot be enabled." in session_result.output
     assert "Gemini is monitor-only; auto-kick cannot be enabled." in weekly_result.output
+    assert saved == []
+
+
+def test_auto_toggles_reject_antigravity(monkeypatch):
+    saved: list[Config] = []
+    accounts = [AccountConfig(label="antigravity", provider="antigravity")]
+    monkeypatch.setattr("tokenkick.cli.Config.load", lambda: Config(accounts=accounts))
+    monkeypatch.setattr("tokenkick.cli._load_accounts", lambda config: accounts)
+    monkeypatch.setattr("tokenkick.cli.Config.save", lambda self: saved.append(self))
+
+    auto_result = CliRunner().invoke(cli, ["auto", "enable", "antigravity"])
+    session_result = CliRunner().invoke(cli, ["auto", "session", "enable", "antigravity"])
+    weekly_result = CliRunner().invoke(cli, ["auto", "weekly", "enable", "antigravity"])
+
+    assert auto_result.exit_code == 1
+    assert session_result.exit_code == 1
+    assert weekly_result.exit_code == 1
+    assert "Antigravity is monitor-only; auto-kick cannot be enabled." in auto_result.output
+    assert "Antigravity is monitor-only; auto-kick cannot be enabled." in session_result.output
+    assert "Antigravity is monitor-only; auto-kick cannot be enabled." in weekly_result.output
     assert saved == []
 
 

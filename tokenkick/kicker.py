@@ -25,11 +25,20 @@ from .models import (
 
 
 KICKABLE_PROVIDERS = {"codex", "claude"}
+MONITOR_ONLY_PROVIDERS = {"gemini", "antigravity"}
 GEMINI_MONITOR_ONLY_MESSAGE = (
     "Gemini is monitor-only: its quota uses daily reset at midnight Pacific time, "
     "not first-use-anchored windows. Kicking has no effect. See docs/PROVIDERS.md for details."
 )
 GEMINI_AUTO_KICK_DISABLED_MESSAGE = "Gemini is monitor-only; auto-kick cannot be enabled."
+ANTIGRAVITY_MONITOR_ONLY_MESSAGE = (
+    "Antigravity is monitor-only: TokenKick can read bundled quota windows, but a safe "
+    "provider-native anchor request has not been verified. Kicking is disabled. "
+    "See docs/PROVIDERS.md for details."
+)
+ANTIGRAVITY_AUTO_KICK_DISABLED_MESSAGE = (
+    "Antigravity is monitor-only; auto-kick cannot be enabled."
+)
 DEFAULT_KICK_MODELS: dict[str, str] = {}
 CODEX_KICK_PROMPT = (
     "TokenKick quota anchor probe. Do not inspect files or run commands."
@@ -185,11 +194,12 @@ def kick_account(
     This is the lightest possible touch: a single tiny completion.
     """
     if account.provider not in KICKABLE_PROVIDERS:
-        error = (
-            GEMINI_MONITOR_ONLY_MESSAGE
-            if account.provider == "gemini"
-            else f'Auto-kick only supports Codex and Claude accounts, not "{account.provider}"'
-        )
+        if account.provider == "gemini":
+            error = GEMINI_MONITOR_ONLY_MESSAGE
+        elif account.provider == "antigravity":
+            error = ANTIGRAVITY_MONITOR_ONLY_MESSAGE
+        else:
+            error = f'Auto-kick only supports Codex and Claude accounts, not "{account.provider}"'
         event = KickEvent(
             label=account.label,
             timestamp=time.time(),

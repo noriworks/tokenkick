@@ -494,6 +494,10 @@ Gemini CLI accounts are monitor-only. Gemini uses daily RPD reset at midnight
 Pacific time, so kicking does not anchor a useful window and auto-kick is
 disabled automatically. See [PROVIDERS.md](PROVIDERS.md).
 
+Antigravity accounts are rich monitor-only. TokenKick can read the bundled
+Gemini and Claude/GPT 5-hour and weekly limits when named quota windows are
+available, but it does not kick or anchor Antigravity windows.
+
 Codex provider usage reads are status reads only. They do not kick or anchor a
 window; only `tk kick`, `tk run`, or daemon auto-kick sends the tiny Codex model
 call that can anchor a fresh provider window. Use `tk codex-usage` when you need
@@ -554,8 +558,9 @@ Example notification:
 Smart schedule notification:
 > 🕐 TokenKick: "personal" is fresh. Scheduled kick at 11:00 CEST (optimal for your 14:00-21:00 workday).
 
-Auto-kick targets Codex and Claude accounts. Gemini and Antigravity are observed
-but never kicked. Other providers are unsupported unless documented otherwise.
+Auto-kick targets Codex and Claude accounts. Gemini and Antigravity are
+monitor-only and never kicked. Other providers are unsupported unless documented
+otherwise.
 
 TokenKick treats a repeated tiny near-full Codex 5-hour session as a
 phantom/probe session only after evidence that the status is ambiguous, such as

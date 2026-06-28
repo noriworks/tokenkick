@@ -407,6 +407,17 @@ def test_accounts_list_json_fields():
     assert "kick_model" in account
 
 
+def test_accounts_list_json_marks_antigravity_monitor_only():
+    _seed_config([AccountConfig(label="antigravity", provider="antigravity")])
+    runner = CliRunner()
+    result = runner.invoke(cli, ["accounts", "list", "--json-output"])
+    envelope = _parse_envelope(result.output)
+    (account,) = envelope["payload"]["accounts"]
+    assert account["provider"] == "antigravity"
+    assert account["kickable"] is False
+    assert account["monitor_only"] is True
+
+
 def test_accounts_notifications_json():
     _seed_config([_codex_account("codex (dev)")])
     runner = CliRunner()
@@ -441,6 +452,16 @@ def test_auto_status_json():
     assert account["weekly_auto_kick"] is True
     assert account["session_auto_kick"] is True
     assert account["monitor_only"] is False
+
+
+def test_auto_status_json_marks_antigravity_monitor_only():
+    _seed_config([AccountConfig(label="antigravity", provider="antigravity")])
+    runner = CliRunner()
+    result = runner.invoke(cli, ["auto", "status", "--json-output"])
+    envelope = _parse_envelope(result.output)
+    (account,) = envelope["payload"]["accounts"]
+    assert account["kickable"] is False
+    assert account["monitor_only"] is True
 
 
 def test_schedule_show_json_defaults():

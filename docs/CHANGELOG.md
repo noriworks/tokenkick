@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.1.0
+
+- Add rich monitor-only Antigravity quota windows for Gemini and Claude/GPT
+  5-hour and weekly limits when named bucket data is available.
+- Keep Antigravity blocked from manual kicks, schedules, and auto-kick paths
+  until a safe provider-native anchor request is verified.
+
 ## v1.0.7
 
 - Link the agent playbook to the dedicated MCP documentation and summarize the

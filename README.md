@@ -125,9 +125,11 @@ TK_NO_INTERACTIVE=1 tk plan --work-window 18:30-23:30 --json-output
 
 ## Provider Support
 
-Codex and Claude are kickable in this release. Gemini and Antigravity are
-monitor-only. Other providers are unsupported until their status shape and safe
-kick behavior are verified.
+Codex and Claude are kickable in this release. Gemini is monitor-only.
+Antigravity is rich monitor-only: TokenKick can show bundled Gemini and
+Claude/GPT 5-hour and weekly limits when named windows are available, but it
+does not kick them. Other providers are unsupported until their status shape
+and safe kick behavior are verified.
 
 Codex-Spark is detected as a separate Codex quota bucket when the provider
 exposes it. TokenKick then shows it as a sibling account such as

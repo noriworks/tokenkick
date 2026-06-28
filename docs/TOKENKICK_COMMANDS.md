@@ -58,7 +58,8 @@ way:
 tk kick "<label>" --force
 ```
 
-Gemini is monitor-only; kick and auto-kick commands reject Gemini accounts.
+Gemini and Antigravity are monitor-only; kick and auto-kick commands reject
+those accounts.
 
 `tk plan` estimates usable coverage from per-account `usable_session_minutes`.
 If that is unset, `plan_tier` and `schedule.usable_session_tier_defaults` provide

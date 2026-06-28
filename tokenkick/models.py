@@ -9,7 +9,7 @@ from dataclasses import dataclass, field, fields, asdict, replace
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 from .consent import AUTO_KICK_CONSENT_VERSION, normalize_auto_kick_consents
 from .state_io import locked_atomic_write_text, locked_update_text
@@ -446,6 +446,7 @@ class AccountStatus:
     codex_rate_limit_id: Optional[str] = None
     codex_rate_limit_name: Optional[str] = None
     window_anchor_state: Optional[str] = None
+    quota_windows: Optional[list[dict[str, Any]]] = None
     stale: bool = False
     stale_seconds: Optional[int] = None
 

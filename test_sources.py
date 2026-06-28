@@ -111,6 +111,59 @@ def _epoch(value: str) -> float:
     return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
 
 
+def _antigravity_codexbar_entry(*, missing_id: str | None = None) -> dict:
+    windows = [
+        {
+            "id": "antigravity-quota-summary-gemini-5h",
+            "title": "Gemini Models Five Hour Limit",
+            "window": {
+                "usedPercent": 66.22157,
+                "resetsAt": "2026-05-23T06:18:33Z",
+                "windowMinutes": 300,
+            },
+        },
+        {
+            "id": "antigravity-quota-summary-gemini-weekly",
+            "title": "Gemini Models Weekly Limit",
+            "window": {
+                "usedPercent": 51.460007,
+                "resetsAt": "2026-05-24T09:18:33Z",
+                "windowMinutes": 10080,
+            },
+        },
+        {
+            "id": "antigravity-quota-summary-3p-5h",
+            "title": "Claude and GPT models Five Hour Limit",
+            "window": {
+                "usedPercent": 0,
+                "resetsAt": "2026-05-23T09:18:33Z",
+                "windowMinutes": 300,
+            },
+        },
+        {
+            "id": "antigravity-quota-summary-3p-weekly",
+            "title": "Claude and GPT models Weekly Limit",
+            "window": {
+                "usedPercent": 4.16723,
+                "resetsAt": "2026-05-24T08:18:33Z",
+                "windowMinutes": 10080,
+            },
+        },
+    ]
+    if missing_id is not None:
+        windows = [window for window in windows if window["id"] != missing_id]
+    return {
+        "provider": "antigravity",
+        "account": "dev@example.test",
+            "usage": {
+                "updatedAt": "2026-05-23T04:18:33Z",
+                "extraRateWindows": windows,
+                "primary": windows[0]["window"],
+                "secondary": windows[-1]["window"],
+            },
+        }
+
+
 def _codexbar_error_run(*_args, **_kwargs):
     return SimpleNamespace(
         returncode=1,
@@ -245,6 +298,26 @@ def test_parse_antigravity_user_status_selects_codexbar_model_order(monkeypatch)
     assert status.session_resets_in_seconds == 10800
 
 
+def test_parse_antigravity_user_status_accepts_named_quota_windows(monkeypatch):
+    monkeypatch.setattr("tokenkick.source_utils.time.time", lambda: _epoch("2026-05-23T04:18:33Z"))
+
+    status = _parse_antigravity_user_status(
+        "antigravity",
+        {
+            "code": "OK",
+            "userStatus": {
+                "extraRateWindows": _antigravity_codexbar_entry()["usage"]["extraRateWindows"],
+                "cascadeModelConfigData": {"clientModelConfigs": []},
+            },
+        },
+    )
+
+    assert status.source_detail == ANTIGRAVITY_SOURCE_DETAIL
+    assert status.used_percent == 66.22157
+    assert status.quota_windows is not None
+    assert {window["source"] for window in status.quota_windows} == {ANTIGRAVITY_SOURCE_DETAIL}
+
+
 def test_parse_antigravity_lsof_ports_deduplicates_and_sorts():
     output = """
 COMMAND PID USER FD TYPE DEVICE SIZE/OFF NODE NAME
@@ -286,6 +359,10 @@ def test_antigravity_direct_failure_falls_back_to_codexbar(monkeypatch, tmp_path
     monkeypatch.setattr("tokenkick.codexbar_source.CODEXBAR_WIDGET_SNAPSHOT_FILES", [])
     monkeypatch.setattr("tokenkick.codexbar_source.CODEXBAR_HISTORY_DIR", tmp_path / "missing-history")
     monkeypatch.setattr(
+        "tokenkick.codexbar_source._load_codexbar_provider_json",
+        lambda _provider: (None, "CodexBar provider command unavailable"),
+    )
+    monkeypatch.setattr(
         "tokenkick.codexbar_source._load_codexbar_legacy_json",
         lambda: (
             [
@@ -308,6 +385,33 @@ def test_antigravity_direct_failure_falls_back_to_codexbar(monkeypatch, tmp_path
 
     assert status.source_detail == "codexbar-cli"
     assert status.used_percent == 12.0
+
+
+def test_antigravity_codexbar_complete_buckets_beat_direct_summary(monkeypatch, tmp_path):
+    account = AccountConfig(
+        label="antigravity",
+        provider="antigravity",
+        source=DataSource.CODEXBAR_CLI,
+        codexbar_provider="antigravity",
+    )
+    monkeypatch.setattr("tokenkick.source_utils.time.time", lambda: _epoch("2026-05-23T04:18:33Z"))
+    monkeypatch.setattr("tokenkick.codexbar_source.CODEXBAR_WIDGET_SNAPSHOT_FILES", [])
+    monkeypatch.setattr("tokenkick.codexbar_source.CODEXBAR_HISTORY_DIR", tmp_path / "missing-history")
+    monkeypatch.setattr(
+        "tokenkick.codexbar_source._load_codexbar_provider_json",
+        lambda _provider: ([_antigravity_codexbar_entry()], None),
+    )
+    monkeypatch.setattr(
+        "tokenkick.sources._fetch_antigravity_direct",
+        lambda _account: pytest.fail("complete CodexBar Antigravity buckets should win"),
+    )
+
+    status = _fetch_codexbar_cli(account)
+
+    assert status.source_detail == "codexbar-cli"
+    assert status.used_percent == 66.22157
+    assert status.quota_windows is not None
+    assert len(status.quota_windows) == 4
 
 
 def test_antigravity_direct_probe_uses_csrf_lsof_and_unleash(monkeypatch):
@@ -2345,6 +2449,61 @@ class TestParseCodexBarJson:
             account="two@example.test",
         )
         assert status.used_percent == 20.0
+
+    def test_codexbar_parses_antigravity_extra_rate_windows(self, monkeypatch):
+        monkeypatch.setattr("tokenkick.source_utils.time.time", lambda: _epoch("2026-05-23T04:18:33Z"))
+
+        status = _parse_codexbar_json(
+            "antigravity",
+            [_antigravity_codexbar_entry()],
+            provider="antigravity",
+            account="dev@example.test",
+        )
+
+        assert status.state == AccountState.ACTIVE
+        assert status.used_percent == 66.22157
+        assert status.window_minutes == 300
+        assert status.session_used_percent == 66.22157
+        assert status.session_window_minutes == 300
+        assert status.quota_windows is not None
+        assert [window["id"] for window in status.quota_windows] == [
+            "antigravity-quota-summary-gemini-5h",
+            "antigravity-quota-summary-gemini-weekly",
+            "antigravity-quota-summary-3p-5h",
+            "antigravity-quota-summary-3p-weekly",
+        ]
+        assert status.quota_windows[0]["family"] == "gemini"
+        assert status.quota_windows[0]["window_kind"] == "session"
+        assert status.quota_windows[1]["family"] == "gemini"
+        assert status.quota_windows[1]["window_kind"] == "weekly"
+        assert status.quota_windows[2]["family"] == "claude_gpt"
+        assert status.quota_windows[2]["window_kind"] == "session"
+        assert status.quota_windows[3]["family"] == "claude_gpt"
+        assert status.quota_windows[3]["window_kind"] == "weekly"
+        assert status.quota_windows[0]["resets_at"] == _epoch("2026-05-23T06:18:33Z")
+        assert status.quota_windows[0]["resets_in_seconds"] == 7200
+        assert status.quota_windows[0]["source"] == "codexbar"
+
+    def test_codexbar_antigravity_extra_rate_windows_fail_closed_when_incomplete(self):
+        status = _parse_codexbar_json(
+            "antigravity",
+            [_antigravity_codexbar_entry(missing_id="antigravity-quota-summary-3p-weekly")],
+            provider="antigravity",
+        )
+
+        assert status.state == AccountState.UNKNOWN
+        assert "Antigravity quota windows" in status.error
+        assert status.quota_windows is None
+
+    def test_codexbar_antigravity_extra_rate_windows_fail_closed_on_unknown_id(self):
+        entry = _antigravity_codexbar_entry()
+        entry["usage"]["extraRateWindows"][0]["id"] = "antigravity-quota-summary-new-window"
+
+        status = _parse_codexbar_json("antigravity", [entry], provider="antigravity")
+
+        assert status.state == AccountState.UNKNOWN
+        assert "Antigravity quota windows" in status.error
+        assert status.quota_windows is None
 
     def test_codexbar_cli_uses_all_accounts_for_codex(self, monkeypatch):
         commands = []

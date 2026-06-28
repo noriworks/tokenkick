@@ -334,6 +334,7 @@ def _fill_status_cache_reset_anchors(status: AccountStatus, observed_at: str | N
         status.resets_at = observed_ts + status.resets_in_seconds
     if status.session_resets_at is None and status.session_resets_in_seconds is not None:
         status.session_resets_at = observed_ts + status.session_resets_in_seconds
+    _fill_quota_window_reset_anchors(status, observed_ts)
 
 
 def _recompute_status_cache_countdowns(status: AccountStatus) -> None:
@@ -342,6 +343,26 @@ def _recompute_status_cache_countdowns(status: AccountStatus) -> None:
         status.resets_in_seconds = max(0, int(status.resets_at - now))
     if status.session_resets_at is not None:
         status.session_resets_in_seconds = max(0, int(status.session_resets_at - now))
+    if isinstance(status.quota_windows, list):
+        for window in status.quota_windows:
+            if not isinstance(window, dict):
+                continue
+            resets_at = window.get("resets_at")
+            if isinstance(resets_at, (int, float)):
+                window["resets_in_seconds"] = max(0, int(float(resets_at) - now))
+
+
+def _fill_quota_window_reset_anchors(status: AccountStatus, observed_ts: float) -> None:
+    if not isinstance(status.quota_windows, list):
+        return
+    for window in status.quota_windows:
+        if not isinstance(window, dict):
+            continue
+        if window.get("resets_at") is not None:
+            continue
+        resets_in = window.get("resets_in_seconds")
+        if isinstance(resets_in, (int, float)):
+            window["resets_at"] = observed_ts + float(resets_in)
 
 
 def _status_cache_error_class(status: AccountStatus) -> str | None:

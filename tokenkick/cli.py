@@ -99,6 +99,8 @@ from .codex_surface_stats import (
 )
 from .codex_surface_patterns import build_codex_surface_patterns_report
 from .kicker import (
+    ANTIGRAVITY_AUTO_KICK_DISABLED_MESSAGE,
+    ANTIGRAVITY_MONITOR_ONLY_MESSAGE,
     CODEX_NO_GENERATION_EVIDENCE_ERROR,
     CODEX_KICK_SURFACE_INTERACTIVE_LIKE,
     CODEX_KICK_SURFACE_LEGACY,
@@ -108,6 +110,7 @@ from .kicker import (
     GEMINI_AUTO_KICK_DISABLED_MESSAGE,
     GEMINI_MONITOR_ONLY_MESSAGE,
     KICKABLE_PROVIDERS,
+    MONITOR_ONLY_PROVIDERS,
     codex_phantom_recovery_model_ladder,
     kick_account,
     kick_invocation_for_account,
@@ -981,6 +984,26 @@ def _kickable_accounts(accounts: list[AccountConfig]) -> list[AccountConfig]:
     return [account for account in accounts if account.provider in KICKABLE_PROVIDERS]
 
 
+def _is_monitor_only_provider(provider: str) -> bool:
+    return provider in MONITOR_ONLY_PROVIDERS
+
+
+def _monitor_only_message(provider: str) -> str:
+    if provider == "gemini":
+        return GEMINI_MONITOR_ONLY_MESSAGE
+    if provider == "antigravity":
+        return ANTIGRAVITY_MONITOR_ONLY_MESSAGE
+    return f'{provider} is monitor-only; kicking is disabled.'
+
+
+def _monitor_only_auto_kick_message(provider: str) -> str:
+    if provider == "gemini":
+        return GEMINI_AUTO_KICK_DISABLED_MESSAGE
+    if provider == "antigravity":
+        return ANTIGRAVITY_AUTO_KICK_DISABLED_MESSAGE
+    return f'{provider} is monitor-only; auto-kick cannot be enabled.'
+
+
 def _auto_kick_kickable_accounts(accounts: list[AccountConfig]) -> list[AccountConfig]:
     return [
         account
@@ -1301,8 +1324,8 @@ def _set_auto_kick(
     if account is None:
         console.print(f'[red]Account "{label}" not found.[/red]')
         return None
-    if account.provider == "gemini":
-        console.print(f"[red]{GEMINI_AUTO_KICK_DISABLED_MESSAGE}[/red]")
+    if _is_monitor_only_provider(account.provider):
+        console.print(f"[red]{_monitor_only_auto_kick_message(account.provider)}[/red]")
         raise click.exceptions.Exit(1)
     if account.provider not in KICKABLE_PROVIDERS:
         console.print(
@@ -1346,8 +1369,8 @@ def _set_session_auto_kick(
     if account is None:
         console.print(f'[red]Account "{label}" not found.[/red]')
         return None
-    if account.provider == "gemini":
-        console.print(f"[red]{GEMINI_AUTO_KICK_DISABLED_MESSAGE}[/red]")
+    if _is_monitor_only_provider(account.provider):
+        console.print(f"[red]{_monitor_only_auto_kick_message(account.provider)}[/red]")
         raise click.exceptions.Exit(1)
     if account.provider not in KICKABLE_PROVIDERS:
         console.print(
@@ -1386,8 +1409,8 @@ def _set_weekly_auto_kick(
     if account is None:
         console.print(f'[red]Account "{label}" not found.[/red]')
         return None
-    if account.provider == "gemini":
-        console.print(f"[red]{GEMINI_AUTO_KICK_DISABLED_MESSAGE}[/red]")
+    if _is_monitor_only_provider(account.provider):
+        console.print(f"[red]{_monitor_only_auto_kick_message(account.provider)}[/red]")
         raise click.exceptions.Exit(1)
     if account.provider not in KICKABLE_PROVIDERS:
         console.print(
@@ -1453,8 +1476,8 @@ def _set_direct_usage(
     if account is None:
         console.print(f'[red]Account "{label}" not found.[/red]')
         return None
-    if account.provider == "gemini":
-        console.print(f"[red]{GEMINI_AUTO_KICK_DISABLED_MESSAGE}[/red]")
+    if _is_monitor_only_provider(account.provider):
+        console.print(f"[red]{_monitor_only_auto_kick_message(account.provider)}[/red]")
         raise click.exceptions.Exit(1)
     if account.provider != "claude":
         console.print("[yellow]Direct /usage is only supported for Claude accounts.[/yellow]")
@@ -1492,8 +1515,8 @@ def _set_kick_model(
     if account is None:
         console.print(f'[red]Account "{label}" not found.[/red]')
         return None
-    if account.provider == "gemini":
-        console.print(f"[red]{GEMINI_AUTO_KICK_DISABLED_MESSAGE}[/red]")
+    if _is_monitor_only_provider(account.provider):
+        console.print(f"[red]{_monitor_only_auto_kick_message(account.provider)}[/red]")
         raise click.exceptions.Exit(1)
     if account.provider not in KICKABLE_PROVIDERS:
         console.print(
@@ -5962,7 +5985,7 @@ def _render_auto_status_table(accounts: list[AccountConfig]) -> None:
     table.add_column("Session")
 
     for account in accounts:
-        if account.provider == "gemini":
+        if _is_monitor_only_provider(account.provider):
             state = "❌ monitor-only"
             weekly_state = "❌ monitor-only"
             session_state = "❌ monitor-only"
@@ -5993,7 +6016,7 @@ def _render_accounts_table(config: Config, accounts: list[AccountConfig]) -> Non
     for account in accounts:
         visible = "✅ visible" if account.visible else "❌ hidden"
         notifications = _notification_route_display(account, config.notifications)
-        if account.provider == "gemini":
+        if _is_monitor_only_provider(account.provider):
             auto_kick = "❌ monitor-only"
         elif account.provider not in KICKABLE_PROVIDERS:
             auto_kick = "❌ disabled (not kickable)"
@@ -6123,6 +6146,7 @@ def _account_detail_payload(account: AccountConfig) -> dict:
     payload = account.to_dict()
     payload["notifications_enabled"] = account.notifications_enabled
     payload["kickable"] = account.provider in KICKABLE_PROVIDERS
+    payload["monitor_only"] = _is_monitor_only_provider(account.provider)
     payload["kick_model_effective"] = None if not payload["kickable"] else kick_model_for_account(account)
     return payload
 
@@ -6168,7 +6192,7 @@ def _render_account_detail(account: AccountConfig) -> None:
 
 
 def _kick_model_display(account: AccountConfig) -> str:
-    if account.provider == "gemini":
+    if _is_monitor_only_provider(account.provider):
         return "—"
     if account.provider not in KICKABLE_PROVIDERS:
         return "—"
@@ -6251,7 +6275,7 @@ def _accounts_list_payload(config: Config, accounts: list[AccountConfig]) -> lis
             "provider": account.provider,
             "visible": account.visible,
             "kickable": account.provider in KICKABLE_PROVIDERS,
-            "monitor_only": account.provider == "gemini",
+            "monitor_only": _is_monitor_only_provider(account.provider),
             "auto_kick": account.auto_kick,
             "weekly_auto_kick": account.weekly_auto_kick,
             "session_auto_kick": account.session_auto_kick,
@@ -6318,7 +6342,7 @@ def _auto_status_payload(accounts: list[AccountConfig]) -> list[dict]:
             "provider": account.provider,
             "visible": account.visible,
             "kickable": account.provider in KICKABLE_PROVIDERS,
-            "monitor_only": account.provider == "gemini",
+            "monitor_only": _is_monitor_only_provider(account.provider),
             "auto_kick": account.auto_kick,
             "weekly_auto_kick": account.weekly_auto_kick,
             "session_auto_kick": account.session_auto_kick,
@@ -8287,11 +8311,12 @@ def _resolve_single_kick_target(
             cli_markup=f'[red]Account "{label}" not found.[/red]',
             failure=True,
         )
-    if account.provider == "gemini":
+    if _is_monitor_only_provider(account.provider):
+        message = _monitor_only_message(account.provider)
         raise _SingleKickStopped(
             "monitor_only",
-            GEMINI_MONITOR_ONLY_MESSAGE,
-            cli_markup=f"[red]{GEMINI_MONITOR_ONLY_MESSAGE}[/red]",
+            message,
+            cli_markup=f"[red]{message}[/red]",
             failure=True,
             exit_code=1,
         )
@@ -8692,8 +8717,8 @@ def wake(label: str):
     if account is None:
         console.print(f'[red]Account "{label}" not found.[/red]')
         return
-    if account.provider == "gemini":
-        console.print(f"[red]{GEMINI_MONITOR_ONLY_MESSAGE}[/red]")
+    if _is_monitor_only_provider(account.provider):
+        console.print(f"[red]{_monitor_only_message(account.provider)}[/red]")
         raise click.exceptions.Exit(1)
     if account.provider not in KICKABLE_PROVIDERS:
         console.print(
