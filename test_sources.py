@@ -604,6 +604,7 @@ def test_fetch_antigravity_cli_https_uses_quota_summary_first(monkeypatch):
         return _antigravity_quota_summary_response()
 
     monkeypatch.setattr("tokenkick.sources._antigravity_request_json", fake_request)
+    monkeypatch.setattr("tokenkick.sources.read_antigravity_cli_identity", lambda: None)
 
     status = _fetch_antigravity_cli_https_status(
         AccountConfig(label="antigravity", provider="antigravity"),
@@ -620,6 +621,42 @@ def test_fetch_antigravity_cli_https_uses_quota_summary_first(monkeypatch):
             "",
         )
     ]
+
+
+def test_fetch_antigravity_cli_https_verifies_summary_with_cli_identity(monkeypatch):
+    monkeypatch.setattr("tokenkick.antigravity.time.time", lambda: _epoch("2026-05-23T04:18:33Z"))
+    session = SimpleNamespace(
+        binary="/usr/bin/agy",
+        process=SimpleNamespace(pid=123, poll=lambda: None),
+        master_fd=-1,
+        output=bytearray(),
+    )
+    monkeypatch.setattr("tokenkick.sources._drain_antigravity_cli_output", lambda _session: None)
+    monkeypatch.setattr(
+        "tokenkick.sources.listening_ports_for_pid_with_method",
+        lambda *_args, **_kwargs: ([4567], "lsof"),
+    )
+    monkeypatch.setattr(
+        "tokenkick.sources._antigravity_request_json",
+        lambda *_args, **_kwargs: _antigravity_quota_summary_response(),
+    )
+    monkeypatch.setattr(
+        "tokenkick.sources.read_antigravity_cli_identity",
+        lambda: "dev@example.test",
+    )
+
+    status = _fetch_antigravity_cli_https_status(
+        AccountConfig(
+            label="antigravity",
+            provider="antigravity",
+            identity_email="dev@example.test",
+        ),
+        session,
+    )
+
+    assert status.state == AccountState.ACTIVE
+    assert status.quota_windows is not None
+    assert getattr(status, "_antigravity_identity_email") == "dev@example.test"
 
 
 def test_fetch_antigravity_cli_https_fails_closed_on_incomplete_summary(monkeypatch):

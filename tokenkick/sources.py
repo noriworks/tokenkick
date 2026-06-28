@@ -36,6 +36,7 @@ from .antigravity import (
     lsof_binary,
     parse_lsof_listening_ports,
     parse_process_line,
+    read_antigravity_cli_identity,
 )
 from .codexbar_source import (
     CODEXBAR_REJECTION_THRESHOLD_SECONDS,
@@ -1964,8 +1965,14 @@ def _verified_antigravity_cli_status(
             source_detail=ANTIGRAVITY_CLI_SOURCE_DETAIL,
         )
     if has_complete_antigravity_quota_windows(status):
-        return replace(status, source_detail=ANTIGRAVITY_CLI_SOURCE_DETAIL)
-    return replace(status, source_detail=status.source_detail or ANTIGRAVITY_CLI_SOURCE_DETAIL)
+        return _replace_antigravity_status_metadata(
+            status,
+            source_detail=ANTIGRAVITY_CLI_SOURCE_DETAIL,
+        )
+    return _replace_antigravity_status_metadata(
+        status,
+        source_detail=status.source_detail or ANTIGRAVITY_CLI_SOURCE_DETAIL,
+    )
 
 
 def _fetch_antigravity_cli_https(account: AccountConfig) -> AccountStatus:
@@ -2229,6 +2236,8 @@ def _fetch_antigravity_cli_quota_from_port(label: str, port: int) -> AccountStat
         updated = replace(status, source_detail=ANTIGRAVITY_CLI_SOURCE_DETAIL)
         setattr(updated, "_antigravity_cli_endpoint", endpoint_name)
         identity_email = getattr(status, "_antigravity_identity_email", None)
+        if identity_email is None:
+            identity_email = read_antigravity_cli_identity()
         if identity_email is not None:
             setattr(updated, "_antigravity_identity_email", identity_email)
         return updated
@@ -2343,12 +2352,12 @@ def _mark_antigravity_cli_status_metadata(
 
 def _sanitize_antigravity_diagnostic(value: str) -> str:
     sanitized = re.sub(
-        r"(?i)(csrf[_-]?token|access[_-]?token|refresh[_-]?token)=\S+",
+        r"(?i)\b(csrf[_-]?token|access[_-]?token|refresh[_-]?token|token)=\S+",
         r"\1=<redacted>",
         value,
     )
     sanitized = re.sub(
-        r"(?i)(csrf[_-]?token|access[_-]?token|refresh[_-]?token)(['\"]?\s*:\s*['\"])[^'\"]+",
+        r"(?i)\b(csrf[_-]?token|access[_-]?token|refresh[_-]?token|token)(['\"]?\s*:\s*['\"])[^'\"]+",
         r"\1\2<redacted>",
         sanitized,
     )
@@ -2379,10 +2388,15 @@ def _antigravity_cli_identity_error(
 
 
 def _replace_antigravity_status_label(status: AccountStatus, label: str) -> AccountStatus:
-    updated = replace(status, label=label)
-    identity_email = getattr(status, "_antigravity_identity_email", None)
-    if identity_email is not None:
-        setattr(updated, "_antigravity_identity_email", identity_email)
+    return _replace_antigravity_status_metadata(status, label=label)
+
+
+def _replace_antigravity_status_metadata(status: AccountStatus, **changes) -> AccountStatus:
+    updated = replace(status, **changes)
+    for attr in ("_antigravity_identity_email", "_antigravity_cli_endpoint"):
+        value = getattr(status, attr, None)
+        if value is not None:
+            setattr(updated, attr, value)
     return updated
 
 

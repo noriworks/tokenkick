@@ -1,5 +1,16 @@
 # Changelog
 
+## v1.20.0
+
+- Add hidden manual Antigravity evidence probes with `tk antigravity
+  probe-kick --family gemini` and `--family claude-gpt`. The command reads all
+  four quota buckets before and after one explicit `agy --print` request, then
+  stores sanitized local evidence.
+- Keep Antigravity monitor-only: `tk kick antigravity`, auto-kick, schedules,
+  orchestration, and pending-kick paths still reject or skip Antigravity.
+- Preserve Antigravity CLI identity metadata during HTTPS quota reads so probe
+  evidence stays tied to the verified CLI account.
+
 ## v1.19.0
 
 - Expand Antigravity status rows into Gemini and Claude/GPT quota targets, each

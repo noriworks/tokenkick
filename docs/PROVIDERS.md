@@ -142,6 +142,16 @@ named quota buckets:
 - Claude/GPT models weekly limit
 
 Antigravity accounts are never kickable and are rejected by manual kick, run,
-schedule, and auto-kick paths. TokenKick does not send Antigravity model
-requests because first-use anchored window behavior and a legitimate minimal
-provider-native anchor request have not been verified.
+schedule, and auto-kick paths.
+
+TokenKick includes a hidden, explicit evidence diagnostic:
+
+```bash
+tk antigravity probe-kick --family gemini
+tk antigravity probe-kick --family claude-gpt
+```
+
+This command asks for confirmation, reads all four buckets before and after one
+minimal `agy --print` request, and stores only sanitized local evidence. It is
+not a user-facing kick path and is not used by auto-kick, schedules, run, or
+orchestration.

@@ -4995,6 +4995,281 @@ def _antigravity_quota_windows() -> list[dict]:
     ]
 
 
+def _antigravity_status_with_windows(
+    *,
+    label: str = "antigravity",
+    windows: list[dict] | None = None,
+    state: AccountState = AccountState.ACTIVE,
+    error: str | None = None,
+) -> AccountStatus:
+    return AccountStatus(
+        label=label,
+        state=state,
+        quota_windows=windows if windows is not None else _antigravity_quota_windows(),
+        source_detail="antigravity-cli",
+        error=error,
+    )
+
+
+def _antigravity_probe_after_windows(
+    *,
+    family: str = "gemini",
+    session_used_percent: float = 67.0,
+    session_resets_at: float | None = 1_780_010_000.0,
+    weekly_used_percent: float | None = None,
+) -> list[dict]:
+    windows = copy.deepcopy(_antigravity_quota_windows())
+    for window in windows:
+        if window["family"] != family:
+            continue
+        if window["window_kind"] == "session":
+            window["used_percent"] = session_used_percent
+            if session_resets_at is not None:
+                window["resets_at"] = session_resets_at
+        elif window["window_kind"] == "weekly" and weekly_used_percent is not None:
+            window["used_percent"] = weekly_used_percent
+    return windows
+
+
+def _antigravity_probe_account() -> AccountConfig:
+    return AccountConfig(
+        label="antigravity",
+        provider="antigravity",
+        source=DataSource.ANTIGRAVITY_CLI,
+        identity_email="dev@example.test",
+    )
+
+
+def test_antigravity_probe_kick_requires_confirmation(monkeypatch):
+    account = _antigravity_probe_account()
+    monkeypatch.setattr("tokenkick.cli.Config.load", lambda: Config(accounts=[account]))
+    monkeypatch.setattr("tokenkick.cli._load_accounts", lambda config: [account])
+    monkeypatch.setattr("tokenkick.cli.read_antigravity_cli_identity", lambda: "dev@example.test")
+    monkeypatch.setattr(
+        "tokenkick.cli._run_antigravity_probe_request",
+        lambda **_kwargs: pytest.fail("probe request must not run without confirmation"),
+    )
+
+    result = CliRunner().invoke(
+        cli,
+        ["antigravity", "probe-kick", "--family", "gemini"],
+        input="n\n",
+    )
+
+    assert result.exit_code == 0
+    assert "active Antigravity diagnostic" in result.output
+    assert "cancelled" in result.output
+
+
+def test_antigravity_probe_kick_proved_and_stores_sanitized_evidence(tmp_path, monkeypatch):
+    account = _antigravity_probe_account()
+    statuses = [
+        _antigravity_status_with_windows(label=account.label),
+        _antigravity_status_with_windows(
+            label=account.label,
+            windows=_antigravity_probe_after_windows(),
+        ),
+    ]
+    monkeypatch.setattr("tokenkick.cli.CONFIG_DIR", tmp_path)
+    monkeypatch.setattr("tokenkick.cli.Config.load", lambda: Config(accounts=[account]))
+    monkeypatch.setattr("tokenkick.cli._load_accounts", lambda config: [account])
+    monkeypatch.setattr("tokenkick.cli.read_antigravity_cli_identity", lambda: "dev@example.test")
+    monkeypatch.setattr("tokenkick.cli.fetch_status", lambda _account: statuses.pop(0))
+    monkeypatch.setattr(
+        "tokenkick.cli._run_antigravity_probe_request",
+        lambda **_kwargs: {
+            "success": True,
+            "error": None,
+            "duration_seconds": 0.25,
+            "returncode": 0,
+            "stdout_bytes": 3,
+            "stderr_bytes": 0,
+            "family": "gemini",
+        },
+    )
+
+    result = CliRunner().invoke(
+        cli,
+        ["antigravity", "probe-kick", "--family", "gemini", "--yes"],
+    )
+
+    assert result.exit_code == 0
+    assert "dev@example.test" in result.output
+    assert "gemini" in result.output
+    assert "Verdict:" in result.output
+    assert "proved" in result.output
+
+    evidence_file = tmp_path / "antigravity-probe-evidence.jsonl"
+    evidence_text = evidence_file.read_text()
+    assert "Reply with exactly: OK" not in evidence_text
+    assert "\nOK\n" not in evidence_text
+    records = [json.loads(line) for line in evidence_text.splitlines()]
+    assert len(records) == 1
+    record = records[0]
+    assert record["verdict"] == "proved"
+    assert record["account"]["identity_email"] == "dev@example.test"
+    assert record["family"] == "gemini"
+    assert record["before"]["session"]["used_percent"] == 66.0
+    assert record["after"]["session"]["used_percent"] == 67.0
+    assert record["bucket_changed"] is True
+    assert record["weekly_bucket_changed"] is False
+    assert record["request"] == {
+        "success": True,
+        "returncode": 0,
+        "duration_seconds": 0.25,
+        "stdout_bytes": 3,
+        "stderr_bytes": 0,
+        "error": None,
+    }
+
+
+def test_antigravity_probe_kick_claude_gpt_json_output(monkeypatch):
+    account = _antigravity_probe_account()
+    statuses = [
+        _antigravity_status_with_windows(label=account.label),
+        _antigravity_status_with_windows(
+            label=account.label,
+            windows=_antigravity_probe_after_windows(
+                family="claude_gpt",
+                session_used_percent=1.0,
+                session_resets_at=1_780_019_000.0,
+            ),
+        ),
+    ]
+    monkeypatch.setattr("tokenkick.cli.Config.load", lambda: Config(accounts=[account]))
+    monkeypatch.setattr("tokenkick.cli._load_accounts", lambda config: [account])
+    monkeypatch.setattr("tokenkick.cli.read_antigravity_cli_identity", lambda: "dev@example.test")
+    monkeypatch.setattr("tokenkick.cli.fetch_status", lambda _account: statuses.pop(0))
+    monkeypatch.setattr("tokenkick.cli._append_antigravity_probe_evidence", lambda _report: None)
+    monkeypatch.setattr(
+        "tokenkick.cli._run_antigravity_probe_request",
+        lambda **_kwargs: {
+            "success": True,
+            "error": None,
+            "duration_seconds": 0.25,
+            "returncode": 0,
+            "stdout_bytes": 3,
+            "stderr_bytes": 0,
+            "family": "claude-gpt",
+        },
+    )
+
+    result = CliRunner().invoke(
+        cli,
+        ["antigravity", "probe-kick", "--family", "claude-gpt", "--json-output", "--yes"],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["family"] == "claude-gpt"
+    assert payload["model"] == "GPT-OSS 120B (Medium)"
+    assert payload["before"]["session"]["id"] == "antigravity-quota-summary-3p-5h"
+    assert payload["after"]["session"]["used_percent"] == 1.0
+    assert payload["bucket_changed"] is True
+    assert payload["verdict"] == "proved"
+
+
+def test_antigravity_probe_kick_json_requires_yes(monkeypatch):
+    account = _antigravity_probe_account()
+    monkeypatch.setattr("tokenkick.cli.Config.load", lambda: Config(accounts=[account]))
+    monkeypatch.setattr("tokenkick.cli._load_accounts", lambda config: [account])
+
+    result = CliRunner().invoke(
+        cli,
+        ["antigravity", "probe-kick", "--family", "gemini", "--json-output"],
+    )
+
+    assert result.exit_code == 1
+    assert "--json-output requires --yes" in result.output
+
+
+def test_antigravity_probe_kick_fails_without_verified_identity(monkeypatch):
+    account = _antigravity_probe_account()
+    monkeypatch.setattr("tokenkick.cli.Config.load", lambda: Config(accounts=[account]))
+    monkeypatch.setattr("tokenkick.cli._load_accounts", lambda config: [account])
+    monkeypatch.setattr("tokenkick.cli.read_antigravity_cli_identity", lambda: None)
+    monkeypatch.setattr(
+        "tokenkick.cli.fetch_status",
+        lambda _account: pytest.fail("quota read must not run without identity"),
+    )
+    monkeypatch.setattr(
+        "tokenkick.cli._run_antigravity_probe_request",
+        lambda **_kwargs: pytest.fail("probe request must not run without identity"),
+    )
+
+    result = CliRunner().invoke(
+        cli,
+        ["antigravity", "probe-kick", "--family", "gemini", "--yes"],
+    )
+
+    assert result.exit_code == 1
+    assert "identity could not be verified" in result.output
+
+
+def test_antigravity_probe_kick_fails_closed_on_incomplete_buckets(monkeypatch):
+    account = _antigravity_probe_account()
+    monkeypatch.setattr("tokenkick.cli.Config.load", lambda: Config(accounts=[account]))
+    monkeypatch.setattr("tokenkick.cli._load_accounts", lambda config: [account])
+    monkeypatch.setattr("tokenkick.cli.read_antigravity_cli_identity", lambda: "dev@example.test")
+    monkeypatch.setattr(
+        "tokenkick.cli.fetch_status",
+        lambda _account: _antigravity_status_with_windows(windows=_antigravity_quota_windows()[:-1]),
+    )
+    monkeypatch.setattr(
+        "tokenkick.cli._run_antigravity_probe_request",
+        lambda **_kwargs: pytest.fail("probe request must not run without complete buckets"),
+    )
+
+    result = CliRunner().invoke(
+        cli,
+        ["antigravity", "probe-kick", "--family", "gemini", "--yes"],
+    )
+
+    assert result.exit_code == 1
+    assert "complete Antigravity quota buckets before" in result.output
+
+
+def test_antigravity_probe_kick_failed_request_saves_failed_evidence(tmp_path, monkeypatch):
+    account = _antigravity_probe_account()
+    statuses = [
+        _antigravity_status_with_windows(label=account.label),
+        _antigravity_status_with_windows(label=account.label),
+    ]
+    monkeypatch.setattr("tokenkick.cli.CONFIG_DIR", tmp_path)
+    monkeypatch.setattr("tokenkick.cli.Config.load", lambda: Config(accounts=[account]))
+    monkeypatch.setattr("tokenkick.cli._load_accounts", lambda config: [account])
+    monkeypatch.setattr("tokenkick.cli.read_antigravity_cli_identity", lambda: "dev@example.test")
+    monkeypatch.setattr("tokenkick.cli.fetch_status", lambda _account: statuses.pop(0))
+    monkeypatch.setattr(
+        "tokenkick.cli._run_antigravity_probe_request",
+        lambda **_kwargs: {
+            "success": False,
+            "error": "Bearer abc.def token=secret csrf_token=abc",
+            "duration_seconds": 0.1,
+            "returncode": 7,
+            "stdout_bytes": 0,
+            "stderr_bytes": 42,
+            "family": "gemini",
+        },
+    )
+
+    result = CliRunner().invoke(
+        cli,
+        ["antigravity", "probe-kick", "--family", "gemini", "--yes"],
+    )
+
+    assert result.exit_code == 1
+    assert "Verdict:" in result.output
+    assert "failed" in result.output
+
+    evidence_text = (tmp_path / "antigravity-probe-evidence.jsonl").read_text()
+    assert "abc.def" not in evidence_text
+    assert "secret" not in evidence_text
+    record = json.loads(evidence_text)
+    assert record["verdict"] == "failed"
+    assert record["request"]["error"] == "Bearer <redacted> token=<redacted> csrf_token=<redacted>"
+
+
 def test_status_table_expands_antigravity_quota_families(monkeypatch):
     output = io.StringIO()
     account = AccountConfig(

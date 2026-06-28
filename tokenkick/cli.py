@@ -24,6 +24,11 @@ from rich.console import Console
 from rich.table import Table
 from rich.text import Text
 
+from .antigravity import (
+    antigravity_cli_binary,
+    has_complete_antigravity_quota_windows,
+    read_antigravity_cli_identity,
+)
 from .consent import (
     AUTO_KICK_CONSENT_ERROR,
     AUTO_KICK_CONSENT_TOKEN,
@@ -326,7 +331,7 @@ from .scheduling import (
     upsert_pending_kick,
     cancel_orchestrated_pending_kicks,
 )
-from .state_io import locked_atomic_write_text
+from .state_io import locked_atomic_write_text, locked_update_text
 from .app_mode import (
     APP_SCHEMA_VERSION as APP_SCHEMA_VERSION,
     ERROR_ABORTED,
@@ -402,6 +407,13 @@ DAEMON_STOP_POLL_SECONDS = 0.1
 PHANTOM_SESSION_FILE = CONFIG_DIR / "phantom-sessions.json"
 PHANTOM_RECOVERY_FILE = CONFIG_DIR / "phantom-recovery.json"
 CODEX_PENDING_CONFIRMATIONS_FILE = CONFIG_DIR / "codex-pending-confirmations.json"
+ANTIGRAVITY_PROBE_PROMPT_ID = "tokenkick-antigravity-probe-v1"
+ANTIGRAVITY_PROBE_PROMPT = "Reply with exactly: OK"
+ANTIGRAVITY_PROBE_DEFAULT_MODELS = {
+    "gemini": "Gemini 3.5 Flash (Low)",
+    "claude_gpt": "GPT-OSS 120B (Medium)",
+}
+ANTIGRAVITY_PROBE_RESET_CHANGE_TOLERANCE_SECONDS = 30.0
 PHANTOM_SESSION_MIN_SECONDS = 20 * 60
 PHANTOM_SESSION_MAX_USED_PERCENT = 2.0
 PHANTOM_SESSION_FULL_RESET_RATIO = 0.95
@@ -11912,6 +11924,460 @@ def init(ctx):
     """Deprecated alias for `tk setup`."""
     console.print("[yellow]tk init is deprecated; use tk setup.[/yellow]\n")
     ctx.invoke(setup, rename_labels=(), dry_run=False, no_daemon_prompt=False)
+
+
+# ---------------------------------------------------------------------------
+# tk antigravity
+# ---------------------------------------------------------------------------
+
+@cli.group("antigravity", hidden=True)
+def antigravity_group():
+    """Hidden Antigravity diagnostics."""
+
+
+@antigravity_group.command("probe-kick", hidden=True)
+@click.option(
+    "--family",
+    type=click.Choice(("gemini", "claude-gpt")),
+    required=True,
+    help="Antigravity quota family to test.",
+)
+@click.option("--account", "account_label", help="Antigravity account label when more than one exists.")
+@click.option("--model", help="Override the agy model label used for the probe request.")
+@click.option(
+    "--timeout",
+    "timeout_seconds",
+    type=click.IntRange(10, 600),
+    default=120,
+    show_default=True,
+    help="Seconds to allow the agy print request.",
+)
+@click.option("--yes", is_flag=True, help="Confirm this quota-consuming diagnostic.")
+@click.option("--json-output", "as_json", is_flag=True, help="Output sanitized JSON.")
+def antigravity_probe_kick(
+    family: str,
+    account_label: str | None,
+    model: str | None,
+    timeout_seconds: int,
+    yes: bool,
+    as_json: bool,
+):
+    """Run one evidence-only Antigravity probe request and compare quota buckets."""
+    if as_json and not yes:
+        raise click.ClickException(
+            "Antigravity probe-kick --json-output requires --yes because it can spend quota."
+        )
+    config = Config.load()
+    account = _antigravity_probe_account_or_exit(account_label, _load_accounts(config))
+    normalized_family = _normalize_antigravity_probe_family(family)
+    selected_model = model or ANTIGRAVITY_PROBE_DEFAULT_MODELS[normalized_family]
+    if not yes:
+        console.print(
+            "[yellow]This is an active Antigravity diagnostic. It runs one agy "
+            "non-interactive prompt and can consume quota or anchor a 5-hour window.[/yellow]"
+        )
+        console.print("[dim]Antigravity remains monitor-only; this does not enable tk kick or auto-kick.[/dim]")
+        if not click.confirm(
+            f'Run Antigravity probe for "{account.label}" using {selected_model}?',
+            default=False,
+        ):
+            console.print("[dim]Antigravity probe-kick cancelled.[/dim]")
+            return
+
+    report = _antigravity_probe_kick_report(
+        account,
+        family=normalized_family,
+        model=selected_model,
+        timeout_seconds=timeout_seconds,
+    )
+    _append_antigravity_probe_evidence(report)
+    if as_json:
+        click.echo(json.dumps(report, indent=2, sort_keys=True))
+    else:
+        _render_antigravity_probe_report(report)
+    if report["verdict"] == "failed":
+        raise click.exceptions.Exit(1)
+
+
+def _antigravity_probe_account_or_exit(
+    label: str | None,
+    accounts: list[AccountConfig],
+) -> AccountConfig:
+    antigravity_accounts = [account for account in accounts if account.provider == "antigravity"]
+    if label is not None:
+        account = next((candidate for candidate in antigravity_accounts if candidate.label == label), None)
+        if account is None:
+            raise click.ClickException(f'Antigravity account "{label}" not found.')
+        return account
+    if not antigravity_accounts:
+        raise click.ClickException("No Antigravity account configured. Run tk setup after logging in.")
+    if len(antigravity_accounts) > 1:
+        labels = ", ".join(account.label for account in antigravity_accounts)
+        raise click.ClickException(f"Multiple Antigravity accounts configured; pass --account. Found: {labels}")
+    return antigravity_accounts[0]
+
+
+def _normalize_antigravity_probe_family(family: str) -> str:
+    return family.replace("-", "_")
+
+
+def _antigravity_probe_evidence_file() -> Path:
+    return CONFIG_DIR / "antigravity-probe-evidence.jsonl"
+
+
+def _antigravity_probe_kick_report(
+    account: AccountConfig,
+    *,
+    family: str,
+    model: str,
+    timeout_seconds: int,
+) -> dict:
+    identity_email = _verified_antigravity_probe_identity(account)
+    probe_account = replace(
+        account,
+        source=DataSource.ANTIGRAVITY_CLI,
+        identity_email=identity_email,
+        codexbar_account=account.codexbar_account or identity_email,
+    )
+    before_status = _read_antigravity_probe_status(probe_account, phase="before")
+    before_windows = _antigravity_probe_family_windows(before_status, family)
+
+    request = _run_antigravity_probe_request(
+        family=family,
+        model=model,
+        timeout_seconds=timeout_seconds,
+    )
+
+    try:
+        after_status = _read_antigravity_probe_status(probe_account, phase="after")
+        after_windows = _antigravity_probe_family_windows(after_status, family)
+        comparison = _antigravity_probe_compare(before_windows, after_windows)
+    except click.ClickException as exc:
+        after_windows = {"session": None, "weekly": None}
+        comparison = {
+            "session_changed": False,
+            "weekly_changed": False,
+            "session_used_delta": None,
+            "weekly_used_delta": None,
+            "session_reset_delta_seconds": None,
+            "weekly_reset_delta_seconds": None,
+            "after_read_error": str(exc),
+        }
+
+    verdict = _antigravity_probe_verdict(request, comparison)
+    return {
+        "schema_version": 1,
+        "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "account": {
+            "label": account.label,
+            "account_key": account_key_string(account),
+            "identity_email": identity_email,
+        },
+        "family": family.replace("_", "-"),
+        "model": model,
+        "prompt_id": ANTIGRAVITY_PROBE_PROMPT_ID,
+        "before": _antigravity_probe_window_payload(before_windows),
+        "after": _antigravity_probe_window_payload(after_windows),
+        "request": request,
+        "comparison": comparison,
+        "bucket_changed": bool(comparison.get("session_changed")),
+        "weekly_bucket_changed": bool(comparison.get("weekly_changed")),
+        "verdict": verdict,
+    }
+
+
+def _verified_antigravity_probe_identity(account: AccountConfig) -> str:
+    cli_identity = read_antigravity_cli_identity()
+    if not cli_identity:
+        raise click.ClickException(
+            "Antigravity CLI identity could not be verified. Log in with agy and run setup again."
+        )
+    expected = (account.identity_email or account.codexbar_account or "").strip().lower()
+    if expected and expected != cli_identity.strip().lower():
+        raise click.ClickException(
+            "Antigravity CLI identity mismatch: "
+            f'configured "{expected}", agy CLI "{cli_identity}".'
+        )
+    return cli_identity
+
+
+def _read_antigravity_probe_status(account: AccountConfig, *, phase: str) -> AccountStatus:
+    status = fetch_status(account)
+    if not has_complete_antigravity_quota_windows(status):
+        reason = status.error or "Antigravity did not return all four quota buckets."
+        raise click.ClickException(f"Cannot read complete Antigravity quota buckets {phase}: {reason}")
+    return status
+
+
+def _antigravity_probe_family_windows(status: AccountStatus, family: str) -> dict[str, dict]:
+    windows = status.quota_windows
+    if not isinstance(windows, list):
+        raise click.ClickException("Antigravity status has no quota_windows.")
+    matched: dict[str, dict] = {}
+    for window in windows:
+        if not isinstance(window, dict) or window.get("family") != family:
+            continue
+        kind = window.get("window_kind")
+        if kind in {"session", "weekly"}:
+            matched[str(kind)] = window
+    if set(matched) != {"session", "weekly"}:
+        raise click.ClickException(f"Antigravity quota family {family} is incomplete.")
+    return matched
+
+
+def _run_antigravity_probe_request(
+    *,
+    family: str,
+    model: str,
+    timeout_seconds: int,
+) -> dict:
+    binary = antigravity_cli_binary()
+    started_at = time.monotonic()
+    if not binary:
+        return {
+            "success": False,
+            "error": "agy CLI executable not found.",
+            "duration_seconds": 0.0,
+            "returncode": None,
+            "stdout_bytes": 0,
+            "stderr_bytes": 0,
+        }
+    workspace = CONFIG_DIR / "antigravity-probe-workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    command = [
+        binary,
+        "--log-file",
+        os.devnull,
+        "--model",
+        model,
+        "--print-timeout",
+        f"{timeout_seconds}s",
+        "--print",
+        ANTIGRAVITY_PROBE_PROMPT,
+    ]
+    try:
+        result = subprocess.run(
+            command,
+            cwd=workspace,
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds + 30,
+        )
+    except subprocess.TimeoutExpired:
+        return {
+            "success": False,
+            "error": "agy probe request timed out.",
+            "duration_seconds": round(time.monotonic() - started_at, 3),
+            "returncode": None,
+            "stdout_bytes": 0,
+            "stderr_bytes": 0,
+        }
+    except OSError as exc:
+        return {
+            "success": False,
+            "error": _sanitize_antigravity_probe_error(f"agy probe request failed: {exc}"),
+            "duration_seconds": round(time.monotonic() - started_at, 3),
+            "returncode": None,
+            "stdout_bytes": 0,
+            "stderr_bytes": 0,
+        }
+    return {
+        "success": result.returncode == 0,
+        "error": None
+        if result.returncode == 0
+        else f"agy probe request exited with code {result.returncode}.",
+        "duration_seconds": round(time.monotonic() - started_at, 3),
+        "returncode": result.returncode,
+        "stdout_bytes": len(result.stdout.encode("utf-8", errors="replace")),
+        "stderr_bytes": len(result.stderr.encode("utf-8", errors="replace")),
+        "family": family.replace("_", "-"),
+    }
+
+
+def _antigravity_probe_compare(before: dict[str, dict], after: dict[str, dict]) -> dict:
+    session = _antigravity_probe_window_compare(before["session"], after["session"])
+    weekly = _antigravity_probe_window_compare(before["weekly"], after["weekly"])
+    return {
+        "session_changed": session["changed"],
+        "weekly_changed": weekly["changed"],
+        "session_used_delta": session["used_delta"],
+        "weekly_used_delta": weekly["used_delta"],
+        "session_reset_delta_seconds": session["reset_delta_seconds"],
+        "weekly_reset_delta_seconds": weekly["reset_delta_seconds"],
+    }
+
+
+def _antigravity_probe_window_compare(before: dict, after: dict) -> dict:
+    before_used = _antigravity_probe_float(before.get("used_percent"))
+    after_used = _antigravity_probe_float(after.get("used_percent"))
+    before_reset = _antigravity_probe_float(before.get("resets_at"))
+    after_reset = _antigravity_probe_float(after.get("resets_at"))
+    used_delta = (
+        None if before_used is None or after_used is None else round(after_used - before_used, 6)
+    )
+    reset_delta = (
+        None if before_reset is None or after_reset is None else round(after_reset - before_reset, 3)
+    )
+    changed = False
+    if used_delta is not None and abs(used_delta) > 0.0001:
+        changed = True
+    if (
+        reset_delta is not None
+        and abs(reset_delta) > ANTIGRAVITY_PROBE_RESET_CHANGE_TOLERANCE_SECONDS
+    ):
+        changed = True
+    return {
+        "changed": changed,
+        "used_delta": used_delta,
+        "reset_delta_seconds": reset_delta,
+    }
+
+
+def _antigravity_probe_verdict(request: dict, comparison: dict) -> str:
+    if not request.get("success"):
+        return "failed"
+    if comparison.get("after_read_error"):
+        return "failed"
+    if comparison.get("session_changed"):
+        return "proved"
+    return "inconclusive"
+
+
+def _antigravity_probe_window_payload(windows: dict[str, dict | None]) -> dict:
+    return {
+        "session": _antigravity_probe_single_window_payload(windows.get("session")),
+        "weekly": _antigravity_probe_single_window_payload(windows.get("weekly")),
+    }
+
+
+def _antigravity_probe_single_window_payload(window: dict | None) -> dict | None:
+    if not isinstance(window, dict):
+        return None
+    resets_at = _antigravity_probe_float(window.get("resets_at"))
+    return {
+        "id": window.get("id"),
+        "title": window.get("title"),
+        "used_percent": _antigravity_probe_float(window.get("used_percent")),
+        "resets_at": resets_at,
+        "resets_at_utc": _antigravity_probe_utc(resets_at),
+        "resets_in_seconds": _antigravity_probe_int(window.get("resets_in_seconds")),
+        "window_minutes": _antigravity_probe_int(window.get("window_minutes")),
+    }
+
+
+def _antigravity_probe_float(value) -> float | None:
+    try:
+        return None if value is None else float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _antigravity_probe_int(value) -> int | None:
+    try:
+        return None if value is None else int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _antigravity_probe_utc(value: float | None) -> str | None:
+    if value is None:
+        return None
+    return datetime.fromtimestamp(value, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _append_antigravity_probe_evidence(report: dict) -> None:
+    record = _antigravity_probe_evidence_record(report)
+
+    def append_line(current: str) -> str:
+        prefix = current if not current or current.endswith("\n") else f"{current}\n"
+        return prefix + json.dumps(record, sort_keys=True) + "\n"
+
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    locked_update_text(_antigravity_probe_evidence_file(), append_line)
+
+
+def _antigravity_probe_evidence_record(report: dict) -> dict:
+    return {
+        "schema_version": report["schema_version"],
+        "timestamp": report["timestamp"],
+        "account": report["account"],
+        "family": report["family"],
+        "model": report["model"],
+        "prompt_id": report["prompt_id"],
+        "before": report["before"],
+        "after": report["after"],
+        "request": {
+            "success": report["request"].get("success"),
+            "returncode": report["request"].get("returncode"),
+            "duration_seconds": report["request"].get("duration_seconds"),
+            "stdout_bytes": report["request"].get("stdout_bytes"),
+            "stderr_bytes": report["request"].get("stderr_bytes"),
+            "error": _sanitize_antigravity_probe_error(report["request"].get("error")),
+        },
+        "comparison": report["comparison"],
+        "bucket_changed": report["bucket_changed"],
+        "weekly_bucket_changed": report["weekly_bucket_changed"],
+        "verdict": report["verdict"],
+    }
+
+
+def _sanitize_antigravity_probe_error(value) -> str | None:
+    if value is None:
+        return None
+    sanitized = str(value)
+    sanitized = re.sub(
+        r"(?i)\b(csrf[_-]?token|access[_-]?token|refresh[_-]?token|token)=\S+",
+        r"\1=<redacted>",
+        sanitized,
+    )
+    sanitized = re.sub(r"(?i)(bearer\s+)[A-Za-z0-9._~+/=-]+", r"\1<redacted>", sanitized)
+    return sanitized[:240]
+
+
+def _render_antigravity_probe_report(report: dict) -> None:
+    account = report["account"]
+    console.print("[bold]Antigravity Probe Kick Evidence[/bold]")
+    console.print(f"[dim]Account:[/dim] {account['label']} ({account['identity_email']})")
+    console.print(f"[dim]Family:[/dim] {report['family']}")
+    console.print(f"[dim]Model:[/dim] {report['model']}")
+    table = Table(show_header=True)
+    table.add_column("Bucket")
+    table.add_column("Before used", justify="right")
+    table.add_column("After used", justify="right")
+    table.add_column("Before reset")
+    table.add_column("After reset")
+    table.add_column("Changed")
+    comparison = report["comparison"]
+    for kind, changed_key in (("session", "session_changed"), ("weekly", "weekly_changed")):
+        before = report["before"].get(kind) or {}
+        after = report["after"].get(kind) or {}
+        table.add_row(
+            "5h" if kind == "session" else "weekly",
+            _antigravity_probe_percent(before.get("used_percent")),
+            _antigravity_probe_percent(after.get("used_percent")),
+            before.get("resets_at_utc") or "—",
+            after.get("resets_at_utc") or "—",
+            "yes" if comparison.get(changed_key) else "no",
+        )
+    console.print(table)
+    request = report["request"]
+    if not request.get("success"):
+        console.print(f"[red]Request failed:[/red] {request.get('error') or 'unknown error'}")
+    after_read_error = comparison.get("after_read_error")
+    if after_read_error:
+        console.print(f"[red]After-read failed:[/red] {after_read_error}")
+    console.print(f"[bold]Verdict:[/bold] {report['verdict']}")
+    console.print(
+        "[dim]Evidence saved to "
+        f"{_antigravity_probe_evidence_file()}; no prompt text or raw provider output was saved.[/dim]"
+    )
+
+
+def _antigravity_probe_percent(value) -> str:
+    numeric = _antigravity_probe_float(value)
+    if numeric is None:
+        return "—"
+    return f"{numeric:.3f}%"
 
 
 # ---------------------------------------------------------------------------
