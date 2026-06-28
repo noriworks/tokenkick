@@ -98,6 +98,7 @@ class AccountState(str, Enum):
 class DataSource(str, Enum):
     """Where TokenKick reads rate-limit data from."""
 
+    ANTIGRAVITY_CLI = "antigravity-cli"
     CODEXBAR_CLI = "codexbar-cli"
     CODEXBAR_HTTP = "codexbar-http"
     CODEX_DIRECT = "codex-direct"

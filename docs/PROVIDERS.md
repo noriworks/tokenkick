@@ -14,7 +14,7 @@ restrictions.
 |---|---|---:|---|---|
 | OpenAI Codex CLI / ChatGPT Codex | Codex app-server provider usage through the account's configured `CODEX_HOME`; local Codex session JSONL as fallback/override for ambiguous stale shapes | Yes | 5h session + weekly, first-use anchored | Each account needs its own Codex home. Interactive Codex model labels and provider quota bucket names are not always the same. If a separate Spark bucket is exposed, TokenKick discovers it as a sibling `codex-spark (...)` account. |
 | Claude Code | Claude CLI `/usage` when direct usage is enabled; passive fallback/cache otherwise | Yes | 5h session + weekly, first-use anchored | `/usage` is useful but not purely passive. Daemon background refresh avoids silently running it; due session anchors are tracked as kick-history events. |
-| Antigravity | CodexBar named quota windows plus direct local probe where available | Monitor-only today | Gemini 5h + weekly, Claude/GPT 5h + weekly | Kicking is not implemented in this release. Treat status as advisory until direct behavior is proven. |
+| Antigravity | Antigravity CLI login state plus local backend named quota windows; CodexBar named quota windows as compatibility fallback | Monitor-only today | Gemini 5h + weekly, Claude/GPT 5h + weekly | The CLI currently has no documented non-interactive quota command. Kicking is not implemented in this release. |
 | Gemini CLI | Optional CodexBar monitoring data where configured | No | Daily RPD, fixed midnight PT reset | Monitor-only. Not first-use anchored, so a kick does not start a useful rolling window. |
 | Cursor / Copilot / other coding tools | Not directly verified in this release | Monitor-only or unsupported | Provider dependent | Add only after a stable identity source, readable status, and legitimate tiny anchor request are verified. |
 
@@ -131,8 +131,9 @@ not want to see them in status views.
 ## Antigravity
 
 Antigravity is rich monitor-only in this release. TokenKick can read the
-bundled Antigravity quota windows when CodexBar or Antigravity local data
-exposes named quota buckets:
+logged-in Antigravity CLI account on Linux and macOS without CodexBar. Rich
+quota display requires a local Antigravity backend or CodexBar compatibility
+data that exposes named quota buckets:
 
 - Gemini models 5-hour limit
 - Gemini models weekly limit

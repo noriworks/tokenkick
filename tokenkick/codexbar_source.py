@@ -206,10 +206,21 @@ def _fetch_antigravity_codexbar_cli(
     codexbar_staleness_threshold_seconds: int,
     codexbar_rejection_threshold_seconds: int,
 ) -> AccountStatus:
-    """Prefer complete CodexBar Antigravity buckets, with local summary fallback."""
+    """Prefer direct Antigravity data, with complete CodexBar buckets as fallback."""
     provider = "antigravity"
+    direct_summary: AccountStatus | None = None
     summary_status: AccountStatus | None = None
     first_error: str | None = None
+
+    from .sources import _fetch_antigravity_direct
+
+    direct_status = _fetch_antigravity_direct(account)
+    if direct_status.state != AccountState.UNKNOWN:
+        if has_complete_antigravity_quota_windows(direct_status):
+            return direct_status
+        direct_summary = direct_status
+    else:
+        first_error = first_error or direct_status.error
 
     for loader in (
         lambda: _load_codexbar_provider_json(provider),
@@ -249,15 +260,7 @@ def _fetch_antigravity_codexbar_cli(
         else:
             first_error = first_error or local_status.error
 
-    from .sources import _fetch_antigravity_direct
-
-    direct_status = _fetch_antigravity_direct(account)
-    if direct_status.state != AccountState.UNKNOWN:
-        if has_complete_antigravity_quota_windows(direct_status):
-            return direct_status
-        return summary_status or direct_status
-
-    return summary_status or AccountStatus(
+    return direct_summary or summary_status or AccountStatus(
         label=account.label,
         state=AccountState.UNKNOWN,
         error=_codexbar_fallback_error(first_error, direct_status.error)

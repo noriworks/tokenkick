@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.18.1
+
+- Discover logged-in Antigravity CLI accounts directly from local Google
+  account state, so Linux servers do not require CodexBar to show Antigravity
+  as a monitor-only account.
+- Prefer direct Antigravity quota data before CodexBar compatibility data, while
+  still requiring complete named quota windows for rich bucket status.
+
 ## v1.18.0
 
 - Add rich monitor-only Antigravity quota windows for Gemini and Claude/GPT

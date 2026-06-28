@@ -15,6 +15,7 @@ from tokenkick.antigravity import (
     is_antigravity_language_server,
     parse_lsof_listening_ports,
     parse_process_line,
+    read_antigravity_cli_identity,
 )
 from tokenkick.codexbar_source import (
     CODEXBAR_FUTURE_SKEW_TOLERANCE_SECONDS,
@@ -41,6 +42,7 @@ from tokenkick.sources import (
     CLAUDE_CLI_USAGE_SOURCE_DETAIL,
     ANTIGRAVITY_SOURCE_DETAIL,
     _determine_state,
+    _fetch_antigravity_cli,
     _fetch_antigravity_direct,
     _parse_codex_appserver_ratelimits,
     _fetch_claude_direct,
@@ -178,6 +180,79 @@ def test_manual_source_points_to_real_setup_path():
     assert status.state == AccountState.UNKNOWN
     assert "tk setup" in status.error
     assert "tk touch" not in status.error
+
+
+def test_read_antigravity_cli_identity_reads_active_email_only(tmp_path):
+    login_file = tmp_path / ".gemini" / "google_accounts.json"
+    login_file.parent.mkdir()
+    login_file.write_text(
+        json.dumps(
+            {
+                "active": "dev@example.test",
+                "old": [{"email": "old@example.test", "refresh_token": "secret"}],
+            }
+        )
+    )
+
+    assert read_antigravity_cli_identity(tmp_path) == "dev@example.test"
+
+
+def test_fetch_antigravity_cli_returns_complete_local_windows(monkeypatch):
+    quota_status = AccountStatus(
+        label="antigravity",
+        state=AccountState.ACTIVE,
+        quota_windows=[
+            {
+                "id": window["id"],
+                "title": window["title"],
+                "family": "gemini" if "gemini" in window["id"] else "claude_gpt",
+                "window_kind": "weekly" if "weekly" in window["id"] else "session",
+                "used_percent": window["window"]["usedPercent"],
+                "resets_at": _epoch(window["window"]["resetsAt"]),
+                "resets_in_seconds": 3600,
+                "window_minutes": window["window"]["windowMinutes"],
+                "source": ANTIGRAVITY_SOURCE_DETAIL,
+            }
+            for window in _antigravity_codexbar_entry()["usage"]["extraRateWindows"]
+        ],
+    )
+    monkeypatch.setattr("tokenkick.sources._fetch_antigravity_direct", lambda _account: quota_status)
+
+    status = _fetch_antigravity_cli(
+        AccountConfig(
+            label="antigravity",
+            provider="antigravity",
+            source=DataSource.ANTIGRAVITY_CLI,
+        )
+    )
+
+    assert status.source_detail == "antigravity-cli"
+    assert status.quota_windows is not None
+    assert len(status.quota_windows) == 4
+
+
+def test_fetch_antigravity_cli_fails_closed_without_local_quota_api(monkeypatch):
+    monkeypatch.setattr(
+        "tokenkick.sources._fetch_antigravity_direct",
+        lambda account: AccountStatus(
+            label=account.label,
+            state=AccountState.UNKNOWN,
+            error="Antigravity language server not detected.",
+            source_detail=ANTIGRAVITY_SOURCE_DETAIL,
+        ),
+    )
+
+    status = fetch_status(
+        AccountConfig(
+            label="antigravity",
+            provider="antigravity",
+            source=DataSource.ANTIGRAVITY_CLI,
+        )
+    )
+
+    assert status.state == AccountState.UNKNOWN
+    assert status.source_detail == "antigravity-cli"
+    assert "does not expose a non-interactive quota command" in status.error
 
 
 def test_codexbar_json_uses_refresh_timeout(monkeypatch):
@@ -403,13 +478,51 @@ def test_antigravity_codexbar_complete_buckets_beat_direct_summary(monkeypatch, 
     )
     monkeypatch.setattr(
         "tokenkick.sources._fetch_antigravity_direct",
-        lambda _account: pytest.fail("complete CodexBar Antigravity buckets should win"),
+        lambda account: AccountStatus(
+            label=account.label,
+            state=AccountState.ACTIVE,
+            used_percent=12.0,
+            resets_in_seconds=3600,
+            source_detail=ANTIGRAVITY_SOURCE_DETAIL,
+        ),
     )
 
     status = _fetch_codexbar_cli(account)
 
     assert status.source_detail == "codexbar-cli"
     assert status.used_percent == 66.22157
+    assert status.quota_windows is not None
+    assert len(status.quota_windows) == 4
+
+
+def test_antigravity_direct_complete_buckets_beat_codexbar(monkeypatch, tmp_path):
+    account = AccountConfig(
+        label="antigravity",
+        provider="antigravity",
+        source=DataSource.CODEXBAR_CLI,
+        codexbar_provider="antigravity",
+    )
+    direct_status = _parse_antigravity_user_status(
+        "antigravity",
+        {
+            "code": "OK",
+            "userStatus": {
+                "extraRateWindows": _antigravity_codexbar_entry()["usage"]["extraRateWindows"],
+                "cascadeModelConfigData": {"clientModelConfigs": []},
+            },
+        },
+    )
+    monkeypatch.setattr("tokenkick.sources._fetch_antigravity_direct", lambda _account: direct_status)
+    monkeypatch.setattr("tokenkick.codexbar_source.CODEXBAR_WIDGET_SNAPSHOT_FILES", [])
+    monkeypatch.setattr("tokenkick.codexbar_source.CODEXBAR_HISTORY_DIR", tmp_path / "missing-history")
+    monkeypatch.setattr(
+        "tokenkick.codexbar_source._load_codexbar_provider_json",
+        lambda _provider: pytest.fail("CodexBar should not run when direct buckets are complete"),
+    )
+
+    status = _fetch_codexbar_cli(account)
+
+    assert status.source_detail == ANTIGRAVITY_SOURCE_DETAIL
     assert status.quota_windows is not None
     assert len(status.quota_windows) == 4
 

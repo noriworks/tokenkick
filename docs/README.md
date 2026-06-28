@@ -496,7 +496,9 @@ disabled automatically. See [PROVIDERS.md](PROVIDERS.md).
 
 Antigravity accounts are rich monitor-only. TokenKick can read the bundled
 Gemini and Claude/GPT 5-hour and weekly limits when named quota windows are
-available, but it does not kick or anchor Antigravity windows.
+available. Logged-in Antigravity CLI accounts are discovered directly; CodexBar
+is only a compatibility fallback for named quota-window data. TokenKick does
+not kick or anchor Antigravity windows.
 
 Codex provider usage reads are status reads only. They do not kick or anchor a
 window; only `tk kick`, `tk run`, or daemon auto-kick sends the tiny Codex model

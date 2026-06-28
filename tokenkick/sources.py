@@ -23,7 +23,9 @@ from pathlib import Path
 from typing import Any, Optional
 
 from .antigravity import (
+    ANTIGRAVITY_CLI_SOURCE_DETAIL,
     antigravity_status_from_extra_rate_windows,
+    has_complete_antigravity_quota_windows,
     is_antigravity_language_server,
     is_language_server_command,
     lsof_binary,
@@ -218,6 +220,11 @@ def fetch_status(
                     claude_probe_context=claude_probe_context,
                 ),
                 "claude-config-json",
+            )
+        if account.source == DataSource.ANTIGRAVITY_CLI:
+            return _ensure_status_metadata(
+                _fetch_antigravity_cli(account),
+                ANTIGRAVITY_CLI_SOURCE_DETAIL,
             )
         if account.source == DataSource.CODEX_SESSION_FILE:
             return _ensure_status_metadata(
@@ -1868,6 +1875,28 @@ def _claude_direct_unavailable_message(
 # ---------------------------------------------------------------------------
 # Antigravity direct local source
 # ---------------------------------------------------------------------------
+
+def _fetch_antigravity_cli(account: AccountConfig) -> AccountStatus:
+    """Read Antigravity CLI quota data when the local backend exposes it."""
+    status = _fetch_antigravity_direct(account)
+    if status.state != AccountState.UNKNOWN:
+        if has_complete_antigravity_quota_windows(status):
+            return replace(status, source_detail=ANTIGRAVITY_CLI_SOURCE_DETAIL)
+        return replace(status, source_detail=status.source_detail or ANTIGRAVITY_CLI_SOURCE_DETAIL)
+    detail = (
+        "Antigravity CLI account detected, but the installed CLI does not expose a "
+        "non-interactive quota command. TokenKick can show Antigravity CLI quota "
+        "only when the local Antigravity backend is running and returns named quota windows."
+    )
+    if status.error:
+        detail = f"{detail} Local API probe: {status.error}"
+    return AccountStatus(
+        label=account.label,
+        state=AccountState.UNKNOWN,
+        error=detail,
+        source_detail=ANTIGRAVITY_CLI_SOURCE_DETAIL,
+    )
+
 
 def _fetch_antigravity_direct(account: AccountConfig) -> AccountStatus:
     """Read Antigravity quotas from the local language server."""

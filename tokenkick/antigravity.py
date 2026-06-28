@@ -2,15 +2,20 @@
 
 from __future__ import annotations
 
+import json
 import re
 import shutil
 import subprocess
+from pathlib import Path
 from typing import Any
 
 from .models import AccountState, AccountStatus
 from .source_utils import _determine_state, _parse_reset_timestamp, _seconds_until_reset
 
 
+ANTIGRAVITY_CLI_SOURCE_DETAIL = "antigravity-cli"
+ANTIGRAVITY_CLI_LOGIN_FILE = Path(".gemini") / "google_accounts.json"
+ANTIGRAVITY_CLI_APP_DIR = Path(".gemini") / "antigravity-cli"
 ANTIGRAVITY_QUOTA_WINDOW_SPECS: dict[str, dict[str, str | int]] = {
     "antigravity-quota-summary-gemini-5h": {
         "family": "gemini",
@@ -37,6 +42,34 @@ ANTIGRAVITY_QUOTA_WINDOW_IDS = tuple(ANTIGRAVITY_QUOTA_WINDOW_SPECS)
 ANTIGRAVITY_QUOTA_PARSE_ERROR = (
     "Antigravity quota windows were incomplete or unrecognized in provider data."
 )
+
+
+def antigravity_cli_binary() -> str | None:
+    """Return the installed Antigravity CLI executable, if available."""
+    return shutil.which("agy") or shutil.which("antigravity")
+
+
+def antigravity_cli_app_dir(home: Path | None = None) -> Path:
+    """Return Antigravity CLI's local app-data directory."""
+    return (home or Path.home()) / ANTIGRAVITY_CLI_APP_DIR
+
+
+def read_antigravity_cli_identity(home: Path | None = None) -> str | None:
+    """Read the active Antigravity CLI Google account email without token access."""
+    path = (home or Path.home()) / ANTIGRAVITY_CLI_LOGIN_FILE
+    try:
+        data = json.loads(path.read_text())
+    except (json.JSONDecodeError, OSError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    active = data.get("active")
+    if not isinstance(active, str):
+        return None
+    email = active.strip()
+    if "@" not in email:
+        return None
+    return email
 
 
 def antigravity_status_from_extra_rate_windows(

@@ -8,6 +8,11 @@ import shutil
 from dataclasses import replace
 from pathlib import Path
 
+from .antigravity import (
+    antigravity_cli_app_dir,
+    antigravity_cli_binary,
+    read_antigravity_cli_identity,
+)
 from .claude_setup import ensure_claude_cli_settings, ensure_claude_probe_ready
 from .codexbar_source import (
     _codexbar_all_account_entries,
@@ -100,6 +105,15 @@ def _load_account_status_pairs_cached(
                     account,
                     status,
                 )
+        if account.provider == "antigravity" and account.source == DataSource.ANTIGRAVITY_CLI:
+            discovered_by_key[("codexbar-cli", "antigravity", "antigravity")] = (
+                account,
+                status,
+            )
+            if account.identity_email:
+                discovered_by_key[
+                    ("codexbar-cli", "antigravity", account.identity_email.lower())
+                ] = (account, status)
     configured_pairs = [
         _pair_for_configured_account(account, discovered_by_key, config)
         for account in config.accounts
@@ -189,6 +203,7 @@ def _discover_direct_accounts(
         config,
         prepare_claude_setup=prepare_claude_setup,
     )
+    _append_antigravity_cli_account(accounts, statuses)
     return accounts, statuses
 
 
@@ -405,6 +420,34 @@ def _append_claude_direct_account(
     _cli()._setup_progress("Reading provider status")
     status = _cli()._fetch_status(account, config) if config is not None else _cli().fetch_status(account)
     statuses.append(status)
+
+
+def _append_antigravity_cli_account(
+    accounts: list[AccountConfig],
+    statuses: list[AccountStatus],
+) -> None:
+    """Discover a logged-in Antigravity CLI account without requiring CodexBar."""
+    if not antigravity_cli_binary():
+        return
+    email = read_antigravity_cli_identity()
+    if email is None:
+        return
+    label = _label_from_email(email) or "antigravity"
+    account = AccountConfig(
+        label=label,
+        provider="antigravity",
+        source=DataSource.ANTIGRAVITY_CLI,
+        auto_kick=False,
+        weekly_auto_kick=False,
+        session_auto_kick=False,
+        provider_home=str(antigravity_cli_app_dir()),
+        identity_email=email,
+        codexbar_account=email,
+        label_origin="auto",
+    )
+    accounts.append(account)
+    _cli()._setup_progress("Reading provider status")
+    statuses.append(_cli().fetch_status(account))
 
 
 def _discover_codex_session_accounts() -> tuple[list[AccountConfig], list[AccountStatus]]:
@@ -674,6 +717,10 @@ def _discovery_identity_aliases(
             aliases[("codexbar-cli", "claude", "claude")] = canonical
             if account.identity_email:
                 aliases[("codexbar-cli", "claude", account.identity_email.lower())] = canonical
+        if account.provider == "antigravity" and account.source == DataSource.ANTIGRAVITY_CLI:
+            aliases[("codexbar-cli", "antigravity", "antigravity")] = canonical
+            if account.identity_email:
+                aliases[("codexbar-cli", "antigravity", account.identity_email.lower())] = canonical
     return aliases
 
 
@@ -779,6 +826,8 @@ def _status_detail_score(status: AccountStatus) -> int:
         score += 2
     if status.resets_in_seconds is not None:
         score += 1
+    if status.quota_windows:
+        score += 4
     return score
 
 

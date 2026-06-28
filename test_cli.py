@@ -1225,6 +1225,8 @@ def isolate_status_cache(monkeypatch, tmp_path):
         "tokenkick.cli._codex_surface_stats_file",
         lambda: config_dir / "codex-surface-stats.json",
     )
+    monkeypatch.setattr("tokenkick.discovery.antigravity_cli_binary", lambda: None)
+    monkeypatch.setattr("tokenkick.discovery.read_antigravity_cli_identity", lambda: None)
     monkeypatch.setattr("tokenkick.kicker.CONFIG_DIR", tmp_path / "config")
     monkeypatch.setattr(
         "tokenkick.cli.STATUS_CACHE_REFRESH_LOCK_FILE",
@@ -2512,6 +2514,68 @@ def test_discover_direct_accounts_reads_codex_and_claude_identity(tmp_path, monk
     assert accounts[1].identity_provider_id == "claude-account"
     assert accounts[1].identity_org_id == "claude-org"
     assert [status.state for status in statuses] == [AccountState.ACTIVE, AccountState.ACTIVE]
+
+
+def test_discover_direct_accounts_reads_antigravity_cli_identity(tmp_path, monkeypatch):
+    app_dir = tmp_path / ".gemini" / "antigravity-cli"
+    app_dir.mkdir(parents=True)
+    monkeypatch.setattr("tokenkick.cli.Path.home", lambda: tmp_path)
+    monkeypatch.setattr("tokenkick.cli.read_codex_identity", lambda _home: None)
+    monkeypatch.setattr("tokenkick.cli.read_claude_identity", lambda: None)
+    monkeypatch.setattr("tokenkick.discovery.antigravity_cli_binary", lambda: "/usr/bin/agy")
+    monkeypatch.setattr(
+        "tokenkick.discovery.read_antigravity_cli_identity",
+        lambda: "dev@example.test",
+    )
+    monkeypatch.setattr("tokenkick.discovery.antigravity_cli_app_dir", lambda: app_dir)
+    monkeypatch.setattr(
+        "tokenkick.cli.fetch_status",
+        lambda account: AccountStatus(label=account.label, state=AccountState.UNKNOWN),
+    )
+
+    accounts, statuses = _discover_direct_accounts()
+
+    assert [account.provider for account in accounts] == ["antigravity"]
+    assert accounts[0].source == DataSource.ANTIGRAVITY_CLI
+    assert accounts[0].identity_email == "dev@example.test"
+    assert accounts[0].provider_home == str(app_dir)
+    assert accounts[0].auto_kick is False
+    assert accounts[0].session_auto_kick is False
+    assert statuses[0].state == AccountState.UNKNOWN
+
+
+def test_merge_discovered_accounts_aliases_antigravity_cli_to_codexbar():
+    cli_account = AccountConfig(
+        label="dev",
+        provider="antigravity",
+        source=DataSource.ANTIGRAVITY_CLI,
+        identity_email="dev@example.test",
+        codexbar_account="dev@example.test",
+        label_origin="auto",
+    )
+    codexbar_account = AccountConfig(
+        label="dev",
+        provider="antigravity",
+        source=DataSource.CODEXBAR_CLI,
+        codexbar_provider="antigravity",
+        codexbar_account="dev@example.test",
+        label_origin="auto",
+    )
+    cli_status = AccountStatus(label="dev", state=AccountState.UNKNOWN)
+    codexbar_status = AccountStatus(
+        label="dev",
+        state=AccountState.ACTIVE,
+        used_percent=12.0,
+        quota_windows=[{"id": "antigravity-quota-summary-gemini-5h"}],
+    )
+
+    accounts, statuses = _merge_discovered_accounts(
+        [(cli_account, cli_status), (codexbar_account, codexbar_status)]
+    )
+
+    assert len(accounts) == 1
+    assert accounts[0].source == DataSource.CODEXBAR_CLI
+    assert statuses[0].used_percent == 12.0
 
 
 def test_discover_direct_accounts_reads_tokenkick_managed_codex_homes(tmp_path, monkeypatch):
