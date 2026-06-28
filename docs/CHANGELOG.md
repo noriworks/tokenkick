@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.18.8
+
+- Read Antigravity rich quota buckets from the `agy` CLI HTTPS quota endpoint
+  before falling back to local app or CodexBar compatibility data.
+- Add Antigravity quota-summary parsing for Gemini 5-hour, Gemini weekly,
+  Claude/GPT 5-hour, and Claude/GPT weekly windows.
+- Keep Antigravity monitor-only while preserving kick and auto-kick rejection
+  paths.
+
 ## v1.18.7
 
 - Broaden Antigravity CLI discovery to use user-home markers as well as the

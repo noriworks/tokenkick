@@ -390,6 +390,44 @@ def test_doctor_antigravity_absent(monkeypatch, tmp_path):
     assert "language server not running" in result.output
 
 
+def test_doctor_antigravity_agy_source_diagnostics(monkeypatch, tmp_path):
+    account = AccountConfig(label="ag", provider="antigravity")
+    paths = _isolate_doctor(monkeypatch, tmp_path, Config(accounts=[account]))
+    _write_cache(
+        paths.cache_file,
+        [account],
+        [
+            AccountStatus(
+                label="ag",
+                state=AccountState.ACTIVE,
+                source_detail="antigravity-cli",
+                quota_windows=[{"id": "one"}, {"id": "two"}, {"id": "three"}, {"id": "four"}],
+                source_diagnostics={
+                    "source": "agy-cli-https",
+                    "endpoint": "RetrieveUserQuotaSummary",
+                    "port_discovery_method": "lsof",
+                    "bucket_count": 4,
+                    "error": "csrf_token=<redacted>",
+                },
+            )
+        ],
+    )
+    monkeypatch.setattr(doctor_mod.subprocess, "run", lambda *_args, **_kwargs: SimpleNamespace(stdout=""))
+    monkeypatch.setattr(
+        "tokenkick.doctor.antigravity_cli_probe",
+        lambda: SimpleNamespace(binary="/home/tokenkick/.local/bin/agy", marker=None),
+    )
+
+    result = CliRunner().invoke(cli, ["doctor"])
+
+    assert result.exit_code == 0
+    assert "agy CLI found at /home/tokenkick/.local/bin/agy" in result.output
+    assert "agy quota endpoint selected: RetrieveUserQuotaSummary" in result.output
+    assert "agy port discovery method: lsof" in result.output
+    assert "agy quota bucket count: 4" in result.output
+    assert "csrf_token=<redacted>" in result.output
+
+
 def test_doctor_codex_identity_mismatch_fix_hint(monkeypatch, tmp_path):
     home = tmp_path / "codex-home"
     sessions = home / "sessions"

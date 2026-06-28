@@ -14,7 +14,9 @@ import pytest
 from tokenkick.antigravity import (
     antigravity_cli_binary,
     antigravity_cli_detected,
+    antigravity_status_from_quota_summary,
     is_antigravity_language_server,
+    parse_proc_net_tcp_listening_ports,
     parse_lsof_listening_ports,
     parse_process_line,
     read_antigravity_cli_identity,
@@ -45,7 +47,10 @@ from tokenkick.sources import (
     ANTIGRAVITY_SOURCE_DETAIL,
     _determine_state,
     _fetch_antigravity_cli,
+    _fetch_antigravity_cli_https_status,
     _fetch_antigravity_direct,
+    _find_running_antigravity_cli_session,
+    _antigravity_cli_output_has_auth_prompt,
     _parse_codex_appserver_ratelimits,
     _fetch_claude_direct,
     _fetch_claude_cli_usage,
@@ -59,6 +64,7 @@ from tokenkick.sources import (
     _parse_claude_usage_output,
     _parse_session_rate_limit,
     _claude_cached_direct_status_usable,
+    _stop_antigravity_cli_session,
     _claude_usage_next_pty_input,
     _claude_usage_capture_has_complete_window_data,
     _claude_usage_output_looks_relevant,
@@ -175,6 +181,60 @@ def _antigravity_codexbar_entry(*, missing_id: str | None = None) -> dict:
         }
 
 
+def _antigravity_quota_summary_response(*, missing_bucket: str | None = None) -> dict:
+    groups = [
+        {
+            "displayName": "Gemini Models",
+            "buckets": [
+                {
+                    "bucketId": "gemini-weekly",
+                    "displayName": "Weekly limit",
+                    "description": "Resets in 1d 5h",
+                    "remaining": {"remainingFraction": 0.48539993},
+                },
+                {
+                    "bucketId": "gemini-five-hour",
+                    "displayName": "Five hour limit",
+                    "description": "Resets in 2h 12m",
+                    "remaining": {"remainingFraction": 0.3377843},
+                },
+            ],
+        },
+        {
+            "displayName": "Claude and GPT models",
+            "buckets": [
+                {
+                    "bucketId": "3p-weekly",
+                    "displayName": "Weekly limit",
+                    "description": "Resets in 1d 5h",
+                    "remaining": {"remainingFraction": 0.9583277},
+                },
+                {
+                    "bucketId": "3p-five-hour",
+                    "displayName": "Five hour limit",
+                    "description": "Resets in 4h 58m",
+                    "remaining": {"remainingFraction": 1.0},
+                },
+            ],
+        },
+    ]
+    if missing_bucket is not None:
+        for group in groups:
+            group["buckets"] = [
+                bucket for bucket in group["buckets"] if bucket["bucketId"] != missing_bucket
+            ]
+    return {"response": {"groups": groups}}
+
+
+def _set_summary_bucket_description(payload: dict, bucket_id: str, description: str) -> None:
+    for group in payload["response"]["groups"]:
+        for bucket in group["buckets"]:
+            if bucket["bucketId"] == bucket_id:
+                bucket["description"] = description
+                return
+    raise AssertionError(bucket_id)
+
+
 def _codexbar_error_run(*_args, **_kwargs):
     return SimpleNamespace(
         returncode=1,
@@ -232,6 +292,16 @@ def test_antigravity_cli_binary_finds_user_local_bin_when_path_missing(monkeypat
     assert antigravity_cli_binary(tmp_path) == str(binary)
 
 
+def test_antigravity_cli_binary_uses_explicit_env_path(monkeypatch, tmp_path):
+    binary = tmp_path / "custom-agy"
+    binary.write_text("#!/bin/sh\n")
+    binary.chmod(0o755)
+    monkeypatch.setenv("ANTIGRAVITY_CLI_PATH", str(binary))
+    monkeypatch.setattr("tokenkick.antigravity.shutil.which", lambda _name: None)
+
+    assert antigravity_cli_binary(tmp_path) == str(binary)
+
+
 def test_antigravity_cli_detected_accepts_local_marker_when_binary_missing(monkeypatch, tmp_path):
     marker = tmp_path / ".gemini" / "antigravity-cli"
     marker.mkdir(parents=True)
@@ -239,6 +309,198 @@ def test_antigravity_cli_detected_accepts_local_marker_when_binary_missing(monke
 
     assert antigravity_cli_binary(tmp_path) is None
     assert antigravity_cli_detected(tmp_path) is True
+
+
+def test_parse_proc_net_tcp_listening_ports_filters_socket_inodes():
+    output = """  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode
+   0: 0100007F:8AE1 00000000:0000 0A 00000000:00000000 00:00000000 00000000 1000 0 12345 1 0000000000000000
+   1: 0100007F:8AE2 00000000:0000 01 00000000:00000000 00:00000000 00000000 1000 0 12345 1 0000000000000000
+   2: 0100007F:8AE3 00000000:0000 0A 00000000:00000000 00:00000000 00000000 1000 0 99999 1 0000000000000000
+"""
+
+    assert parse_proc_net_tcp_listening_ports(output, {"12345"}) == [35553]
+
+
+def test_find_running_antigravity_cli_session_reuses_matching_binary(monkeypatch, tmp_path):
+    binary = tmp_path / "agy"
+    binary.write_text("#!/bin/sh\n")
+    binary.chmod(0o755)
+    calls = []
+    monkeypatch.setattr(
+        "tokenkick.sources.subprocess.run",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            stdout=(
+                f"123 {binary} --some-flag\n"
+                "456 /Applications/Antigravity.app/Contents/MacOS/Antigravity\n"
+            )
+        ),
+    )
+
+    def fake_ports(pid, **_kwargs):
+        calls.append(pid)
+        return ([4567], "lsof") if pid == 123 else ([], None)
+
+    monkeypatch.setattr("tokenkick.sources.listening_ports_for_pid_with_method", fake_ports)
+
+    session = _find_running_antigravity_cli_session(str(binary))
+
+    assert session is not None
+    assert session.process.pid == 123
+    assert session.master_fd is None
+    assert session.owned is False
+    assert calls == [123]
+
+
+def test_stop_antigravity_cli_session_does_not_kill_reused_process(monkeypatch):
+    killed = []
+    monkeypatch.setattr("tokenkick.sources.os.killpg", lambda *args: killed.append(args))
+    session = SimpleNamespace(
+        master_fd=None,
+        owned=False,
+        process=SimpleNamespace(pid=123, poll=lambda: None),
+    )
+
+    _stop_antigravity_cli_session(session)
+
+    assert killed == []
+
+
+def test_parse_antigravity_quota_summary_maps_four_windows(monkeypatch):
+    monkeypatch.setattr("tokenkick.antigravity.time.time", lambda: _epoch("2026-05-23T04:18:33Z"))
+
+    status = antigravity_status_from_quota_summary(
+        "antigravity",
+        _antigravity_quota_summary_response(),
+        window_source="antigravity-cli",
+        source_detail="antigravity-cli",
+    )
+
+    assert status is not None
+    assert status.state == AccountState.ACTIVE
+    assert status.source_detail == "antigravity-cli"
+    assert status.quota_windows is not None
+    assert [window["id"] for window in status.quota_windows] == [
+        "antigravity-quota-summary-gemini-5h",
+        "antigravity-quota-summary-gemini-weekly",
+        "antigravity-quota-summary-3p-5h",
+        "antigravity-quota-summary-3p-weekly",
+    ]
+    assert status.quota_windows[0]["used_percent"] == pytest.approx(66.22157)
+    assert status.quota_windows[0]["resets_in_seconds"] == 7920
+    assert status.quota_windows[0]["window_minutes"] == 300
+    assert status.used_percent == pytest.approx(66.22157)
+
+
+def test_parse_antigravity_quota_summary_fails_closed_when_incomplete(monkeypatch):
+    monkeypatch.setattr("tokenkick.antigravity.time.time", lambda: _epoch("2026-05-23T04:18:33Z"))
+
+    status = antigravity_status_from_quota_summary(
+        "antigravity",
+        _antigravity_quota_summary_response(missing_bucket="3p-weekly"),
+        window_source="antigravity-cli",
+        source_detail="antigravity-cli",
+    )
+
+    assert status is not None
+    assert status.state == AccountState.UNKNOWN
+    assert status.quota_windows is None
+
+
+def test_parse_antigravity_quota_summary_fails_closed_when_duplicate(monkeypatch):
+    monkeypatch.setattr("tokenkick.antigravity.time.time", lambda: _epoch("2026-05-23T04:18:33Z"))
+    payload = _antigravity_quota_summary_response()
+    payload["response"]["groups"][0]["buckets"].append(
+        dict(payload["response"]["groups"][0]["buckets"][0])
+    )
+
+    status = antigravity_status_from_quota_summary(
+        "antigravity",
+        payload,
+        window_source="antigravity-cli",
+        source_detail="antigravity-cli",
+    )
+
+    assert status is not None
+    assert status.state == AccountState.UNKNOWN
+    assert status.quota_windows is None
+
+
+def test_parse_antigravity_quota_summary_fails_closed_when_fraction_malformed(monkeypatch):
+    monkeypatch.setattr("tokenkick.antigravity.time.time", lambda: _epoch("2026-05-23T04:18:33Z"))
+    payload = _antigravity_quota_summary_response()
+    payload["response"]["groups"][0]["buckets"][0]["remaining"]["remainingFraction"] = 1.5
+
+    status = antigravity_status_from_quota_summary(
+        "antigravity",
+        payload,
+        window_source="antigravity-cli",
+        source_detail="antigravity-cli",
+    )
+
+    assert status is not None
+    assert status.state == AccountState.UNKNOWN
+    assert status.quota_windows is None
+
+
+def test_parse_antigravity_quota_summary_accepts_structured_reset_timestamp(monkeypatch):
+    monkeypatch.setattr("tokenkick.antigravity.time.time", lambda: _epoch("2026-05-23T04:18:33Z"))
+    payload = _antigravity_quota_summary_response()
+    bucket = payload["response"]["groups"][0]["buckets"][1]
+    bucket["description"] = ""
+    bucket["resetTime"] = {"seconds": _epoch("2026-05-23T06:18:33Z"), "nanos": 0}
+
+    status = antigravity_status_from_quota_summary(
+        "antigravity",
+        payload,
+        window_source="antigravity-cli",
+        source_detail="antigravity-cli",
+    )
+
+    assert status is not None
+    assert status.quota_windows is not None
+    assert status.quota_windows[0]["resets_in_seconds"] == 7200
+
+
+def test_parse_antigravity_quota_summary_accepts_zero_minute_reset(monkeypatch):
+    monkeypatch.setattr("tokenkick.antigravity.time.time", lambda: _epoch("2026-05-23T04:18:33Z"))
+    payload = _antigravity_quota_summary_response()
+    _set_summary_bucket_description(payload, "gemini-five-hour", "Resets in 0m")
+
+    status = antigravity_status_from_quota_summary(
+        "antigravity",
+        payload,
+        window_source="antigravity-cli",
+        source_detail="antigravity-cli",
+    )
+
+    assert status is not None
+    assert status.quota_windows is not None
+    assert status.quota_windows[0]["resets_in_seconds"] == 0
+
+
+def test_fetch_antigravity_cli_fails_closed_on_incomplete_cli_summary(monkeypatch):
+    cli_status = AccountStatus(
+        label="antigravity",
+        state=AccountState.UNKNOWN,
+        error="Antigravity quota summary was incomplete or unrecognized in provider data.",
+        source_detail="antigravity-cli",
+        source_diagnostics={
+            "provider": "antigravity",
+            "source": "agy-cli-https",
+            "fail_closed": True,
+        },
+    )
+    monkeypatch.setattr("tokenkick.sources._fetch_antigravity_cli_https", lambda _account: cli_status)
+    monkeypatch.setattr(
+        "tokenkick.sources._fetch_antigravity_direct",
+        lambda _account: pytest.fail("local fallback should not run after fail-closed summary"),
+    )
+
+    status = _fetch_antigravity_cli(
+        AccountConfig(label="antigravity", provider="antigravity", source=DataSource.ANTIGRAVITY_CLI)
+    )
+
+    assert status is cli_status
 
 
 def test_fetch_antigravity_cli_returns_complete_local_windows(monkeypatch):
@@ -260,6 +522,15 @@ def test_fetch_antigravity_cli_returns_complete_local_windows(monkeypatch):
             for window in _antigravity_codexbar_entry()["usage"]["extraRateWindows"]
         ],
     )
+    monkeypatch.setattr(
+        "tokenkick.sources._fetch_antigravity_cli_https",
+        lambda account: AccountStatus(
+            label=account.label,
+            state=AccountState.UNKNOWN,
+            error="agy unavailable",
+            source_detail="antigravity-cli",
+        ),
+    )
     monkeypatch.setattr("tokenkick.sources._fetch_antigravity_direct", lambda _account: quota_status)
 
     status = _fetch_antigravity_cli(
@@ -275,6 +546,116 @@ def test_fetch_antigravity_cli_returns_complete_local_windows(monkeypatch):
     assert len(status.quota_windows) == 4
 
 
+def test_fetch_antigravity_cli_prefers_https_quota_source(monkeypatch):
+    quota_status = AccountStatus(
+        label="antigravity",
+        state=AccountState.ACTIVE,
+        quota_windows=[
+            {
+                "id": window["id"],
+                "title": window["title"],
+                "family": "gemini" if "gemini" in window["id"] else "claude_gpt",
+                "window_kind": "weekly" if "weekly" in window["id"] else "session",
+                "used_percent": window["window"]["usedPercent"],
+                "resets_at": _epoch(window["window"]["resetsAt"]),
+                "resets_in_seconds": 3600,
+                "window_minutes": window["window"]["windowMinutes"],
+                "source": "antigravity-cli",
+            }
+            for window in _antigravity_codexbar_entry()["usage"]["extraRateWindows"]
+        ],
+        source_detail="antigravity-cli",
+    )
+    monkeypatch.setattr("tokenkick.sources._fetch_antigravity_cli_https", lambda _account: quota_status)
+    monkeypatch.setattr(
+        "tokenkick.sources._fetch_antigravity_direct",
+        lambda _account: pytest.fail("local fallback should not run after CLI HTTPS success"),
+    )
+
+    status = _fetch_antigravity_cli(
+        AccountConfig(
+            label="antigravity",
+            provider="antigravity",
+            source=DataSource.ANTIGRAVITY_CLI,
+        )
+    )
+
+    assert status is quota_status
+
+
+def test_fetch_antigravity_cli_https_uses_quota_summary_first(monkeypatch):
+    monkeypatch.setattr("tokenkick.antigravity.time.time", lambda: _epoch("2026-05-23T04:18:33Z"))
+    session = SimpleNamespace(
+        binary="/usr/bin/agy",
+        process=SimpleNamespace(pid=123, poll=lambda: None),
+        master_fd=-1,
+        output=bytearray(),
+    )
+    calls = []
+    monkeypatch.setattr("tokenkick.sources._drain_antigravity_cli_output", lambda _session: None)
+    monkeypatch.setattr(
+        "tokenkick.sources.listening_ports_for_pid_with_method",
+        lambda *_args, **_kwargs: ([4567], "lsof"),
+    )
+
+    def fake_request(_scheme, _port, path, _body, csrf_token):
+        calls.append((path, csrf_token))
+        assert csrf_token == ""
+        return _antigravity_quota_summary_response()
+
+    monkeypatch.setattr("tokenkick.sources._antigravity_request_json", fake_request)
+
+    status = _fetch_antigravity_cli_https_status(
+        AccountConfig(label="antigravity", provider="antigravity"),
+        session,
+    )
+
+    assert status.quota_windows is not None
+    assert len(status.quota_windows) == 4
+    assert status.source_diagnostics["endpoint"] == "RetrieveUserQuotaSummary"
+    assert status.source_diagnostics["port_discovery_method"] == "lsof"
+    assert calls == [
+        (
+            "/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary",
+            "",
+        )
+    ]
+
+
+def test_fetch_antigravity_cli_https_fails_closed_on_incomplete_summary(monkeypatch):
+    session = SimpleNamespace(
+        binary="/usr/bin/agy",
+        process=SimpleNamespace(pid=123, poll=lambda: None),
+        master_fd=-1,
+        output=bytearray(),
+    )
+    monkeypatch.setattr("tokenkick.sources._drain_antigravity_cli_output", lambda _session: None)
+    monkeypatch.setattr(
+        "tokenkick.sources.listening_ports_for_pid_with_method",
+        lambda *_args, **_kwargs: ([4567], "lsof"),
+    )
+
+    def fake_request(_scheme, _port, path, _body, _csrf_token):
+        assert path == "/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary"
+        return _antigravity_quota_summary_response(missing_bucket="3p-weekly")
+
+    monkeypatch.setattr("tokenkick.sources._antigravity_request_json", fake_request)
+
+    with pytest.raises(Exception) as exc:
+        _fetch_antigravity_cli_https_status(
+            AccountConfig(label="antigravity", provider="antigravity"),
+            session,
+        )
+
+    assert "quota summary" in str(exc.value).lower()
+
+
+def test_antigravity_cli_output_detects_auth_prompt():
+    assert _antigravity_cli_output_has_auth_prompt(b"\x1b[?25lSelect login method:\r\n")
+    assert _antigravity_cli_output_has_auth_prompt(b"select   login   method")
+    assert not _antigravity_cli_output_has_auth_prompt(b"You are currently not signed in")
+
+
 def test_fetch_antigravity_cli_rejects_local_api_identity_mismatch(monkeypatch):
     quota_status = AccountStatus(
         label="antigravity",
@@ -283,6 +664,15 @@ def test_fetch_antigravity_cli_rejects_local_api_identity_mismatch(monkeypatch):
         source_detail=ANTIGRAVITY_SOURCE_DETAIL,
     )
     setattr(quota_status, "_antigravity_identity_email", "desktop@example.test")
+    monkeypatch.setattr(
+        "tokenkick.sources._fetch_antigravity_cli_https",
+        lambda account: AccountStatus(
+            label=account.label,
+            state=AccountState.UNKNOWN,
+            error="agy unavailable",
+            source_detail="antigravity-cli",
+        ),
+    )
     monkeypatch.setattr("tokenkick.sources._fetch_antigravity_direct", lambda _account: quota_status)
 
     status = _fetch_antigravity_cli(
@@ -308,6 +698,15 @@ def test_fetch_antigravity_cli_requires_verified_local_api_identity(monkeypatch)
         used_percent=12.0,
         source_detail=ANTIGRAVITY_SOURCE_DETAIL,
     )
+    monkeypatch.setattr(
+        "tokenkick.sources._fetch_antigravity_cli_https",
+        lambda account: AccountStatus(
+            label=account.label,
+            state=AccountState.UNKNOWN,
+            error="agy unavailable",
+            source_detail="antigravity-cli",
+        ),
+    )
     monkeypatch.setattr("tokenkick.sources._fetch_antigravity_direct", lambda _account: quota_status)
 
     status = _fetch_antigravity_cli(
@@ -324,6 +723,15 @@ def test_fetch_antigravity_cli_requires_verified_local_api_identity(monkeypatch)
 
 
 def test_fetch_antigravity_cli_fails_closed_without_local_quota_api(monkeypatch):
+    monkeypatch.setattr(
+        "tokenkick.sources._fetch_antigravity_cli_https",
+        lambda account: AccountStatus(
+            label=account.label,
+            state=AccountState.UNKNOWN,
+            error="agy unavailable",
+            source_detail="antigravity-cli",
+        ),
+    )
     monkeypatch.setattr(
         "tokenkick.sources._fetch_antigravity_direct",
         lambda account: AccountStatus(
@@ -344,7 +752,8 @@ def test_fetch_antigravity_cli_fails_closed_without_local_quota_api(monkeypatch)
 
     assert status.state == AccountState.UNKNOWN
     assert status.source_detail == "antigravity-cli"
-    assert "does not expose a non-interactive quota command" in status.error
+    assert "could not read quota buckets" in status.error
+    assert "agy unavailable" in status.error
 
 
 def test_codexbar_json_uses_refresh_timeout(monkeypatch):

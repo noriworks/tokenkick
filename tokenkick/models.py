@@ -448,6 +448,7 @@ class AccountStatus:
     codex_rate_limit_name: Optional[str] = None
     window_anchor_state: Optional[str] = None
     quota_windows: Optional[list[dict[str, Any]]] = None
+    source_diagnostics: Optional[dict[str, Any]] = None
     stale: bool = False
     stale_seconds: Optional[int] = None
 

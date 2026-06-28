@@ -22,6 +22,7 @@ from rich.console import Console
 from rich.table import Table
 
 from .antigravity import (
+    antigravity_cli_probe,
     is_antigravity_language_server,
     listening_ports_for_pid,
     parse_process_line,
@@ -1207,6 +1208,33 @@ def _doctor_gemini_account(account: AccountConfig, cache_entry: dict | None) -> 
 
 def _doctor_antigravity_account(account: AccountConfig, cache_entry: dict | None) -> list[DoctorCheck]:
     checks: list[DoctorCheck] = []
+    cli_probe = antigravity_cli_probe()
+    if cli_probe.binary:
+        checks.append(
+            DoctorCheck(
+                "OK",
+                "antigravity_agy_found",
+                f"{account.label}: agy CLI found at {cli_probe.binary}",
+            )
+        )
+    elif cli_probe.marker:
+        checks.append(
+            DoctorCheck(
+                "WARN",
+                "antigravity_agy_missing_marker_found",
+                f"{account.label}: Antigravity state found but agy CLI executable not found",
+                fix="ensure agy is on PATH or installed in ~/.local/bin",
+            )
+        )
+    else:
+        checks.append(
+            DoctorCheck(
+                "WARN",
+                "antigravity_agy_missing",
+                f"{account.label}: agy CLI executable not found",
+                fix="install and log in to Antigravity CLI",
+            )
+        )
     meta = _antigravity_process_metadata()
     if meta["app_process_found"]:
         checks.append(DoctorCheck("OK", "antigravity_app_process_found", f"{account.label}: Antigravity app process found"))
@@ -1243,7 +1271,70 @@ def _doctor_antigravity_account(account: AccountConfig, cache_entry: dict | None
         )
     elif source_detail == "antigravity-local":
         checks.append(DoctorCheck("OK", "antigravity_local_cached", f"{account.label}: cached source is antigravity-local"))
+    _append_antigravity_source_diagnostics(checks, account, cache_entry)
     return checks
+
+
+def _append_antigravity_source_diagnostics(
+    checks: list[DoctorCheck],
+    account: AccountConfig,
+    cache_entry: dict | None,
+) -> None:
+    status = cache_entry.get("status") if cache_entry else None
+    if not isinstance(status, AccountStatus):
+        return
+    diagnostics = status.source_diagnostics
+    if not isinstance(diagnostics, dict):
+        return
+    if diagnostics.get("source") != "agy-cli-https":
+        return
+    if diagnostics.get("login_prompt"):
+        checks.append(
+            DoctorCheck(
+                "WARN",
+                "antigravity_agy_login_required",
+                f"{account.label}: agy CLI login required",
+                fix="run `agy` and complete login, then run `tk status --refresh`",
+            )
+        )
+    endpoint = diagnostics.get("endpoint")
+    if isinstance(endpoint, str) and endpoint:
+        checks.append(
+            DoctorCheck(
+                "OK",
+                "antigravity_agy_endpoint",
+                f"{account.label}: agy quota endpoint selected: {endpoint}",
+            )
+        )
+    port_discovery_method = diagnostics.get("port_discovery_method")
+    if isinstance(port_discovery_method, str) and port_discovery_method:
+        checks.append(
+            DoctorCheck(
+                "OK",
+                "antigravity_agy_port_discovery",
+                f"{account.label}: agy port discovery method: {port_discovery_method}",
+            )
+        )
+    bucket_count = diagnostics.get("bucket_count")
+    if isinstance(bucket_count, int):
+        level = "OK" if bucket_count == 4 else "WARN"
+        checks.append(
+            DoctorCheck(
+                level,
+                "antigravity_agy_bucket_count",
+                f"{account.label}: agy quota bucket count: {bucket_count}",
+            )
+        )
+    error = diagnostics.get("error")
+    if isinstance(error, str) and error:
+        checks.append(
+            DoctorCheck(
+                "WARN",
+                "antigravity_agy_last_error",
+                f"{account.label}: agy quota probe failed: {error}",
+                fix="run `tk status --refresh` after confirming `agy` is logged in",
+            )
+        )
 
 
 def _doctor_openrouter_account(account: AccountConfig, cache_entry: dict | None) -> list[DoctorCheck]:

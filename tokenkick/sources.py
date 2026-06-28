@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import errno
 import json
 import os
 import re
+import shlex
 import selectors
 import shutil
 import signal
@@ -24,10 +26,13 @@ from typing import Any, Optional
 
 from .antigravity import (
     ANTIGRAVITY_CLI_SOURCE_DETAIL,
+    antigravity_cli_binary,
     antigravity_status_from_extra_rate_windows,
+    antigravity_status_from_quota_summary,
     has_complete_antigravity_quota_windows,
     is_antigravity_language_server,
     is_language_server_command,
+    listening_ports_for_pid_with_method,
     lsof_binary,
     parse_lsof_listening_ports,
     parse_process_line,
@@ -89,6 +94,12 @@ CODEX_APPSERVER_UNANCHORED_RESET_TOLERANCE_SECONDS = 120
 CODEX_PHANTOM_SESSION_MAX_USED_PERCENT = 2.0
 CODEX_PHANTOM_SESSION_FULL_RESET_RATIO = 0.95
 ANTIGRAVITY_TIMEOUT_SECONDS = 8.0
+ANTIGRAVITY_CLI_READY_TIMEOUT_SECONDS = 12.0
+ANTIGRAVITY_CLI_PORT_RETRY_SECONDS = 0.35
+ANTIGRAVITY_CLI_AUTH_PROMPT_MESSAGE = "Antigravity CLI login required."
+ANTIGRAVITY_CLI_LOCK_STALE_SECONDS = 45.0
+ANTIGRAVITY_CLI_LOCK_WAIT_SECONDS = 15.0
+ANTIGRAVITY_CLI_OUTPUT_LIMIT_BYTES = 32768
 ANTIGRAVITY_SOURCE_DETAIL = "antigravity-local"
 CLAUDE_CLI_USAGE_TIMEOUT_SECONDS = 5.0
 CLAUDE_CLI_USAGE_RETRY_TIMEOUT_SECONDS = 10.0
@@ -107,6 +118,19 @@ _CLAUDE_CLI_USAGE_REFRESH_STATE = threading.local()
 _CLAUDE_CLI_USAGE_CACHE_STATE = threading.local()
 _ANTIGRAVITY_DIRECT_CACHE: AccountStatus | None = None
 
+ANTIGRAVITY_CLI_QUOTA_ENDPOINTS = (
+    (
+        "RetrieveUserQuotaSummary",
+        "/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary",
+    ),
+    ("GetUserStatus", "/exa.language_server_pb.LanguageServerService/GetUserStatus"),
+    (
+        "GetCommandModelConfigs",
+        "/exa.language_server_pb.LanguageServerService/GetCommandModelConfigs",
+    ),
+)
+ANTIGRAVITY_CLI_REFRESH_LOCK_FILE = CONFIG_DIR / "antigravity-cli-refresh.lock"
+
 
 @dataclass
 class _AntigravityProcessInfo:
@@ -115,8 +139,21 @@ class _AntigravityProcessInfo:
     extension_port: int | None
 
 
+@dataclass
+class _AntigravityCliSession:
+    binary: str
+    process: Any
+    master_fd: int | None
+    output: bytearray
+    owned: bool
+
+
 class _AntigravityProbeError(Exception):
     """Expected Antigravity local probe failure."""
+
+
+class _AntigravityQuotaSummaryParseError(_AntigravityProbeError):
+    """A quota summary payload was present but not safely mappable."""
 
 
 def _claude_cli_usage_refresh_allowed() -> bool:
@@ -1877,25 +1914,27 @@ def _claude_direct_unavailable_message(
 # ---------------------------------------------------------------------------
 
 def _fetch_antigravity_cli(account: AccountConfig) -> AccountStatus:
-    """Read Antigravity CLI quota data when the local backend exposes it."""
+    """Read Antigravity CLI quota data from agy or compatible local backends."""
+    cli_status = _fetch_antigravity_cli_https(account)
+    if cli_status.state != AccountState.UNKNOWN:
+        return cli_status
+    if cli_status.error == ANTIGRAVITY_CLI_AUTH_PROMPT_MESSAGE:
+        return cli_status
+    if _antigravity_cli_fail_closed(cli_status):
+        return cli_status
+
     status = _fetch_antigravity_direct(account)
     if status.state != AccountState.UNKNOWN:
-        identity_error = _antigravity_cli_identity_error(account, status)
-        if identity_error is not None:
-            return AccountStatus(
-                label=account.label,
-                state=AccountState.UNKNOWN,
-                error=identity_error,
-                source_detail=ANTIGRAVITY_CLI_SOURCE_DETAIL,
-            )
-        if has_complete_antigravity_quota_windows(status):
-            return replace(status, source_detail=ANTIGRAVITY_CLI_SOURCE_DETAIL)
-        return replace(status, source_detail=status.source_detail or ANTIGRAVITY_CLI_SOURCE_DETAIL)
+        verified_status = _verified_antigravity_cli_status(account, status)
+        if verified_status.state != AccountState.UNKNOWN:
+            return verified_status
+        return verified_status
     detail = (
-        "Antigravity CLI account detected, but the installed CLI does not expose a "
-        "non-interactive quota command. TokenKick can show Antigravity CLI quota "
-        "only when the local Antigravity backend is running and returns named quota windows."
+        "Antigravity CLI account detected, but TokenKick could not read quota buckets "
+        "from the agy HTTPS endpoint or local Antigravity backend."
     )
+    if cli_status.error:
+        detail = f"{detail} agy CLI probe: {cli_status.error}"
     if status.error:
         detail = f"{detail} Local API probe: {status.error}"
     return AccountStatus(
@@ -1903,7 +1942,418 @@ def _fetch_antigravity_cli(account: AccountConfig) -> AccountStatus:
         state=AccountState.UNKNOWN,
         error=detail,
         source_detail=ANTIGRAVITY_CLI_SOURCE_DETAIL,
+        source_diagnostics=cli_status.source_diagnostics,
     )
+
+
+def _antigravity_cli_fail_closed(status: AccountStatus) -> bool:
+    diagnostics = status.source_diagnostics
+    return isinstance(diagnostics, dict) and diagnostics.get("fail_closed") is True
+
+
+def _verified_antigravity_cli_status(
+    account: AccountConfig,
+    status: AccountStatus,
+) -> AccountStatus:
+    identity_error = _antigravity_cli_identity_error(account, status)
+    if identity_error is not None:
+        return AccountStatus(
+            label=account.label,
+            state=AccountState.UNKNOWN,
+            error=identity_error,
+            source_detail=ANTIGRAVITY_CLI_SOURCE_DETAIL,
+        )
+    if has_complete_antigravity_quota_windows(status):
+        return replace(status, source_detail=ANTIGRAVITY_CLI_SOURCE_DETAIL)
+    return replace(status, source_detail=status.source_detail or ANTIGRAVITY_CLI_SOURCE_DETAIL)
+
+
+def _fetch_antigravity_cli_https(account: AccountConfig) -> AccountStatus:
+    binary = antigravity_cli_binary()
+    if not binary:
+        return AccountStatus(
+            label=account.label,
+            state=AccountState.UNKNOWN,
+            error="agy CLI executable not found.",
+            source_detail=ANTIGRAVITY_CLI_SOURCE_DETAIL,
+            source_diagnostics={
+                "provider": "antigravity",
+                "source": "agy-cli-https",
+                "agy_found": False,
+            },
+        )
+    try:
+        with _antigravity_cli_refresh_lock():
+            session = _open_antigravity_cli_session(binary)
+            try:
+                status = _fetch_antigravity_cli_https_status(account, session)
+            finally:
+                _stop_antigravity_cli_session(session)
+    except _AntigravityQuotaSummaryParseError as exc:
+        status = AccountStatus(
+            label=account.label,
+            state=AccountState.UNKNOWN,
+            error=str(exc),
+            source_detail=ANTIGRAVITY_CLI_SOURCE_DETAIL,
+            source_diagnostics={
+                "provider": "antigravity",
+                "source": "agy-cli-https",
+                "agy_found": True,
+                "agy_path": binary,
+                "fail_closed": True,
+                "error": _sanitize_antigravity_diagnostic(str(exc)),
+            },
+        )
+    except _AntigravityProbeError as exc:
+        status = AccountStatus(
+            label=account.label,
+            state=AccountState.UNKNOWN,
+            error=str(exc),
+            source_detail=ANTIGRAVITY_CLI_SOURCE_DETAIL,
+            source_diagnostics={
+                "provider": "antigravity",
+                "source": "agy-cli-https",
+                "agy_found": True,
+                "agy_path": binary,
+                "login_prompt": str(exc) == ANTIGRAVITY_CLI_AUTH_PROMPT_MESSAGE,
+                "error": _sanitize_antigravity_diagnostic(str(exc)),
+            },
+        )
+    return status
+
+
+@contextmanager
+def _antigravity_cli_refresh_lock() -> Iterator[None]:
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    deadline = time.monotonic() + ANTIGRAVITY_CLI_LOCK_WAIT_SECONDS
+    while True:
+        try:
+            fd = os.open(
+                ANTIGRAVITY_CLI_REFRESH_LOCK_FILE,
+                os.O_CREAT | os.O_EXCL | os.O_WRONLY,
+                0o600,
+            )
+        except FileExistsError:
+            if _antigravity_cli_lock_stale():
+                try:
+                    ANTIGRAVITY_CLI_REFRESH_LOCK_FILE.unlink()
+                except OSError:
+                    pass
+                continue
+            if time.monotonic() >= deadline:
+                raise _AntigravityProbeError(
+                    "Another Antigravity CLI quota refresh is already running."
+                )
+            time.sleep(0.2)
+            continue
+        try:
+            os.write(fd, json.dumps({"pid": os.getpid(), "created_at": time.time()}).encode())
+        finally:
+            os.close(fd)
+        break
+    try:
+        yield
+    finally:
+        try:
+            ANTIGRAVITY_CLI_REFRESH_LOCK_FILE.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError:
+            pass
+
+
+def _antigravity_cli_lock_stale() -> bool:
+    try:
+        created_at = ANTIGRAVITY_CLI_REFRESH_LOCK_FILE.stat().st_mtime
+    except OSError:
+        return True
+    return (time.time() - created_at) > ANTIGRAVITY_CLI_LOCK_STALE_SECONDS
+
+
+def _open_antigravity_cli_session(binary: str) -> _AntigravityCliSession:
+    running = _find_running_antigravity_cli_session(binary)
+    if running is not None:
+        return running
+    return _start_antigravity_cli_session(binary)
+
+
+def _find_running_antigravity_cli_session(binary: str) -> _AntigravityCliSession | None:
+    try:
+        result = subprocess.run(
+            ["ps", "-ax", "-o", "pid=,command="],
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    target = os.path.realpath(binary)
+    for line in result.stdout.splitlines():
+        match = parse_process_line(line)
+        if match is None:
+            continue
+        pid, command = match
+        if pid == os.getpid() or not _is_matching_antigravity_cli_command(command, target):
+            continue
+        ports, _method = listening_ports_for_pid_with_method(pid, timeout_seconds=0.5)
+        if ports:
+            return _AntigravityCliSession(
+                binary=binary,
+                process=_SimpleProcess(pid),
+                master_fd=None,
+                output=bytearray(),
+                owned=False,
+            )
+    return None
+
+
+@dataclass(frozen=True)
+class _SimpleProcess:
+    pid: int
+
+    def poll(self) -> None:
+        return None
+
+
+def _is_matching_antigravity_cli_command(command: str, target_binary: str) -> bool:
+    try:
+        parts = shlex.split(command)
+    except ValueError:
+        parts = command.split()
+    if not parts:
+        return False
+    executable = Path(parts[0])
+    if executable.name not in {"agy", "antigravity"}:
+        return False
+    if executable.is_absolute():
+        return os.path.realpath(str(executable)) == target_binary
+    return True
+
+
+def _start_antigravity_cli_session(binary: str) -> _AntigravityCliSession:
+    if pty is None:
+        raise _AntigravityProbeError("PTY support is not available for agy CLI probing.")
+    try:
+        master_fd, slave_fd = pty.openpty()
+    except OSError as exc:
+        raise _AntigravityProbeError(f"Could not create PTY for agy CLI: {exc}.") from exc
+    try:
+        process = subprocess.Popen(
+            [binary],
+            stdin=slave_fd,
+            stdout=slave_fd,
+            stderr=slave_fd,
+            close_fds=True,
+            start_new_session=True,
+        )
+    except OSError as exc:
+        os.close(master_fd)
+        os.close(slave_fd)
+        raise _AntigravityProbeError(f"Could not launch agy CLI: {exc}.") from exc
+    os.close(slave_fd)
+    try:
+        os.set_blocking(master_fd, False)
+    except AttributeError:  # pragma: no cover - Python < 3.7 compatibility
+        pass
+    return _AntigravityCliSession(
+        binary=binary,
+        process=process,
+        master_fd=master_fd,
+        output=bytearray(),
+        owned=True,
+    )
+
+
+def _fetch_antigravity_cli_https_status(
+    account: AccountConfig,
+    session: _AntigravityCliSession,
+) -> AccountStatus:
+    deadline = time.monotonic() + ANTIGRAVITY_CLI_READY_TIMEOUT_SECONDS
+    last_error = "agy CLI quota server did not become ready."
+    while time.monotonic() < deadline:
+        _drain_antigravity_cli_output(session)
+        ports, port_discovery_method = listening_ports_for_pid_with_method(
+            session.process.pid,
+            timeout_seconds=1.0,
+        )
+        for port in ports:
+            try:
+                status = _fetch_antigravity_cli_quota_from_port(account.label, port)
+            except _AntigravityQuotaSummaryParseError:
+                raise
+            except _AntigravityProbeError as exc:
+                last_error = str(exc)
+                continue
+            verified_status = _verified_antigravity_cli_status(account, status)
+            if verified_status.state == AccountState.UNKNOWN:
+                raise _AntigravityProbeError(verified_status.error or "Antigravity identity verification failed.")
+            _mark_antigravity_cli_status_metadata(
+                verified_status,
+                binary=session.binary,
+                endpoint=getattr(status, "_antigravity_cli_endpoint", None),
+                port=port,
+                port_discovery_method=port_discovery_method,
+                process_owned=getattr(session, "owned", True),
+            )
+            return verified_status
+        if session.process.poll() is not None:
+            _drain_antigravity_cli_output(session)
+            raise _AntigravityProbeError("agy CLI exited before quota server became ready.")
+        time.sleep(ANTIGRAVITY_CLI_PORT_RETRY_SECONDS)
+    raise _AntigravityProbeError(last_error)
+
+
+def _fetch_antigravity_cli_quota_from_port(label: str, port: int) -> AccountStatus:
+    last_error: str | None = None
+    for endpoint_name, path in ANTIGRAVITY_CLI_QUOTA_ENDPOINTS:
+        try:
+            data = _antigravity_request_json(
+                "https",
+                port,
+                path,
+                _antigravity_default_request_body(),
+                "",
+            )
+            if endpoint_name == "RetrieveUserQuotaSummary":
+                status = _parse_antigravity_quota_summary(label, data)
+            elif endpoint_name == "GetUserStatus":
+                status = _parse_antigravity_user_status(label, data)
+            else:
+                status = _parse_antigravity_command_model_configs(label, data)
+        except _AntigravityQuotaSummaryParseError:
+            raise
+        except _AntigravityProbeError as exc:
+            last_error = str(exc)
+            continue
+        setattr(status, "_antigravity_cli_endpoint", endpoint_name)
+        updated = replace(status, source_detail=ANTIGRAVITY_CLI_SOURCE_DETAIL)
+        setattr(updated, "_antigravity_cli_endpoint", endpoint_name)
+        identity_email = getattr(status, "_antigravity_identity_email", None)
+        if identity_email is not None:
+            setattr(updated, "_antigravity_identity_email", identity_email)
+        return updated
+    raise _AntigravityProbeError(last_error or "agy CLI quota endpoints did not return usable data.")
+
+
+def _parse_antigravity_quota_summary(label: str, data: dict) -> AccountStatus:
+    _raise_for_antigravity_response_code(data)
+    status = antigravity_status_from_quota_summary(
+        label,
+        data,
+        window_source=ANTIGRAVITY_CLI_SOURCE_DETAIL,
+        source_detail=ANTIGRAVITY_CLI_SOURCE_DETAIL,
+    )
+    if status is None:
+        raise _AntigravityProbeError("Antigravity quota summary response is missing groups.")
+    if status.state == AccountState.UNKNOWN:
+        raise _AntigravityQuotaSummaryParseError(
+            status.error or "Antigravity quota summary could not be parsed."
+        )
+    return status
+
+
+def _drain_antigravity_cli_output(session: _AntigravityCliSession) -> None:
+    if session.master_fd is None:
+        return
+    while True:
+        try:
+            chunk = os.read(session.master_fd, 4096)
+        except BlockingIOError:
+            break
+        except OSError as exc:
+            if exc.errno in {errno.EIO, errno.EBADF}:
+                break
+            raise _AntigravityProbeError(f"agy CLI PTY read failed: {exc}.") from exc
+        if not chunk:
+            break
+        session.output.extend(chunk)
+        if len(session.output) > ANTIGRAVITY_CLI_OUTPUT_LIMIT_BYTES:
+            del session.output[: len(session.output) - ANTIGRAVITY_CLI_OUTPUT_LIMIT_BYTES]
+    if _antigravity_cli_output_has_auth_prompt(bytes(session.output)):
+        raise _AntigravityProbeError(ANTIGRAVITY_CLI_AUTH_PROMPT_MESSAGE)
+
+
+def _antigravity_cli_output_has_auth_prompt(output: bytes) -> bool:
+    if b"Select login method:" in output:
+        return True
+    ascii_bytes = bytes(byte if byte < 0x80 else 0x20 for byte in output)
+    text = ascii_bytes.decode("utf-8", errors="ignore")
+    return re.search(r"select\s+login\s+method\s*:?", text, flags=re.IGNORECASE) is not None
+
+
+def _stop_antigravity_cli_session(session: _AntigravityCliSession) -> None:
+    if session.master_fd is not None:
+        try:
+            os.close(session.master_fd)
+        except OSError:
+            pass
+    if not session.owned:
+        return
+    process = session.process
+    if process.poll() is not None:
+        return
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return
+    except OSError:
+        process.terminate()
+    try:
+        process.wait(timeout=2)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            return
+        except OSError:
+            process.kill()
+        try:
+            process.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            pass
+
+
+def _mark_antigravity_cli_status_metadata(
+    status: AccountStatus,
+    *,
+    binary: str,
+    endpoint: str | None,
+    port: int,
+    port_discovery_method: str | None,
+    process_owned: bool,
+) -> None:
+    setattr(status, "_antigravity_cli_binary", binary)
+    if endpoint:
+        setattr(status, "_antigravity_cli_endpoint", endpoint)
+    setattr(status, "_antigravity_cli_port", port)
+    if isinstance(status.quota_windows, list):
+        setattr(status, "_antigravity_cli_bucket_count", len(status.quota_windows))
+    status.source_diagnostics = {
+        "provider": "antigravity",
+        "source": "agy-cli-https",
+        "agy_found": True,
+        "agy_path": binary,
+        "endpoint": endpoint,
+        "port": port,
+        "port_discovery_method": port_discovery_method,
+        "process_owned": process_owned,
+        "bucket_count": len(status.quota_windows) if isinstance(status.quota_windows, list) else 0,
+    }
+
+
+def _sanitize_antigravity_diagnostic(value: str) -> str:
+    sanitized = re.sub(
+        r"(?i)(csrf[_-]?token|access[_-]?token|refresh[_-]?token)=\S+",
+        r"\1=<redacted>",
+        value,
+    )
+    sanitized = re.sub(
+        r"(?i)(csrf[_-]?token|access[_-]?token|refresh[_-]?token)(['\"]?\s*:\s*['\"])[^'\"]+",
+        r"\1\2<redacted>",
+        sanitized,
+    )
+    sanitized = re.sub(r"(?i)(bearer\s+)[A-Za-z0-9._~+/=-]+", r"\1<redacted>", sanitized)
+    return sanitized[:240]
 
 
 def _antigravity_cli_identity_error(
@@ -2135,16 +2585,18 @@ def _antigravity_request_json(
 ) -> dict:
     url = f"{scheme}://127.0.0.1:{port}{path}"
     body_bytes = json.dumps(body).encode("utf-8")
+    headers = {
+        "Content-Type": "application/json",
+        "Content-Length": str(len(body_bytes)),
+        "Connect-Protocol-Version": "1",
+    }
+    if csrf_token:
+        headers["X-Codeium-Csrf-Token"] = csrf_token
     request = urllib.request.Request(
         url,
         data=body_bytes,
         method="POST",
-        headers={
-            "Content-Type": "application/json",
-            "Content-Length": str(len(body_bytes)),
-            "Connect-Protocol-Version": "1",
-            "X-Codeium-Csrf-Token": csrf_token,
-        },
+        headers=headers,
     )
     context = ssl._create_unverified_context() if scheme == "https" else None
     try:

@@ -132,8 +132,9 @@ not want to see them in status views.
 
 Antigravity is rich monitor-only in this release. TokenKick can read the
 logged-in Antigravity CLI account on Linux and macOS without CodexBar. Rich
-quota display requires a local Antigravity backend or CodexBar compatibility
-data that exposes named quota buckets:
+quota display first uses the `agy` CLI's local HTTPS quota endpoint, then falls
+back to local Antigravity backend or CodexBar compatibility data that exposes
+named quota buckets:
 
 - Gemini models 5-hour limit
 - Gemini models weekly limit
