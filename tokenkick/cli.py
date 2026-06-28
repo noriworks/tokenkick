@@ -12086,13 +12086,15 @@ def _antigravity_probe_kick_report(
     }
 
 
-def _verified_antigravity_probe_identity(account: AccountConfig) -> str:
+def _verified_antigravity_probe_identity(account: AccountConfig) -> str | None:
     cli_identity = read_antigravity_cli_identity()
-    if not cli_identity:
-        raise click.ClickException(
-            "Antigravity CLI identity could not be verified. Log in with agy and run setup again."
-        )
     expected = (account.identity_email or account.codexbar_account or "").strip().lower()
+    if not cli_identity:
+        if expected:
+            raise click.ClickException(
+                "Antigravity CLI identity could not be verified. Log in with agy and run setup again."
+            )
+        return None
     if expected and expected != cli_identity.strip().lower():
         raise click.ClickException(
             "Antigravity CLI identity mismatch: "
@@ -12337,7 +12339,8 @@ def _sanitize_antigravity_probe_error(value) -> str | None:
 def _render_antigravity_probe_report(report: dict) -> None:
     account = report["account"]
     console.print("[bold]Antigravity Probe Kick Evidence[/bold]")
-    console.print(f"[dim]Account:[/dim] {account['label']} ({account['identity_email']})")
+    identity = account["identity_email"] or "identity unavailable"
+    console.print(f"[dim]Account:[/dim] {account['label']} ({identity})")
     console.print(f"[dim]Family:[/dim] {report['family']}")
     console.print(f"[dim]Model:[/dim] {report['model']}")
     table = Table(show_header=True)

@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.20.1
+
+- Allow `tk antigravity probe-kick` to run for anonymous CLI-discovered
+  Antigravity accounts when complete local quota buckets are available, while
+  still failing closed for configured identity mismatches.
+
 ## v1.20.0
 
 - Add hidden manual Antigravity evidence probes with `tk antigravity

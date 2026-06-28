@@ -5183,7 +5183,50 @@ def test_antigravity_probe_kick_json_requires_yes(monkeypatch):
     assert "--json-output requires --yes" in result.output
 
 
-def test_antigravity_probe_kick_fails_without_verified_identity(monkeypatch):
+def test_antigravity_probe_kick_allows_anonymous_cli_account(tmp_path, monkeypatch):
+    account = replace(_antigravity_probe_account(), identity_email=None, codexbar_account=None)
+    statuses = [
+        _antigravity_status_with_windows(label=account.label),
+        _antigravity_status_with_windows(
+            label=account.label,
+            windows=_antigravity_probe_after_windows(),
+        ),
+    ]
+    monkeypatch.setattr("tokenkick.cli.CONFIG_DIR", tmp_path)
+    monkeypatch.setattr("tokenkick.cli.Config.load", lambda: Config(accounts=[account]))
+    monkeypatch.setattr("tokenkick.cli._load_accounts", lambda config: [account])
+    monkeypatch.setattr("tokenkick.cli.read_antigravity_cli_identity", lambda: None)
+    monkeypatch.setattr("tokenkick.cli.fetch_status", lambda _account: statuses.pop(0))
+    monkeypatch.setattr(
+        "tokenkick.cli._run_antigravity_probe_request",
+        lambda **_kwargs: {
+            "success": True,
+            "error": None,
+            "duration_seconds": 0.25,
+            "returncode": 0,
+            "stdout_bytes": 3,
+            "stderr_bytes": 0,
+            "family": "gemini",
+        },
+    )
+
+    result = CliRunner().invoke(
+        cli,
+        ["antigravity", "probe-kick", "--family", "gemini", "--yes"],
+    )
+
+    assert result.exit_code == 0
+    assert "identity unavailable" in result.output
+
+    records = [
+        json.loads(line)
+        for line in (tmp_path / "antigravity-probe-evidence.jsonl").read_text().splitlines()
+    ]
+    assert records[0]["account"]["identity_email"] is None
+    assert records[0]["verdict"] == "proved"
+
+
+def test_antigravity_probe_kick_fails_configured_account_without_verified_identity(monkeypatch):
     account = _antigravity_probe_account()
     monkeypatch.setattr("tokenkick.cli.Config.load", lambda: Config(accounts=[account]))
     monkeypatch.setattr("tokenkick.cli._load_accounts", lambda config: [account])
