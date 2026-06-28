@@ -1,6 +1,6 @@
 # Changelog
 
-## v1.1.0
+## v1.18.0
 
 - Add rich monitor-only Antigravity quota windows for Gemini and Claude/GPT
   5-hour and weekly limits when named bucket data is available.
