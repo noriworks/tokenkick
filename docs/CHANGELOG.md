@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.18.4
+
+- Guard PyPI release publishing so version tags must point to commits already
+  reachable from `main`.
+
 ## v1.18.3
 
 - Refuse to attach local Antigravity API quota data to a CLI-discovered account
