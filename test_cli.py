@@ -4517,6 +4517,20 @@ def test_status_action_shows_kick_now_for_kickable_fresh_accounts():
         )
         == "Monitor only"
     )
+    assert (
+        _status_action(
+            AccountStatus(label="antigravity", state=AccountState.ACTIVE),
+            {"antigravity": "antigravity"},
+        )
+        == "Monitor only"
+    )
+    assert (
+        _status_action(
+            AccountStatus(label="gemini", state=AccountState.ACTIVE),
+            {"gemini": "gemini"},
+        )
+        == "Monitor only"
+    )
 
 
 def test_status_action_shortens_no_session_data_unknown_message():

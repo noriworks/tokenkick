@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.18.2
+
+- Show known Antigravity and Gemini rows as `Monitor only` in status tables
+  instead of using kickable-account action text.
+
 ## v1.18.1
 
 - Discover logged-in Antigravity CLI accounts directly from local Google

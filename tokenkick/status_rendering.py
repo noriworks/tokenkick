@@ -800,6 +800,8 @@ def _status_action(
         return "Kick session"
     if eligibility.kickable:
         return status.state.action
+    if _cli()._is_monitor_only_provider(provider) and status.state != AccountState.UNKNOWN:
+        return "Monitor only"
     if (
         status.state == AccountState.FRESH
         and provider not in KICKABLE_PROVIDERS
