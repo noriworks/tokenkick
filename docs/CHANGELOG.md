@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.18.3
+
+- Refuse to attach local Antigravity API quota data to a CLI-discovered account
+  unless the local API identity matches that CLI account.
+
 ## v1.18.2
 
 - Show known Antigravity and Gemini rows as `Monitor only` in status tables

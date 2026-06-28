@@ -1880,6 +1880,14 @@ def _fetch_antigravity_cli(account: AccountConfig) -> AccountStatus:
     """Read Antigravity CLI quota data when the local backend exposes it."""
     status = _fetch_antigravity_direct(account)
     if status.state != AccountState.UNKNOWN:
+        identity_error = _antigravity_cli_identity_error(account, status)
+        if identity_error is not None:
+            return AccountStatus(
+                label=account.label,
+                state=AccountState.UNKNOWN,
+                error=identity_error,
+                source_detail=ANTIGRAVITY_CLI_SOURCE_DETAIL,
+            )
         if has_complete_antigravity_quota_windows(status):
             return replace(status, source_detail=ANTIGRAVITY_CLI_SOURCE_DETAIL)
         return replace(status, source_detail=status.source_detail or ANTIGRAVITY_CLI_SOURCE_DETAIL)
@@ -1898,12 +1906,42 @@ def _fetch_antigravity_cli(account: AccountConfig) -> AccountStatus:
     )
 
 
+def _antigravity_cli_identity_error(
+    account: AccountConfig,
+    status: AccountStatus,
+) -> str | None:
+    expected = (account.identity_email or "").strip().lower()
+    if not expected:
+        return None
+    observed_raw = getattr(status, "_antigravity_identity_email", None)
+    observed = observed_raw.strip().lower() if isinstance(observed_raw, str) else None
+    if observed is None:
+        return (
+            "Antigravity local API returned quota data, but TokenKick could not verify "
+            f"that it belongs to CLI account {account.identity_email}."
+        )
+    if observed != expected:
+        return (
+            "Antigravity local API identity mismatch: "
+            f"CLI account is {account.identity_email}, local API is {observed_raw}."
+        )
+    return None
+
+
+def _replace_antigravity_status_label(status: AccountStatus, label: str) -> AccountStatus:
+    updated = replace(status, label=label)
+    identity_email = getattr(status, "_antigravity_identity_email", None)
+    if identity_email is not None:
+        setattr(updated, "_antigravity_identity_email", identity_email)
+    return updated
+
+
 def _fetch_antigravity_direct(account: AccountConfig) -> AccountStatus:
     """Read Antigravity quotas from the local language server."""
     global _ANTIGRAVITY_DIRECT_CACHE
 
     if _ANTIGRAVITY_DIRECT_CACHE is not None:
-        return replace(_ANTIGRAVITY_DIRECT_CACHE, label=account.label)
+        return _replace_antigravity_status_label(_ANTIGRAVITY_DIRECT_CACHE, account.label)
 
     try:
         process_info = _detect_antigravity_process()
@@ -2136,14 +2174,20 @@ def _parse_antigravity_user_status(label: str, data: dict) -> AccountStatus:
     user_status = data.get("userStatus")
     if not isinstance(user_status, dict):
         raise _AntigravityProbeError("Antigravity GetUserStatus response is missing userStatus.")
+    email = user_status.get("email")
     named_status = _parse_antigravity_named_windows(label, data, user_status)
     if named_status is not None:
+        if isinstance(email, str) and email.strip():
+            setattr(named_status, "_antigravity_identity_email", email.strip())
         return named_status
     configs = _nested_get(user_status, ("cascadeModelConfigData", "clientModelConfigs"))
     quotas = _antigravity_model_quotas(configs if isinstance(configs, list) else [])
     if not quotas:
         raise _AntigravityProbeError("Antigravity GetUserStatus response has no quota models.")
-    return _antigravity_status_from_quotas(label, quotas)
+    status = _antigravity_status_from_quotas(label, quotas)
+    if isinstance(email, str) and email.strip():
+        setattr(status, "_antigravity_identity_email", email.strip())
+    return status
 
 
 def _parse_antigravity_command_model_configs(label: str, data: dict) -> AccountStatus:

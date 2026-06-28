@@ -231,6 +231,54 @@ def test_fetch_antigravity_cli_returns_complete_local_windows(monkeypatch):
     assert len(status.quota_windows) == 4
 
 
+def test_fetch_antigravity_cli_rejects_local_api_identity_mismatch(monkeypatch):
+    quota_status = AccountStatus(
+        label="antigravity",
+        state=AccountState.ACTIVE,
+        used_percent=12.0,
+        source_detail=ANTIGRAVITY_SOURCE_DETAIL,
+    )
+    setattr(quota_status, "_antigravity_identity_email", "desktop@example.test")
+    monkeypatch.setattr("tokenkick.sources._fetch_antigravity_direct", lambda _account: quota_status)
+
+    status = _fetch_antigravity_cli(
+        AccountConfig(
+            label="antigravity",
+            provider="antigravity",
+            source=DataSource.ANTIGRAVITY_CLI,
+            identity_email="cli@example.test",
+        )
+    )
+
+    assert status.state == AccountState.UNKNOWN
+    assert status.source_detail == "antigravity-cli"
+    assert "identity mismatch" in status.error
+    assert "cli@example.test" in status.error
+    assert "desktop@example.test" in status.error
+
+
+def test_fetch_antigravity_cli_requires_verified_local_api_identity(monkeypatch):
+    quota_status = AccountStatus(
+        label="antigravity",
+        state=AccountState.ACTIVE,
+        used_percent=12.0,
+        source_detail=ANTIGRAVITY_SOURCE_DETAIL,
+    )
+    monkeypatch.setattr("tokenkick.sources._fetch_antigravity_direct", lambda _account: quota_status)
+
+    status = _fetch_antigravity_cli(
+        AccountConfig(
+            label="antigravity",
+            provider="antigravity",
+            source=DataSource.ANTIGRAVITY_CLI,
+            identity_email="cli@example.test",
+        )
+    )
+
+    assert status.state == AccountState.UNKNOWN
+    assert "could not verify" in status.error
+
+
 def test_fetch_antigravity_cli_fails_closed_without_local_quota_api(monkeypatch):
     monkeypatch.setattr(
         "tokenkick.sources._fetch_antigravity_direct",
@@ -371,6 +419,7 @@ def test_parse_antigravity_user_status_selects_codexbar_model_order(monkeypatch)
     assert status.resets_in_seconds == 3600
     assert status.session_used_percent == 10.0
     assert status.session_resets_in_seconds == 10800
+    assert getattr(status, "_antigravity_identity_email") == "dev@example.test"
 
 
 def test_parse_antigravity_user_status_accepts_named_quota_windows(monkeypatch):
