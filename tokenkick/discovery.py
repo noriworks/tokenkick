@@ -10,7 +10,7 @@ from pathlib import Path
 
 from .antigravity import (
     antigravity_cli_app_dir,
-    antigravity_cli_binary,
+    antigravity_cli_detected,
     read_antigravity_cli_identity,
 )
 from .claude_setup import ensure_claude_cli_settings, ensure_claude_probe_ready
@@ -427,7 +427,7 @@ def _append_antigravity_cli_account(
     statuses: list[AccountStatus],
 ) -> None:
     """Discover an Antigravity CLI monitor account without requiring CodexBar."""
-    if not antigravity_cli_binary():
+    if not antigravity_cli_detected():
         return
     email = read_antigravity_cli_identity()
     label = _label_from_email(email) or "antigravity"

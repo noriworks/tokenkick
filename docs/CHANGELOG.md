@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.18.7
+
+- Broaden Antigravity CLI discovery to use user-home markers as well as the
+  `agy` executable, and check common home sources when setup runs with a
+  reduced environment.
+
 ## v1.18.6
 
 - Discover Antigravity as a monitor-only account when the `agy` CLI is present

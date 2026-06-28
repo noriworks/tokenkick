@@ -13,6 +13,7 @@ import pytest
 
 from tokenkick.antigravity import (
     antigravity_cli_binary,
+    antigravity_cli_detected,
     is_antigravity_language_server,
     parse_lsof_listening_ports,
     parse_process_line,
@@ -229,6 +230,15 @@ def test_antigravity_cli_binary_finds_user_local_bin_when_path_missing(monkeypat
     monkeypatch.setattr("tokenkick.antigravity.shutil.which", lambda _name: None)
 
     assert antigravity_cli_binary(tmp_path) == str(binary)
+
+
+def test_antigravity_cli_detected_accepts_local_marker_when_binary_missing(monkeypatch, tmp_path):
+    marker = tmp_path / ".gemini" / "antigravity-cli"
+    marker.mkdir(parents=True)
+    monkeypatch.setattr("tokenkick.antigravity.shutil.which", lambda _name: None)
+
+    assert antigravity_cli_binary(tmp_path) is None
+    assert antigravity_cli_detected(tmp_path) is True
 
 
 def test_fetch_antigravity_cli_returns_complete_local_windows(monkeypatch):

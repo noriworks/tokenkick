@@ -7,8 +7,14 @@ import os
 import re
 import shutil
 import subprocess
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+try:
+    import pwd
+except ImportError:  # pragma: no cover - Windows compatibility
+    pwd = None
 
 from .direct import email_from_id_token
 from .models import AccountState, AccountStatus
@@ -19,6 +25,14 @@ ANTIGRAVITY_CLI_SOURCE_DETAIL = "antigravity-cli"
 ANTIGRAVITY_CLI_LOGIN_FILE = Path(".gemini") / "google_accounts.json"
 ANTIGRAVITY_CLI_OAUTH_FILE = Path(".gemini") / "oauth_creds.json"
 ANTIGRAVITY_CLI_APP_DIR = Path(".gemini") / "antigravity-cli"
+ANTIGRAVITY_CLI_BINARY_NAMES = ("agy", "antigravity")
+ANTIGRAVITY_CLI_MARKER_PATHS = (
+    ANTIGRAVITY_CLI_LOGIN_FILE,
+    ANTIGRAVITY_CLI_OAUTH_FILE,
+    ANTIGRAVITY_CLI_APP_DIR,
+    Path(".config") / "antigravity",
+    Path(".antigravity"),
+)
 ANTIGRAVITY_QUOTA_WINDOW_SPECS: dict[str, dict[str, str | int]] = {
     "antigravity-quota-summary-gemini-5h": {
         "family": "gemini",
@@ -47,26 +61,165 @@ ANTIGRAVITY_QUOTA_PARSE_ERROR = (
 )
 
 
+@dataclass(frozen=True)
+class AntigravityCliProbe:
+    binary: str | None
+    marker: str | None
+    checked_binaries: tuple[str, ...]
+    checked_markers: tuple[str, ...]
+
+    @property
+    def detected(self) -> bool:
+        return bool(self.binary or self.marker)
+
+
 def antigravity_cli_binary(home: Path | None = None) -> str | None:
     """Return the installed Antigravity CLI executable, if available."""
-    binary = shutil.which("agy") or shutil.which("antigravity")
+    return antigravity_cli_probe(home).binary
+
+
+def antigravity_cli_detected(home: Path | None = None) -> bool:
+    """Return whether local Antigravity CLI state is detectable."""
+    return antigravity_cli_probe(home).detected
+
+
+def antigravity_cli_probe(home: Path | None = None) -> AntigravityCliProbe:
+    """Return Antigravity CLI detection details for discovery and diagnostics."""
+    checked_binaries: list[str] = []
+    checked_markers: list[str] = []
+    binary = _antigravity_cli_binary_from_path(checked_binaries)
     if binary:
-        return binary
-    home = home or Path.home()
-    candidates = [
-        home / ".local" / "bin" / "agy",
-        home / ".local" / "bin" / "antigravity",
-        home / "bin" / "agy",
-        home / "bin" / "antigravity",
-        Path("/usr/local/bin/agy"),
-        Path("/usr/local/bin/antigravity"),
-        Path("/opt/homebrew/bin/agy"),
-        Path("/opt/homebrew/bin/antigravity"),
-    ]
-    for candidate in candidates:
+        return AntigravityCliProbe(binary, None, tuple(checked_binaries), tuple(checked_markers))
+
+    explicit_home = home is not None
+    binary = _antigravity_cli_binary_from_candidates(home, checked_binaries)
+    if binary:
+        return AntigravityCliProbe(binary, None, tuple(checked_binaries), tuple(checked_markers))
+
+    if not explicit_home:
+        binary = _antigravity_cli_binary_from_shell(checked_binaries)
+        if binary:
+            return AntigravityCliProbe(binary, None, tuple(checked_binaries), tuple(checked_markers))
+
+    marker = _antigravity_cli_marker_from_candidates(home, checked_markers)
+    return AntigravityCliProbe(binary, marker, tuple(checked_binaries), tuple(checked_markers))
+
+
+def _antigravity_cli_binary_from_path(checked_binaries: list[str]) -> str | None:
+    for name in ANTIGRAVITY_CLI_BINARY_NAMES:
+        checked_binaries.append(f"PATH:{name}")
+        binary = shutil.which(name)
+        if binary:
+            return binary
+    return None
+
+
+def _antigravity_cli_binary_from_candidates(
+    home: Path | None,
+    checked_binaries: list[str],
+) -> str | None:
+    candidates: list[Path] = []
+    for candidate_home in _antigravity_candidate_homes(home):
+        candidates.extend(
+            [
+                candidate_home / ".local" / "bin" / "agy",
+                candidate_home / ".local" / "bin" / "antigravity",
+                candidate_home / "bin" / "agy",
+                candidate_home / "bin" / "antigravity",
+            ]
+        )
+    if home is None:
+        candidates.extend(
+            [
+                Path("/usr/local/bin/agy"),
+                Path("/usr/local/bin/antigravity"),
+                Path("/opt/homebrew/bin/agy"),
+                Path("/opt/homebrew/bin/antigravity"),
+            ]
+        )
+    for candidate in _unique_paths(candidates):
+        checked_binaries.append(str(candidate))
         if candidate.is_file() and os.access(candidate, os.X_OK):
             return str(candidate)
     return None
+
+
+def _antigravity_cli_binary_from_shell(checked_binaries: list[str]) -> str | None:
+    shells = [
+        os.environ.get("SHELL"),
+        "/bin/zsh",
+        "/bin/bash",
+        "/bin/sh",
+    ]
+    for shell_raw in shells:
+        if not shell_raw:
+            continue
+        shell = Path(shell_raw)
+        if not shell.is_file() or not os.access(shell, os.X_OK):
+            continue
+        checked_binaries.append(f"{shell}:command -v")
+        try:
+            result = subprocess.run(
+                [str(shell), "-lc", "command -v agy || command -v antigravity"],
+                capture_output=True,
+                text=True,
+                timeout=2,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        if result.returncode != 0:
+            continue
+        binary = (result.stdout or "").splitlines()[0].strip()
+        if binary and Path(binary).is_file() and os.access(binary, os.X_OK):
+            return binary
+    return None
+
+
+def _antigravity_cli_marker_from_candidates(
+    home: Path | None,
+    checked_markers: list[str],
+) -> str | None:
+    for candidate_home in _antigravity_candidate_homes(home):
+        for marker_path in ANTIGRAVITY_CLI_MARKER_PATHS:
+            marker = candidate_home / marker_path
+            checked_markers.append(str(marker))
+            if marker.exists():
+                return str(marker)
+    return None
+
+
+def _antigravity_candidate_homes(home: Path | None = None) -> list[Path]:
+    homes: list[Path] = []
+    if home is not None:
+        homes.append(home)
+    homes.append(Path.home())
+    env_home = os.environ.get("HOME")
+    if env_home:
+        homes.append(Path(env_home))
+    expanded_home = os.path.expanduser("~")
+    if expanded_home and expanded_home != "~":
+        homes.append(Path(expanded_home))
+    pw_home = None
+    if pwd is not None:
+        try:
+            pw_home = pwd.getpwuid(os.getuid()).pw_dir
+        except (KeyError, OSError):
+            pw_home = None
+    if pw_home:
+        homes.append(Path(pw_home))
+    return _unique_paths(homes)
+
+
+def _unique_paths(paths: list[Path]) -> list[Path]:
+    seen: set[str] = set()
+    unique: list[Path] = []
+    for path in paths:
+        key = os.path.normpath(os.path.expanduser(str(path)))
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(Path(key))
+    return unique
 
 
 def antigravity_cli_app_dir(home: Path | None = None) -> Path:

@@ -1225,7 +1225,7 @@ def isolate_status_cache(monkeypatch, tmp_path):
         "tokenkick.cli._codex_surface_stats_file",
         lambda: config_dir / "codex-surface-stats.json",
     )
-    monkeypatch.setattr("tokenkick.discovery.antigravity_cli_binary", lambda: None)
+    monkeypatch.setattr("tokenkick.discovery.antigravity_cli_detected", lambda: False)
     monkeypatch.setattr("tokenkick.discovery.read_antigravity_cli_identity", lambda: None)
     monkeypatch.setattr("tokenkick.kicker.CONFIG_DIR", tmp_path / "config")
     monkeypatch.setattr(
@@ -2522,7 +2522,7 @@ def test_discover_direct_accounts_reads_antigravity_cli_identity(tmp_path, monke
     monkeypatch.setattr("tokenkick.cli.Path.home", lambda: tmp_path)
     monkeypatch.setattr("tokenkick.cli.read_codex_identity", lambda _home: None)
     monkeypatch.setattr("tokenkick.cli.read_claude_identity", lambda: None)
-    monkeypatch.setattr("tokenkick.discovery.antigravity_cli_binary", lambda: "/usr/bin/agy")
+    monkeypatch.setattr("tokenkick.discovery.antigravity_cli_detected", lambda: True)
     monkeypatch.setattr(
         "tokenkick.discovery.read_antigravity_cli_identity",
         lambda: "dev@example.test",
@@ -2550,7 +2550,7 @@ def test_discover_direct_accounts_adds_antigravity_cli_without_identity(tmp_path
     monkeypatch.setattr("tokenkick.cli.Path.home", lambda: tmp_path)
     monkeypatch.setattr("tokenkick.cli.read_codex_identity", lambda _home: None)
     monkeypatch.setattr("tokenkick.cli.read_claude_identity", lambda: None)
-    monkeypatch.setattr("tokenkick.discovery.antigravity_cli_binary", lambda: "/usr/bin/agy")
+    monkeypatch.setattr("tokenkick.discovery.antigravity_cli_detected", lambda: True)
     monkeypatch.setattr("tokenkick.discovery.read_antigravity_cli_identity", lambda: None)
     monkeypatch.setattr("tokenkick.discovery.antigravity_cli_app_dir", lambda: app_dir)
     monkeypatch.setattr(
