@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.18.5
+
+- Find Antigravity CLI installs in common user-local paths such as
+  `~/.local/bin/agy` even when TokenKick's subprocess PATH omits them.
+- Fall back to the Google OAuth `id_token` email when Antigravity CLI identity
+  is not present in `~/.gemini/google_accounts.json`.
+
 ## v1.18.4
 
 - Guard PyPI release publishing so version tags must point to commits already

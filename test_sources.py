@@ -12,6 +12,7 @@ from types import SimpleNamespace
 import pytest
 
 from tokenkick.antigravity import (
+    antigravity_cli_binary,
     is_antigravity_language_server,
     parse_lsof_listening_ports,
     parse_process_line,
@@ -113,6 +114,13 @@ def _epoch(value: str) -> float:
     return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
 
 
+def _fake_id_token(email: str) -> str:
+    import base64
+
+    payload = base64.urlsafe_b64encode(json.dumps({"email": email}).encode()).decode()
+    return f"header.{payload.rstrip('=')}.signature"
+
+
 def _antigravity_codexbar_entry(*, missing_id: str | None = None) -> dict:
     windows = [
         {
@@ -195,6 +203,32 @@ def test_read_antigravity_cli_identity_reads_active_email_only(tmp_path):
     )
 
     assert read_antigravity_cli_identity(tmp_path) == "dev@example.test"
+
+
+def test_read_antigravity_cli_identity_decodes_oauth_id_token_fallback(tmp_path):
+    creds_file = tmp_path / ".gemini" / "oauth_creds.json"
+    creds_file.parent.mkdir()
+    creds_file.write_text(
+        json.dumps(
+            {
+                "id_token": _fake_id_token("oauth@example.test"),
+                "access_token": "secret",
+                "refresh_token": "secret",
+            }
+        )
+    )
+
+    assert read_antigravity_cli_identity(tmp_path) == "oauth@example.test"
+
+
+def test_antigravity_cli_binary_finds_user_local_bin_when_path_missing(monkeypatch, tmp_path):
+    binary = tmp_path / ".local" / "bin" / "agy"
+    binary.parent.mkdir(parents=True)
+    binary.write_text("#!/bin/sh\n")
+    binary.chmod(0o755)
+    monkeypatch.setattr("tokenkick.antigravity.shutil.which", lambda _name: None)
+
+    assert antigravity_cli_binary(tmp_path) == str(binary)
 
 
 def test_fetch_antigravity_cli_returns_complete_local_windows(monkeypatch):

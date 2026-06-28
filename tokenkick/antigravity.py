@@ -3,18 +3,21 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import subprocess
 from pathlib import Path
 from typing import Any
 
+from .direct import email_from_id_token
 from .models import AccountState, AccountStatus
 from .source_utils import _determine_state, _parse_reset_timestamp, _seconds_until_reset
 
 
 ANTIGRAVITY_CLI_SOURCE_DETAIL = "antigravity-cli"
 ANTIGRAVITY_CLI_LOGIN_FILE = Path(".gemini") / "google_accounts.json"
+ANTIGRAVITY_CLI_OAUTH_FILE = Path(".gemini") / "oauth_creds.json"
 ANTIGRAVITY_CLI_APP_DIR = Path(".gemini") / "antigravity-cli"
 ANTIGRAVITY_QUOTA_WINDOW_SPECS: dict[str, dict[str, str | int]] = {
     "antigravity-quota-summary-gemini-5h": {
@@ -44,9 +47,26 @@ ANTIGRAVITY_QUOTA_PARSE_ERROR = (
 )
 
 
-def antigravity_cli_binary() -> str | None:
+def antigravity_cli_binary(home: Path | None = None) -> str | None:
     """Return the installed Antigravity CLI executable, if available."""
-    return shutil.which("agy") or shutil.which("antigravity")
+    binary = shutil.which("agy") or shutil.which("antigravity")
+    if binary:
+        return binary
+    home = home or Path.home()
+    candidates = [
+        home / ".local" / "bin" / "agy",
+        home / ".local" / "bin" / "antigravity",
+        home / "bin" / "agy",
+        home / "bin" / "antigravity",
+        Path("/usr/local/bin/agy"),
+        Path("/usr/local/bin/antigravity"),
+        Path("/opt/homebrew/bin/agy"),
+        Path("/opt/homebrew/bin/antigravity"),
+    ]
+    for candidate in candidates:
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return str(candidate)
+    return None
 
 
 def antigravity_cli_app_dir(home: Path | None = None) -> Path:
@@ -56,18 +76,28 @@ def antigravity_cli_app_dir(home: Path | None = None) -> Path:
 
 def read_antigravity_cli_identity(home: Path | None = None) -> str | None:
     """Read the active Antigravity CLI Google account email without token access."""
-    path = (home or Path.home()) / ANTIGRAVITY_CLI_LOGIN_FILE
+    home = home or Path.home()
+    path = home / ANTIGRAVITY_CLI_LOGIN_FILE
     try:
         data = json.loads(path.read_text())
     except (json.JSONDecodeError, OSError):
+        data = None
+    if isinstance(data, dict):
+        active = data.get("active")
+        if isinstance(active, str):
+            email = active.strip()
+            if "@" in email:
+                return email
+
+    oauth_path = home / ANTIGRAVITY_CLI_OAUTH_FILE
+    try:
+        oauth_data = json.loads(oauth_path.read_text())
+    except (json.JSONDecodeError, OSError):
         return None
-    if not isinstance(data, dict):
+    if not isinstance(oauth_data, dict):
         return None
-    active = data.get("active")
-    if not isinstance(active, str):
-        return None
-    email = active.strip()
-    if "@" not in email:
+    email = email_from_id_token(oauth_data.get("id_token"))
+    if not email or "@" not in email:
         return None
     return email
 
