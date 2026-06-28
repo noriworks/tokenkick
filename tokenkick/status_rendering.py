@@ -395,6 +395,7 @@ def _render_status_table(
         claude_cached_refresh_unavailable = bool(
             refresh_failed and account is not None and account.provider == "claude"
         )
+        blocking_refresh_failed = _refresh_failure_blocks_auto_kicks(account, s, cache_entry)
         fallback_source = _cli()._auto_kick_blocked_by_codexbar_fallback(account, s)
         phantom_session_display = _status_phantom_session_display(
             account,
@@ -410,7 +411,7 @@ def _render_status_table(
         state_display = _status_state_display(
             s,
             provider=provider,
-            stale=s.stale or (refresh_failed and not claude_cached_refresh_unavailable),
+            stale=s.stale or blocking_refresh_failed,
             indirect=fallback_source,
             phantom_session=phantom_session_display,
             codex_unconfirmed_session=codex_unconfirmed_session,
@@ -534,10 +535,7 @@ def _render_status_table(
         for s in sorted_statuses
         if (account := accounts_by_label.get(s.label)) is not None
         and (cache_entry := cache_entries.get(account_key_string(account))) is not None
-        and cache_entry.get("refresh_error")
-        and account.provider != "claude"
-        and not _status_weekly_exhausted(s)
-        and not _status_session_exhausted(s)
+        and _refresh_failure_blocks_auto_kicks(account, s, cache_entry)
     ]
     if refresh_failed_statuses:
         failed_labels = ", ".join(s.label for s in refresh_failed_statuses)
@@ -828,8 +826,26 @@ def _status_table_action(
     if refresh_failed:
         if account is not None and account.provider == "claude":
             return "Cached Claude status"
+        if account is not None and _cli()._is_monitor_only_provider(account.provider):
+            return "Monitor stale"
         return "Refresh failed"
     return _status_action(status, providers_by_label, account)
+
+
+def _refresh_failure_blocks_auto_kicks(
+    account: AccountConfig | None,
+    status: AccountStatus,
+    cache_entry: dict | None,
+) -> bool:
+    return (
+        account is not None
+        and account.provider in KICKABLE_PROVIDERS
+        and account.provider != "claude"
+        and cache_entry is not None
+        and bool(cache_entry.get("refresh_error"))
+        and not _status_weekly_exhausted(status)
+        and not _status_session_exhausted(status)
+    )
 
 
 def _status_weekly_exhausted(status: AccountStatus) -> bool:
@@ -962,7 +978,11 @@ def _status_state_display(
         display = "🟡 Phantom session"
     elif codex_unconfirmed_session:
         display = "🟡 Codex unconfirmed"
-    elif provider != "claude" and _status_has_unanchored_session_artifact(status):
+    elif (
+        (provider is None or provider in KICKABLE_PROVIDERS)
+        and provider != "claude"
+        and _status_has_unanchored_session_artifact(status)
+    ):
         display = "🟢 Session ready"
     if stale:
         display = f"{display} ⚠️"

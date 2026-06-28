@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.18.9
+
+- Keep Antigravity monitor-only refresh failures out of the automatic-kick
+  blocking banner.
+- Stop labeling Antigravity quota buckets as a kickable "Session ready" state.
+
 ## v1.18.8
 
 - Read Antigravity rich quota buckets from the `agy` CLI HTTPS quota endpoint

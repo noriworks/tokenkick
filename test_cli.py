@@ -4864,6 +4864,17 @@ def test_status_state_display_marks_stale_fresh_without_wide_emoji():
         ),
         provider="claude",
     )
+    antigravity_active_session_ready = _status_state_display(
+        AccountStatus(
+            label="antigravity-active-session-ready",
+            state=AccountState.ACTIVE,
+            used_percent=51.0,
+            session_used_percent=0.0,
+            session_resets_in_seconds=17940,
+            session_window_minutes=300,
+        ),
+        provider="antigravity",
+    )
     session_exhausted = _status_state_display(
         AccountStatus(
             label="session-exhausted",
@@ -4884,7 +4895,55 @@ def test_status_state_display_marks_stale_fresh_without_wide_emoji():
     assert active_phantom_session == "🟡 Phantom session"
     assert active_session_ready == "🟢 Session ready"
     assert claude_active_session_ready == "🔵 Active"
+    assert antigravity_active_session_ready == "🔵 Active"
     assert session_exhausted == "🟠 Session exhausted"
+
+
+def test_status_table_antigravity_refresh_failure_is_monitor_only_not_blocking(monkeypatch):
+    output = io.StringIO()
+    account = AccountConfig(
+        label="antigravity",
+        provider="antigravity",
+        source=DataSource.ANTIGRAVITY_CLI,
+    )
+    status = AccountStatus(
+        label=account.label,
+        state=AccountState.ACTIVE,
+        used_percent=51.0,
+        resets_in_seconds=25 * 60 * 60,
+        window_minutes=10080,
+        session_used_percent=0.0,
+        session_resets_in_seconds=4 * 60 * 60 + 59 * 60,
+        session_window_minutes=300,
+        source_detail="antigravity-cli",
+    )
+
+    monkeypatch.setattr(
+        "tokenkick.cli.console",
+        Console(file=output, width=140, color_system=None),
+    )
+    monkeypatch.setattr("tokenkick.cli.load_pending_kicks", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr("tokenkick.cli.load_kick_history", lambda limit=200: [])
+
+    _render_status_table(
+        [status],
+        [account],
+        cache_entries={
+            account_key_string(account): {
+                "account": account,
+                "status": status,
+                "refresh_error": "ProviderError",
+            }
+        },
+    )
+
+    rendered = output.getvalue()
+    assert "antigravity" in rendered
+    assert "🔵 Active" in rendered
+    assert "Session ready" not in rendered
+    assert "Monitor stale" in rendered
+    assert "Refresh failed" not in rendered
+    assert "automatic kicks are blocked" not in rendered
 
 
 def test_status_table_prioritizes_weekly_exhausted_over_refresh_failure(monkeypatch):

@@ -8,6 +8,7 @@ build/
 *.egg
 .venv/
 venv/
+uv.lock
 .env
 .env.*
 !.env.example
