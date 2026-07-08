@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.20.2
+
+- Prefer Claude Code's piped `/usage` output when it contains complete quota
+  windows, avoiding stale cached Claude status when the interactive PTY usage
+  panel hangs on loading.
+
 ## v1.20.1
 
 - Allow `tk antigravity probe-kick` to run for anonymous CLI-discovered

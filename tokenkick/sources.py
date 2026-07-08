@@ -1323,6 +1323,15 @@ def _fetch_claude_cli_usage(
 def _capture_claude_usage(binary: str) -> str:
     if os.name == "nt" or pty is None or termios is None:
         return _capture_claude_usage_pipe(binary)
+    try:
+        raw = _capture_claude_usage_pipe(binary)
+    except TimeoutError:
+        raw = ""
+    clean = _strip_ansi(raw)
+    if _extract_claude_usage_error(clean) or _claude_usage_capture_has_complete_window_data(clean):
+        return raw
+    if raw and _claude_usage_output_looks_relevant(clean):
+        return raw
     return _capture_claude_usage_pty(binary)
 
 

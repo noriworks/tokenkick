@@ -57,6 +57,7 @@ from tokenkick.sources import (
     _fetch_codex_direct,
     _fetch_codex_session_file,
     _ClaudeUsageCaptureTimeout,
+    _capture_claude_usage,
     _capture_claude_usage_pty,
     _find_latest_rate_limit,
     _nested_get,
@@ -1232,6 +1233,25 @@ def test_parse_claude_usage_output_supports_compact_reset_times():
     assert status.resets_in_seconds == 1056000
 
 
+def test_parse_claude_usage_output_supports_current_week_all_models():
+    status = _parse_claude_usage_output(
+        "claude",
+        """
+        You are currently using your subscription to power your Claude Code usage
+
+        Current session: 4% used \u00b7 resets Jul 8, 8:49pm (Europe/Berlin)
+        Current week (all models): 69% used \u00b7 resets Jul 10, 1:59pm (Europe/Berlin)
+        Current week (Fable): 100% used \u00b7 resets Jul 10, 1:59pm (Europe/Berlin)
+        """,
+        now=1_783_539_900,
+    )
+
+    assert status.state == AccountState.ACTIVE
+    assert status.used_percent == 69.0
+    assert status.session_used_percent == 4.0
+    assert status.window_minutes == 10080
+
+
 def test_parse_claude_usage_output_marks_weekly_fresh_active_when_session_running():
     status = _parse_claude_usage_output(
         "claude",
@@ -1860,6 +1880,36 @@ def test_claude_usage_pty_loading_retry_timeout(monkeypatch):
         raise AssertionError("expected TimeoutError")
 
     assert calls == [5.0, 10.0]
+
+
+def test_capture_claude_usage_prefers_complete_pipe_output(monkeypatch):
+    monkeypatch.setattr(
+        "tokenkick.sources._capture_claude_usage_pipe",
+        lambda _binary: (
+            "Current session\n4% used\nResets in 1h\n"
+            "Current week (all models)\n69% used\nResets in 2d\n"
+        ),
+    )
+    monkeypatch.setattr(
+        "tokenkick.sources._capture_claude_usage_pty",
+        lambda _binary: pytest.fail("complete pipe output should not open a PTY"),
+    )
+
+    raw = _capture_claude_usage("/usr/bin/claude")
+
+    assert "Current week" in raw
+
+
+def test_capture_claude_usage_falls_back_to_pty_when_pipe_output_is_irrelevant(monkeypatch):
+    monkeypatch.setattr("tokenkick.sources._capture_claude_usage_pipe", lambda _binary: "Welcome to Claude")
+    monkeypatch.setattr(
+        "tokenkick.sources._capture_claude_usage_pty",
+        lambda _binary: "Current session\n4% used\nResets in 1h\nCurrent week\n69% used\nResets in 2d\n",
+    )
+
+    raw = _capture_claude_usage("/usr/bin/claude")
+
+    assert "69% used" in raw
 
 
 def test_terminate_process_group_waits_after_sigkill(monkeypatch):
