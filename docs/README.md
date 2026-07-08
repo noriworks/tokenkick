@@ -558,7 +558,8 @@ Telegram credentials are global and can both be configured. Use
 
 Use `tk notify --policy errors` to suppress routine success pushes and keep
 only error/check/warning notifications. Use `tk notify --policy all` to restore
-the full stream.
+the full stream. In the TUI, use `Configure -> Notifications -> Notification
+volume` for the same setting.
 
 Example notification:
 > 🟢 TokenKick: Kicked "personal" at 14:32 CEST. Fresh quota window is now active.

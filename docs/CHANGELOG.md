@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.21.3
+
+- Add notification volume control to the interactive TUI, so `errors` versus
+  `all` notifications can be changed from `Configure -> Notifications`.
+
 ## v1.21.2
 
 - Remove Python 3.15 deprecation warnings from Claude `/usage` reset-date

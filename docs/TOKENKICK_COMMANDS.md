@@ -327,6 +327,8 @@ Notes:
 - `tk notify --policy errors` keeps error/check/warning pushes and suppresses
   routine success notifications. Use `tk notify --policy all` to restore every
   notification.
+- In the TUI, use `Configure -> Notifications -> Notification volume` to switch
+  between the same two policies.
 
 ### Remote Status (Telegram)
 

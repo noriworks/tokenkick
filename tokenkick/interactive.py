@@ -2537,12 +2537,17 @@ def _notifications_menu(ctx: click.Context) -> None:
     from . import cli as cli_module
 
     while True:
+        config = Config.load()
         action = _select(
             "Notifications",
             [
                 MenuChoice("Configure ntfy", "ntfy"),
                 MenuChoice("Configure Telegram", "telegram"),
                 MenuChoice("Disable Telegram notifications", "disable_telegram"),
+                MenuChoice(
+                    f"Notification volume ({_notification_policy_label(config.notifications.policy)})",
+                    "policy",
+                ),
                 MenuChoice("Account notification toggles", "accounts"),
                 MenuChoice("Send test notification (all enabled)", "test"),
                 MenuChoice("Back", MENU_EXIT),
@@ -2553,6 +2558,9 @@ def _notifications_menu(ctx: click.Context) -> None:
         if action == "accounts":
             _notification_accounts_menu(ctx)
             continue
+        if action == "policy":
+            _notification_policy_menu(ctx)
+            continue
         if action == "test":
             if _confirm("Send a test notification?", default=True):
                 _invoke(
@@ -2562,6 +2570,7 @@ def _notifications_menu(ctx: click.Context) -> None:
                     telegram=None,
                     telegram_remote=None,
                     disable_backend=None,
+                    policy=None,
                     test_backend="all",
                     action="test",
                 )
@@ -2575,6 +2584,7 @@ def _notifications_menu(ctx: click.Context) -> None:
                     telegram=None,
                     telegram_remote=None,
                     disable_backend="telegram",
+                    policy=None,
                     test_backend="all",
                     action=None,
                 )
@@ -2589,6 +2599,7 @@ def _notifications_menu(ctx: click.Context) -> None:
                     telegram=None,
                     telegram_remote=None,
                     disable_backend=None,
+                    policy=None,
                     test_backend="all",
                     action=None,
                 )
@@ -2605,9 +2616,42 @@ def _notifications_menu(ctx: click.Context) -> None:
                 telegram=(token, chat_id),
                 telegram_remote=None,
                 disable_backend=None,
+                policy=None,
                 test_backend="all",
                 action=None,
             )
+
+
+def _notification_policy_menu(ctx: click.Context) -> None:
+    from . import cli as cli_module
+
+    current = Config.load().notifications.policy
+    policy = _select(
+        "Notification volume",
+        [
+            MenuChoice("Errors/checks only", "errors"),
+            MenuChoice("All events", "all"),
+            MenuChoice("Back", MENU_EXIT),
+        ],
+        default=current,
+    )
+    if policy == MENU_EXIT:
+        return
+    _invoke(
+        ctx,
+        cli_module.notify,
+        ntfy_topic=None,
+        telegram=None,
+        telegram_remote=None,
+        disable_backend=None,
+        policy=policy,
+        test_backend="all",
+        action=None,
+    )
+
+
+def _notification_policy_label(policy: str) -> str:
+    return "errors/checks only" if policy == "errors" else "all events"
 
 
 def _remote_telegram_menu(ctx: click.Context) -> None:
@@ -2678,6 +2722,7 @@ def _remote_telegram_menu(ctx: click.Context) -> None:
                     telegram=None,
                     telegram_remote=(token, chat_id),
                     disable_backend=None,
+                    policy=None,
                     test_backend="all",
                     action=None,
                 )
@@ -2692,6 +2737,7 @@ def _remote_telegram_menu(ctx: click.Context) -> None:
                 telegram=None,
                 telegram_remote=None,
                 disable_backend="telegram",
+                policy=None,
                 test_backend="all",
                 action=None,
             )
@@ -2703,6 +2749,7 @@ def _remote_telegram_menu(ctx: click.Context) -> None:
                 telegram=None,
                 telegram_remote=None,
                 disable_backend=None,
+                policy=None,
                 test_backend="telegram",
                 action="test",
             )

@@ -20717,6 +20717,7 @@ def test_interactive_remote_telegram_test_targets_telegram_only(monkeypatch):
                 "telegram": None,
                 "telegram_remote": None,
                 "disable_backend": None,
+                "policy": None,
                 "test_backend": "telegram",
                 "action": "test",
             },
@@ -20751,6 +20752,7 @@ def test_interactive_remote_telegram_configure_is_remote_only(monkeypatch):
                 "telegram": None,
                 "telegram_remote": ("token", "chat-id"),
                 "disable_backend": None,
+                "policy": None,
                 "test_backend": "all",
                 "action": None,
             },
@@ -20783,6 +20785,7 @@ def test_interactive_remote_telegram_can_disable_push_notifications(monkeypatch)
                 "telegram": None,
                 "telegram_remote": None,
                 "disable_backend": "telegram",
+                "policy": None,
                 "test_backend": "all",
                 "action": None,
             },
@@ -22953,7 +22956,7 @@ def test_interactive_notifications_menu_saves_ntfy(monkeypatch):
     monkeypatch.setattr(interactive, "_text_action", lambda *_args, **_kwargs: "topic-name")
     monkeypatch.setattr(interactive, "_confirm", lambda *_args, **_kwargs: True)
     monkeypatch.setattr(interactive, "_print_banner", lambda: None)
-    monkeypatch.setattr("tokenkick.cli.Config.load", lambda: Config())
+    monkeypatch.setattr("tokenkick.cli.Config.load", lambda: Config(notifications=NotifyConfig(policy="errors")))
     monkeypatch.setattr("tokenkick.cli.Config.save", lambda self: saved.append(copy.deepcopy(self)))
 
     result = CliRunner().invoke(cli, ["menu"])
@@ -22962,6 +22965,24 @@ def test_interactive_notifications_menu_saves_ntfy(monkeypatch):
     assert saved[0].notifications.enabled is True
     assert saved[0].notifications.backend == "ntfy"
     assert saved[0].notifications.ntfy_topic == "topic-name"
+    assert saved[0].notifications.policy == "errors"
+
+
+def test_interactive_notifications_menu_sets_policy(monkeypatch):
+    import tokenkick.interactive as interactive
+
+    saved: list[Config] = []
+    selections = iter(["configure", "notifications", "policy", "errors", "exit", "exit", "exit"])
+    monkeypatch.setattr(interactive, "_select", lambda *_args, **_kwargs: next(selections))
+    monkeypatch.setattr(interactive, "_print_banner", lambda: None)
+    monkeypatch.setattr("tokenkick.cli.Config.load", lambda: Config(notifications=NotifyConfig(policy="all")))
+    monkeypatch.setattr("tokenkick.cli.Config.save", lambda self: saved.append(copy.deepcopy(self)))
+
+    result = CliRunner().invoke(cli, ["menu"])
+
+    assert result.exit_code == 0
+    assert saved[0].notifications.policy == "errors"
+    assert "Notification policy set to errors only." in result.output
 
 
 def test_interactive_notifications_menu_toggles_account_notifications(monkeypatch):
