@@ -4,6 +4,7 @@ import json
 import signal
 import subprocess
 import threading
+import warnings
 
 from datetime import datetime
 from pathlib import Path
@@ -1234,17 +1235,19 @@ def test_parse_claude_usage_output_supports_compact_reset_times():
 
 
 def test_parse_claude_usage_output_supports_current_week_all_models():
-    status = _parse_claude_usage_output(
-        "claude",
-        """
-        You are currently using your subscription to power your Claude Code usage
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", DeprecationWarning)
+        status = _parse_claude_usage_output(
+            "claude",
+            """
+            You are currently using your subscription to power your Claude Code usage
 
-        Current session: 4% used \u00b7 resets Jul 8, 8:49pm (Europe/Berlin)
-        Current week (all models): 69% used \u00b7 resets Jul 10, 1:59pm (Europe/Berlin)
-        Current week (Fable): 100% used \u00b7 resets Jul 10, 1:59pm (Europe/Berlin)
-        """,
-        now=1_783_539_900,
-    )
+            Current session: 4% used \u00b7 resets Jul 8, 8:49pm (Europe/Berlin)
+            Current week (all models): 69% used \u00b7 resets Jul 10, 1:59pm (Europe/Berlin)
+            Current week (Fable): 100% used \u00b7 resets Jul 10, 1:59pm (Europe/Berlin)
+            """,
+            now=1_783_539_900,
+        )
 
     assert status.state == AccountState.ACTIVE
     assert status.used_percent == 69.0

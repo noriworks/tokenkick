@@ -1756,12 +1756,9 @@ def _claude_reset_seconds_from_line(line: str, *, now: float | None) -> int | No
         "%B %d, %H:%M",
         "%B %d %H:%M",
     ):
-        try:
-            parsed_dt = datetime.strptime(raw, fmt).replace(year=base.year, tzinfo=base.tzinfo)
-        except ValueError:
+        parsed_dt = _parse_claude_month_day_time(raw, fmt, base=base, current=current)
+        if parsed_dt is None:
             continue
-        if parsed_dt.timestamp() < current:
-            parsed_dt = parsed_dt.replace(year=base.year + 1)
         return max(0, int(parsed_dt.timestamp() - current))
 
     parsed_time = _parse_claude_time(raw)
@@ -1771,6 +1768,25 @@ def _claude_reset_seconds_from_line(line: str, *, now: float | None) -> int | No
     if target.timestamp() < current:
         target += timedelta(days=1)
     return max(0, int(target.timestamp() - current))
+
+
+def _parse_claude_month_day_time(
+    raw: str,
+    fmt: str,
+    *,
+    base: datetime,
+    current: float,
+) -> datetime | None:
+    for year in range(base.year, base.year + 5):
+        try:
+            parsed = datetime.strptime(f"{year} {raw}", f"%Y {fmt}").replace(
+                tzinfo=base.tzinfo
+            )
+        except ValueError:
+            continue
+        if parsed.timestamp() >= current:
+            return parsed
+    return None
 
 
 def _parse_claude_time(raw: str) -> Any | None:

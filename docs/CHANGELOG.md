@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.21.2
+
+- Remove Python 3.15 deprecation warnings from Claude `/usage` reset-date
+  parsing by attaching candidate years before parsing month/day reset strings.
+
 ## v1.21.1
 
 - Keep quota-constrained `TokenKick — Check` notifications enabled under the
