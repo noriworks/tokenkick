@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.21.0
+
+- Add notification policy control with `tk notify --policy errors` to suppress
+  routine success notifications while still sending errors and check/warning
+  notifications.
+- Shorten Codex pending-confirmation notification wording so routine accepted
+  session kicks are easier to scan.
+
 ## v1.20.2
 
 - Prefer Claude Code's piped `/usage` output when it contains complete quota

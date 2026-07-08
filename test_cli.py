@@ -19752,6 +19752,33 @@ def test_notify_telegram_saves_notification_config(monkeypatch):
     assert saved[0].notifications.telegram_chat_id == "chat-id"
 
 
+def test_notify_policy_saves_notification_policy(monkeypatch):
+    saved: list[Config] = []
+    existing = NotifyConfig(enabled=True, backend="ntfy", ntfy_topic="topic")
+    monkeypatch.setattr("tokenkick.cli.Config.load", lambda: Config(notifications=existing))
+    monkeypatch.setattr("tokenkick.cli.Config.save", lambda self: saved.append(copy.deepcopy(self)))
+
+    result = CliRunner().invoke(cli, ["notify", "--policy", "errors"])
+
+    assert result.exit_code == 0
+    assert "errors only" in result.output
+    assert saved[0].notifications.policy == "errors"
+    assert saved[0].notifications.ntfy_topic == "topic"
+
+
+def test_notify_backend_setup_can_set_policy(monkeypatch):
+    saved: list[Config] = []
+    monkeypatch.setattr("tokenkick.cli.Config.load", lambda: Config())
+    monkeypatch.setattr("tokenkick.cli.Config.save", lambda self: saved.append(copy.deepcopy(self)))
+
+    result = CliRunner().invoke(cli, ["notify", "--ntfy", "topic-name", "--policy", "errors"])
+
+    assert result.exit_code == 0
+    assert saved[0].notifications.enabled is True
+    assert saved[0].notifications.ntfy_topic == "topic-name"
+    assert saved[0].notifications.policy == "errors"
+
+
 def test_notify_telegram_remote_saves_credentials_without_push(monkeypatch):
     saved: list[Config] = []
     monkeypatch.setattr("tokenkick.cli.Config.load", lambda: Config())

@@ -556,6 +556,10 @@ Telegram credentials are global and can both be configured. Use
 `--global-default`, or `--none` to choose each account's delivery route. Use
 `tk accounts notifications` to show the per-account delivery state.
 
+Use `tk notify --policy errors` to suppress routine success pushes and keep
+only error/check/warning notifications. Use `tk notify --policy all` to restore
+the full stream.
+
 Example notification:
 > 🟢 TokenKick: Kicked "personal" at 14:32 CEST. Fresh quota window is now active.
 

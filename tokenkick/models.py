@@ -678,6 +678,7 @@ class NotifyConfig:
 
     enabled: bool = False
     backend: str = "ntfy"
+    policy: str = "all"
     ntfy_topic: Optional[str] = None
     telegram_bot_token: Optional[str] = None
     telegram_chat_id: Optional[str] = None
@@ -685,6 +686,7 @@ class NotifyConfig:
 
     def __post_init__(self) -> None:
         self.enabled_backends = normalize_notification_backends(self.enabled_backends)
+        self.policy = _normalize_notification_policy(self.policy)
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -696,6 +698,12 @@ class NotifyConfig:
             return cls()
         allowed_fields = {field.name for field in fields(cls)}
         return cls(**{key: value for key, value in data.items() if key in allowed_fields})
+
+
+def _normalize_notification_policy(value: object) -> str:
+    if isinstance(value, str) and value.strip().lower() in {"all", "errors"}:
+        return value.strip().lower()
+    return "all"
 
 
 # ---------------------------------------------------------------------------

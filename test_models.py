@@ -325,6 +325,13 @@ class TestConfig:
         assert restored.enabled_backends == ["telegram", "ntfy"]
         assert restored.to_dict()["enabled_backends"] == ["telegram", "ntfy"]
 
+    def test_notification_policy_roundtrip(self):
+        restored = NotifyConfig.from_dict({"enabled": True, "policy": "errors"})
+
+        assert restored.policy == "errors"
+        assert restored.to_dict()["policy"] == "errors"
+        assert NotifyConfig.from_dict({"policy": "noisy"}).policy == "all"
+
     def test_telegram_remote_enabled_roundtrips(self, tmp_path, monkeypatch):
         config_dir = tmp_path / ".tokenkick"
         config_file = config_dir / "config.json"

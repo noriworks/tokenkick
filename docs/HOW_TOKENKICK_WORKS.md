@@ -226,6 +226,10 @@ fresh target on that poll.
 Notifications are generated from kick/reset events, not directly from raw status
 rows.
 
+`tk notify --policy errors` suppresses routine success notifications, including
+normal scheduled/deferred success messages, while preserving error, check, and
+warning notifications. `tk notify --policy all` restores the full stream.
+
 The notification title and tags carry the visual severity. Message bodies should
 stay plain and specific enough to explain what happened. For example, repeated
 phantom recovery messages should include attempt context so a user can tell the

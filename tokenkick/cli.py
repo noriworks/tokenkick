@@ -622,7 +622,7 @@ def _notification_configs_for_global(config: NotifyConfig) -> list[NotifyConfig]
 
 def _send_global_notifications(
     config: NotifyConfig,
-    send: Callable[[NotifyConfig], bool],
+    send: Callable[[NotifyConfig], bool | None],
 ) -> bool:
     delivered_any = False
     for notification_config in _notification_configs_for_global(config):
@@ -633,7 +633,7 @@ def _send_global_notifications(
 def _send_test_notification(
     config: NotifyConfig,
     backend: str,
-    send: Callable[[NotifyConfig], bool],
+    send: Callable[[NotifyConfig], bool | None],
 ) -> tuple[bool, str | None]:
     if backend == "all":
         return _send_global_notifications(config, send), None
@@ -648,17 +648,21 @@ def _send_test_notification(
 def _send_account_notifications(
     account: AccountConfig,
     config: NotifyConfig,
-    send: Callable[[NotifyConfig], bool],
+    send: Callable[[NotifyConfig], bool | None],
     *,
     daemon_log: bool,
     context: str,
 ) -> tuple[bool, bool]:
     delivered_any = False
     attempted = False
+    suppressed_any = False
     skipped_only = True
     for notification_config in _notification_configs_for_account(account, config):
         attempted = True
         delivered = send(notification_config)
+        if delivered is None:
+            suppressed_any = True
+            continue
         _log_notification_result(
             account.label,
             notification_config,
@@ -669,7 +673,7 @@ def _send_account_notifications(
         delivered_any = delivered_any or bool(delivered)
         if _notification_skip_reason(notification_config) is None:
             skipped_only = False
-    acknowledged = delivered_any or (attempted and skipped_only)
+    acknowledged = delivered_any or suppressed_any or (attempted and skipped_only)
     return delivered_any, acknowledged
 
 
@@ -6143,7 +6147,10 @@ def _notification_destination_display(notifications: NotifyConfig) -> str:
         elif backend == "telegram":
             chat_id = notifications.telegram_chat_id or "missing chat ID"
             parts.append(f"telegram:{chat_id}")
-    return ", ".join(parts) if parts else "no enabled destinations"
+    destination = ", ".join(parts) if parts else "no enabled destinations"
+    if notifications.policy == "errors":
+        return f"{destination} (errors only)"
+    return destination
 
 
 def _account_by_label_or_exit(label: str, accounts: list[AccountConfig]) -> AccountConfig:
@@ -6304,6 +6311,7 @@ def _accounts_list_payload(config: Config, accounts: list[AccountConfig]) -> lis
 def _account_notifications_payload(config: Config, accounts: list[AccountConfig]) -> dict:
     return {
         "global_enabled": config.notifications.enabled,
+        "policy": config.notifications.policy,
         "destination": _notification_destination_display(config.notifications),
         "backends": _configured_notification_backends(config.notifications),
         "accounts": [
@@ -12451,6 +12459,11 @@ def claude_direct_usage_disable(as_json: bool):
     help="Disable one notification backend but keep its credentials",
 )
 @click.option(
+    "--policy",
+    type=click.Choice(("all", "errors")),
+    help="Notification volume: all events, or only errors/checks.",
+)
+@click.option(
     "--backend",
     "test_backend",
     type=click.Choice(("all", *NOTIFICATION_BACKENDS)),
@@ -12465,6 +12478,7 @@ def notify(
     telegram: tuple[str, str] | None,
     telegram_remote: tuple[str, str] | None,
     disable_backend: str | None,
+    policy: str | None,
     test_backend: str,
     as_json: bool,
     action: str | None,
@@ -12479,7 +12493,7 @@ def notify(
                 sys.exit(2)
             console.print(f"[red]{message}[/red]")
             return
-        if ntfy_topic or telegram or telegram_remote or disable_backend:
+        if ntfy_topic or telegram or telegram_remote or disable_backend or policy:
             message = (
                 "Use either tk notify test [--backend all|ntfy|telegram] or "
                 "configure/change a backend, not both."
@@ -12534,10 +12548,10 @@ def notify(
         return
 
     action_count = sum(bool(value) for value in (ntfy_topic, telegram, telegram_remote, disable_backend))
-    if action_count != 1:
+    if action_count > 1 or (action_count == 0 and policy is None):
         message = (
-            "Choose exactly one: --ntfy <topic>, --telegram <token> <chat_id>, "
-            "--telegram-remote <token> <chat_id>, or --disable-backend <backend>."
+            "Choose one backend action, set --policy all|errors, or combine one "
+            "backend action with --policy."
         )
         if as_json:
             emit_app_error(ERROR_USAGE, message)
@@ -12546,6 +12560,7 @@ def notify(
         return
 
     config = Config.load()
+    success_messages: list[str] = []
     if ntfy_topic:
         config.notifications = replace(
             config.notifications,
@@ -12554,7 +12569,7 @@ def notify(
             ntfy_topic=ntfy_topic,
             enabled_backends=_with_enabled_notification_backend(config.notifications, "ntfy"),
         )
-        success_message = "ntfy notifications enabled."
+        success_messages.append("ntfy notifications enabled.")
     elif telegram:
         token, chat_id = telegram
         config.notifications = replace(
@@ -12565,7 +12580,7 @@ def notify(
             telegram_chat_id=chat_id,
             enabled_backends=_with_enabled_notification_backend(config.notifications, "telegram"),
         )
-        success_message = "Telegram notifications enabled."
+        success_messages.append("Telegram notifications enabled.")
     elif telegram_remote:
         token, chat_id = telegram_remote
         backends = _without_enabled_notification_backend(config.notifications, "telegram")
@@ -12577,9 +12592,8 @@ def notify(
             telegram_chat_id=chat_id,
             enabled_backends=backends,
         )
-        success_message = "Telegram remote credentials saved; Telegram notifications disabled."
-    else:
-        assert disable_backend is not None
+        success_messages.append("Telegram remote credentials saved; Telegram notifications disabled.")
+    elif disable_backend is not None:
         backends = _without_enabled_notification_backend(config.notifications, disable_backend)
         config.notifications = replace(
             config.notifications,
@@ -12588,7 +12602,16 @@ def notify(
             enabled_backends=backends,
         )
         backend_label = "Telegram" if disable_backend == "telegram" else disable_backend
-        success_message = f"{backend_label} notifications disabled."
+        success_messages.append(f"{backend_label} notifications disabled.")
+
+    if policy is not None:
+        config.notifications = replace(config.notifications, policy=policy)
+        if policy == "errors":
+            success_messages.append("Notification policy set to errors only.")
+        else:
+            success_messages.append("Notification policy set to all events.")
+
+    success_message = " ".join(success_messages)
 
     if not as_json:
         console.print(f"[green]{success_message}[/green]")

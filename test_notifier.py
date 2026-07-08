@@ -17,6 +17,7 @@ from tokenkick.notifier import (
     notify_kick,
     notify_reservation_advisory,
     notify_reset_event,
+    notify_schedule_decision,
     notify_scheduled_kick,
     notify_test,
 )
@@ -104,7 +105,8 @@ def test_format_message_treats_pending_codex_session_as_sent_not_warning():
     message = _format_message(event)
 
     assert "Session kick sent" in message
-    assert "No action needed for now" in message
+    assert "waiting for provider confirmation" in message
+    assert len(message) < 140
     assert "Attempted kick" not in message
     assert "too stale" not in message
     assert _notification_needs_attention(event) is False
@@ -131,7 +133,7 @@ def test_format_message_treats_stale_reset_clock_error_as_pending_confirmation()
     message = _format_message(event)
 
     assert "Session kick sent" in message
-    assert "No action needed for now" in message
+    assert "waiting for provider confirmation" in message
     assert "Attempted kick" not in message
     assert "too stale" not in message
     assert _notification_needs_attention(event) is False
@@ -208,6 +210,87 @@ def test_notify_kick_returns_false_when_disabled():
     event = KickEvent(label="codex", timestamp=1000.0, success=True)
 
     assert notify_kick(event, NotifyConfig(enabled=False)) is False
+
+
+def test_notify_kick_errors_policy_suppresses_routine_success(monkeypatch):
+    calls = []
+    event = KickEvent(label="codex", timestamp=1000.0, success=True, confirmed=True)
+    monkeypatch.setattr(
+        "tokenkick.notifier._notify_ntfy_message",
+        lambda *_args, **_kwargs: calls.append(True) or True,
+    )
+
+    delivered = notify_kick(
+        event,
+        NotifyConfig(enabled=True, backend="ntfy", ntfy_topic="topic", policy="errors"),
+    )
+
+    assert delivered is None
+    assert calls == []
+
+
+def test_notify_kick_errors_policy_sends_failures(monkeypatch):
+    calls = []
+    event = KickEvent(label="codex", timestamp=1000.0, success=False, error="boom")
+    monkeypatch.setattr(
+        "tokenkick.notifier._notify_ntfy_message",
+        lambda *_args, **_kwargs: calls.append(True) or True,
+    )
+
+    delivered = notify_kick(
+        event,
+        NotifyConfig(enabled=True, backend="ntfy", ntfy_topic="topic", policy="errors"),
+    )
+
+    assert delivered is True
+    assert calls == [True]
+
+
+def test_notify_kick_errors_policy_suppresses_pending_codex_confirmation(monkeypatch):
+    calls = []
+    event = KickEvent(
+        label="codex",
+        timestamp=1000.0,
+        success=True,
+        confirmed=False,
+        kind="session",
+        kick_type="session",
+        response_text="TokenKick anchor probe completed.",
+        evidence_response=True,
+        codex_confirmation_method="pending_reset_clock",
+        codex_surface="repo",
+        codex_attempt=1,
+        codex_max_attempts=2,
+    )
+    monkeypatch.setattr(
+        "tokenkick.notifier._notify_ntfy_message",
+        lambda *_args, **_kwargs: calls.append(True) or True,
+    )
+
+    delivered = notify_kick(
+        event,
+        NotifyConfig(enabled=True, backend="ntfy", ntfy_topic="topic", policy="errors"),
+    )
+
+    assert delivered is None
+    assert calls == []
+
+
+def test_notify_schedule_decision_errors_policy_suppresses_routine_schedule(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        "tokenkick.notifier._notify_ntfy_message",
+        lambda *_args, **_kwargs: calls.append(True) or True,
+    )
+
+    delivered = notify_schedule_decision(
+        "personal",
+        _decision(),
+        NotifyConfig(enabled=True, backend="ntfy", ntfy_topic="topic", policy="errors"),
+    )
+
+    assert delivered is None
+    assert calls == []
 
 
 def test_notify_reservation_advisory_uses_warning_title(monkeypatch):

@@ -14,10 +14,12 @@ CODEX_SESSION_ANCHOR_PENDING_ERROR = (
 )
 
 
-def notify_kick(event: KickEvent, config: NotifyConfig) -> bool:
+def notify_kick(event: KickEvent, config: NotifyConfig) -> bool | None:
     """Send a notification about a kick event."""
     if not config.enabled:
         return False
+    if not _should_send_kick_notification(event, config):
+        return None
 
     if config.backend == "ntfy":
         return _notify_ntfy(event, config)
@@ -30,10 +32,12 @@ def notify_schedule_decision(
     account_label: str,
     decision: ScheduleDecision | PendingKick,
     config: NotifyConfig,
-) -> bool:
+) -> bool | None:
     """Notify that a fresh window has been scheduled for a later kick."""
     if not config.enabled:
         return False
+    if _routine_notifications_suppressed(config):
+        return None
     message = _format_schedule_decision_message(account_label, decision)
     return _notify_raw(message, config, title="TokenKick — Scheduled", priority="default", tags="clock1")
 
@@ -42,12 +46,14 @@ def notify_scheduled_kick(
     event: KickEvent,
     decision: ScheduleDecision | PendingKick,
     config: NotifyConfig,
-) -> bool:
+) -> bool | None:
     """Notify that a scheduled kick ran."""
     if not config.enabled:
         return False
     if not event.success or not event.confirmed:
         return notify_kick(event, config)
+    if _routine_notifications_suppressed(config):
+        return None
     message = _format_scheduled_kick_message(event, decision)
     return _notify_raw(message, config, title="TokenKick", priority="default", tags="zap")
 
@@ -56,12 +62,14 @@ def notify_quota_constrained_kick(
     event: KickEvent,
     decision: ScheduleDecision,
     config: NotifyConfig,
-) -> bool:
+) -> bool | None:
     """Notify that a kick ran late because quota became available after the optimum."""
     if not config.enabled:
         return False
     if not event.success:
         return notify_kick(event, config)
+    if _routine_notifications_suppressed(config):
+        return None
     message = _format_quota_constrained_message(event, decision)
     return _notify_raw(message, config, title="TokenKick — Check", priority="default", tags="warning")
 
@@ -162,8 +170,7 @@ def _format_message(event: KickEvent) -> str:
         if _codex_session_confirmation_pending(event):
             return (
                 f'TokenKick: Session kick sent for "{event.label}". '
-                "Codex accepted the work; confirmation should appear on the next provider read. "
-                f"No action needed for now.{_codex_attempt_context(event)}"
+                f"Codex accepted it; waiting for provider confirmation.{_codex_attempt_context(event)}"
             )
         detail = event.error or "provider status was still ambiguous after the attempt"
         return f'TokenKick: Attempted kick for "{event.label}". {detail}.{_codex_attempt_context(event)}'
@@ -207,6 +214,16 @@ def _codex_session_confirmation_pending(event: KickEvent) -> bool:
 
 def _codex_generation_evidence(event: KickEvent) -> bool:
     return bool(event.evidence_response or event.evidence_tokens or event.response_text)
+
+
+def _routine_notifications_suppressed(config: NotifyConfig) -> bool:
+    return config.policy == "errors"
+
+
+def _should_send_kick_notification(event: KickEvent, config: NotifyConfig) -> bool:
+    if not _routine_notifications_suppressed(config):
+        return True
+    return not event.success or _notification_needs_attention(event)
 
 
 def _format_reset_event_message(event: ResetEvent) -> str:

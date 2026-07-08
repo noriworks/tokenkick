@@ -87,6 +87,7 @@ tk schedule show               # Show schedules and pending kicks.
 tk notify test                 # Send a test notification to all enabled backends.
 tk notify test --backend telegram
                                 # Send a Telegram-only test notification.
+tk notify --policy errors      # Suppress routine success notifications.
 tk daemon --background         # Start daemon in background.
 tk remote telegram --background
                                 # Start read-only Telegram status listener.
@@ -301,6 +302,8 @@ Commands:
 ```
 tk notify --ntfy <topic>
 tk notify --telegram <token> <chat_id>
+tk notify --policy errors
+tk notify --policy all
 tk notify test
 tk notify test --backend ntfy
 tk notify test --backend telegram
@@ -321,6 +324,9 @@ Notes:
 - Notification backend credentials are global and can store both ntfy and
   Telegram. Account notification routes control whether each account sends to
   ntfy, Telegram, both, the global default, or neither.
+- `tk notify --policy errors` keeps error/check/warning pushes and suppresses
+  routine success notifications. Use `tk notify --policy all` to restore every
+  notification.
 
 ### Remote Status (Telegram)
 
