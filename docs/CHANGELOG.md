@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.21.1
+
+- Keep quota-constrained `TokenKick — Check` notifications enabled under the
+  `errors` notification policy.
+- Make the reset-log CLI test independent of the current calendar date.
+
 ## v1.21.0
 
 - Add notification policy control with `tk notify --policy errors` to suppress

@@ -1798,7 +1798,7 @@ def test_reset_log_table_detail_json_and_csv(monkeypatch, tmp_path):
     event = _reset_event()
     assert append_reset_event(event)
 
-    table_result = CliRunner().invoke(cli, ["reset-log", "--provider", "codex", "--since", "30d"])
+    table_result = CliRunner().invoke(cli, ["reset-log", "--provider", "codex", "--since", "3650d"])
     detail_result = CliRunner().invoke(cli, ["reset-log", "--detail", event.id])
     json_result = CliRunner().invoke(cli, ["reset-log", "--json-output"])
     csv_result = CliRunner().invoke(cli, ["reset-log", "--csv"])

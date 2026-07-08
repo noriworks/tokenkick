@@ -15,6 +15,7 @@ from tokenkick.notifier import (
     _notification_needs_attention,
     notify_codex_pending_confirmation_missing,
     notify_kick,
+    notify_quota_constrained_kick,
     notify_reservation_advisory,
     notify_reset_event,
     notify_schedule_decision,
@@ -291,6 +292,25 @@ def test_notify_schedule_decision_errors_policy_suppresses_routine_schedule(monk
 
     assert delivered is None
     assert calls == []
+
+
+def test_notify_quota_constrained_kick_errors_policy_keeps_check(monkeypatch):
+    calls = []
+    event = KickEvent(label="personal", timestamp=1_779_473_400, success=True)
+    monkeypatch.setattr(
+        "tokenkick.notifier._notify_ntfy_message",
+        lambda message, *_args, **kwargs: calls.append((message, kwargs)) or True,
+    )
+
+    delivered = notify_quota_constrained_kick(
+        event,
+        _decision(reason=ScheduleReason.QUOTA_CONSTRAINED),
+        NotifyConfig(enabled=True, backend="ntfy", ntfy_topic="topic", policy="errors"),
+    )
+
+    assert delivered is True
+    assert calls[0][1]["title"] == "TokenKick — Check"
+    assert "post-work waste unavoidable" in calls[0][0]
 
 
 def test_notify_reservation_advisory_uses_warning_title(monkeypatch):

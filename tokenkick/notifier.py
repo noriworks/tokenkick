@@ -68,8 +68,6 @@ def notify_quota_constrained_kick(
         return False
     if not event.success:
         return notify_kick(event, config)
-    if _routine_notifications_suppressed(config):
-        return None
     message = _format_quota_constrained_message(event, decision)
     return _notify_raw(message, config, title="TokenKick — Check", priority="default", tags="warning")
 
