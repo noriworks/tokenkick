@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.21.4
+
+- Make Claude session auto-kicks send a real tiny completion before checking
+  `/usage`, instead of treating the read-only usage panel as the kick itself.
+- Force the post-kick `/usage` check past the normal five-minute probe cache
+  and retain valid completion evidence while the provider reset clock catches
+  up.
+
 ## v1.21.3
 
 - Add notification volume control to the interactive TUI, so `errors` versus

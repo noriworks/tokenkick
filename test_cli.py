@@ -8372,7 +8372,7 @@ def test_codex_session_kick_skips_session_exhausted_account():
     assert _status_action(status, {"codex": "codex"}, account) == "Wait for session"
 
 
-def test_claude_session_kick_uses_usage_flow(monkeypatch):
+def test_claude_session_kick_uses_completion_then_usage_verification(monkeypatch):
     account = AccountConfig(
         label="claude",
         provider="claude",
@@ -8403,8 +8403,20 @@ def test_claude_session_kick_uses_usage_flow(monkeypatch):
     recorded = []
     saved = []
     notified = []
+    kick_calls = []
     monkeypatch.setattr("tokenkick.cli.time.time", lambda: 10_000.0)
-    monkeypatch.setattr("tokenkick.cli.kick_account", lambda *_args, **_kwargs: pytest.fail("should use /usage"))
+    monkeypatch.setattr(
+        "tokenkick.cli.kick_account",
+        lambda candidate, **kwargs: kick_calls.append((candidate, kwargs))
+        or KickEvent(
+            label=candidate.label,
+            success=True,
+            confirmed=True,
+            input_tokens=2,
+            output_tokens=3,
+            prompt_text="1+1",
+        ),
+    )
     monkeypatch.setattr("tokenkick.cli._fetch_status", lambda _account, _config=None: post_status)
     monkeypatch.setattr("tokenkick.cli._save_status_cache", lambda *args, **kwargs: saved.append((args, kwargs)))
     monkeypatch.setattr("tokenkick.cli.append_kick_event", lambda event: recorded.append(event))
@@ -8423,7 +8435,18 @@ def test_claude_session_kick_uses_usage_flow(monkeypatch):
     assert event.post_kick_status == "moved"
     assert event.kind == "session"
     assert event.kick_type == "session"
-    assert event.prompt_text == "/usage"
+    assert event.prompt_text == "1+1"
+    assert event.evidence_tokens is True
+    assert kick_calls == [
+        (
+            account,
+            {
+                "record": False,
+                "phantom_recovery": False,
+                "model_override": None,
+            },
+        )
+    ]
     assert recorded == [event]
     assert notified == [event]
     assert saved
@@ -8530,7 +8553,7 @@ def test_kick_and_notify_does_not_send_account_telegram_when_backend_disabled(mo
     assert observed_configs[0].enabled is False
 
 
-def test_claude_session_kick_requires_observed_anchor(monkeypatch):
+def test_claude_session_kick_accepts_completion_evidence_when_usage_lags(monkeypatch):
     account = AccountConfig(
         label="claude",
         provider="claude",
@@ -8552,7 +8575,17 @@ def test_claude_session_kick_requires_observed_anchor(monkeypatch):
     recorded = []
     notified = []
     monkeypatch.setattr("tokenkick.cli.time.time", lambda: 10_000.0)
-    monkeypatch.setattr("tokenkick.cli.kick_account", lambda *_args, **_kwargs: pytest.fail("should use /usage"))
+    monkeypatch.setattr(
+        "tokenkick.cli.kick_account",
+        lambda candidate, **_kwargs: KickEvent(
+            label=candidate.label,
+            success=True,
+            confirmed=True,
+            input_tokens=2,
+            output_tokens=3,
+            prompt_text="1+1",
+        ),
+    )
     monkeypatch.setattr("tokenkick.cli._fetch_status", lambda _account, _config=None: post_status)
     monkeypatch.setattr("tokenkick.cli._save_status_cache", lambda *_args, **_kwargs: None)
     monkeypatch.setattr("tokenkick.cli.append_kick_event", lambda event: recorded.append(event))
@@ -8566,17 +8599,18 @@ def test_claude_session_kick_requires_observed_anchor(monkeypatch):
     )
 
     assert event.success is True
-    assert event.confirmed is False
+    assert event.confirmed is True
     assert event.evidence_provider_moved is False
-    assert event.post_kick_status == "unchanged"
-    assert event.error == "Claude /usage completed, but session anchor was not observed"
+    assert event.evidence_tokens is True
+    assert event.post_kick_status == "provider_accepted"
+    assert event.error is None
     assert event.kind == "session"
     assert event.kick_type == "session"
     assert recorded == [event]
     assert notified == [event]
 
 
-def test_claude_session_kick_rejects_non_direct_fallback(monkeypatch):
+def test_claude_session_kick_keeps_completion_confirmation_on_non_direct_fallback(monkeypatch):
     account = AccountConfig(
         label="claude",
         provider="claude",
@@ -8601,6 +8635,17 @@ def test_claude_session_kick_rejects_non_direct_fallback(monkeypatch):
         source_detail="claude-codexbar-fallback",
     )
     recorded = []
+    monkeypatch.setattr(
+        "tokenkick.cli.kick_account",
+        lambda candidate, **_kwargs: KickEvent(
+            label=candidate.label,
+            success=True,
+            confirmed=True,
+            input_tokens=2,
+            output_tokens=3,
+            prompt_text="1+1",
+        ),
+    )
     monkeypatch.setattr("tokenkick.cli._fetch_status", lambda _account, _config=None: fallback_status)
     monkeypatch.setattr("tokenkick.cli.append_kick_event", lambda event: recorded.append(event))
     monkeypatch.setattr("tokenkick.cli.notify_kick", lambda _event, _config: True)
@@ -8613,9 +8658,12 @@ def test_claude_session_kick_rejects_non_direct_fallback(monkeypatch):
         send_notification=False,
     )
 
-    assert event.success is False
-    assert event.confirmed is False
-    assert "non-direct status" in event.error
+    assert event.success is True
+    assert event.confirmed is True
+    assert event.evidence_tokens is True
+    assert event.evidence_provider_moved is False
+    assert event.post_kick_status == "provider_accepted"
+    assert event.error is None
     assert recorded == [event]
 
 
@@ -8673,7 +8721,7 @@ def test_claude_reconciliation_probe_records_tracked_status_touch(monkeypatch):
     assert recorded[0].confirmed is False
     assert recorded[0].evidence_provider_moved is False
     assert recorded[0].post_kick_status == "unchanged"
-    assert recorded[0].error == "Claude /usage completed, but session anchor was not observed"
+    assert recorded[0].error == CLAUDE_SESSION_ANCHOR_NOT_OBSERVED_ERROR
     assert recorded[0].prompt_text == "/usage"
     assert "reconciliation completed" in recorded[0].response_text
     assert notified == []

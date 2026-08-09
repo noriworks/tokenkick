@@ -712,12 +712,14 @@ tk claude direct-usage disable
 Notes:
 
 - Per-account direct-usage controls are under `tk accounts set-direct-usage`.
-- Claude direct `/usage` is not a purely passive read.
+- Claude direct `/usage` reads quota status; it does not anchor a session by
+  itself.
 - Explicit refreshes may use it, but repeated refreshes within 5 minutes reuse
   the recent direct result.
 - Background daemon status refresh avoids silently running `/usage`.
-- When `/usage` is needed to anchor a due Claude session, TokenKick treats it as
-  a tracked session kick with history/logging/notification semantics.
+- Due Claude session kicks send the same tiny completion as other Claude kicks,
+  then force a fresh `/usage` read to verify the reset clock. The completion is
+  tracked with normal history, logging, and notification semantics.
 
 ### Advanced Account Switches
 

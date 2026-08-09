@@ -439,7 +439,7 @@ CODEX_PROVIDER_MOVEMENT_NOT_CONFIRMED_ERROR = (
     "Codex generated output, but provider movement was not confirmed"
 )
 CLAUDE_SESSION_ANCHOR_NOT_OBSERVED_ERROR = (
-    "Claude /usage completed, but session anchor was not observed"
+    "Claude /usage did not show a new session anchor"
 )
 AMBIGUOUS_PHANTOM_KICK_BACKOFF_SECONDS = 40 * 60
 AMBIGUOUS_PHANTOM_KICK_MAX_ATTEMPTS = 2
@@ -4757,6 +4757,7 @@ def _run_kick_attempt(
             config,
             pre_status=pre_status,
             daemon_log=daemon_log,
+            model_override=model_override,
         )
     else:
         kwargs = {
@@ -4975,19 +4976,49 @@ def _kick_claude_usage_session(
     *,
     pre_status: AccountStatus | None = None,
     daemon_log: bool = False,
+    model_override: str | None = None,
 ) -> KickEvent:
-    """Use Claude /usage as an explicit tracked session anchor."""
-    event, status = _run_claude_usage_touch(
+    """Send a tiny Claude completion, then verify the session through /usage."""
+    event = kick_account(
+        account,
+        record=False,
+        phantom_recovery=False,
+        model_override=model_override,
+    )
+    if not event.success:
+        return event
+
+    event.evidence_response = bool(event.response_text)
+    event.evidence_tokens = _event_has_token_usage(event)
+    probe_event, status = _run_claude_usage_touch(
         account,
         config,
         kind="session",
-        kick_type="session",
-        success_response="Claude /usage session anchor completed.",
-        failure_prefix="Claude /usage session kick failed",
+        kick_type="status_probe",
+        success_response="Claude /usage post-kick verification completed.",
+        failure_prefix="Claude /usage post-kick verification failed",
         daemon_log=daemon_log,
+        force=True,
     )
-    if event.success:
-        event = _verify_claude_session_anchor(event, pre_status, status)
+    if not probe_event.success:
+        event.evidence_provider_moved = False
+        if event.evidence_response or event.evidence_tokens:
+            event.confirmed = True
+            event.post_kick_status = "provider_accepted"
+            event.error = None
+        else:
+            event.confirmed = False
+            event.post_kick_status = "unknown"
+            event.error = probe_event.error
+        return event
+
+    event = _verify_claude_session_anchor(event, pre_status, status)
+    if not event.confirmed and (event.evidence_response or event.evidence_tokens):
+        # Claude returned model output, which is direct evidence that the
+        # quota-consuming request ran. The /usage reset clock can lag briefly.
+        event.confirmed = True
+        event.post_kick_status = "provider_accepted"
+        event.error = None
     return event
 
 
@@ -5000,6 +5031,7 @@ def _run_claude_usage_touch(
     success_response: str,
     failure_prefix: str,
     daemon_log: bool = False,
+    force: bool = False,
 ) -> tuple[KickEvent, AccountStatus | None]:
     event_timestamp = time.time()
     probe_account = (
@@ -5008,7 +5040,7 @@ def _run_claude_usage_touch(
         else replace(account, source=DataSource.CLAUDE_DIRECT)
     )
     try:
-        with claude_cli_usage_refresh_allowed():
+        with claude_cli_usage_refresh_allowed(force=force):
             status = _fetch_status(probe_account, config)
     except Exception as exc:
         return KickEvent(

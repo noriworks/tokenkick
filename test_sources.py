@@ -1680,6 +1680,40 @@ def test_claude_direct_recent_success_reuses_cache_without_probe(monkeypatch):
     assert status.used_percent == 12.0
 
 
+def test_claude_direct_forced_refresh_bypasses_recent_probe_cache(monkeypatch):
+    account = _claude_account()
+    context = ClaudeProbeContext(
+        last_direct_probe_at="2026-05-24T10:00:00Z",
+        last_direct_success_at="2026-05-24T10:00:00Z",
+        last_direct_success_status=AccountStatus(
+            label="claude",
+            state=AccountState.ACTIVE,
+            used_percent=12.0,
+            source_detail=CLAUDE_CLI_USAGE_SOURCE_DETAIL,
+        ),
+    )
+    calls = []
+    monkeypatch.setattr("tokenkick.sources.datetime", _FixedDateTime)
+    monkeypatch.setattr("tokenkick.sources.read_claude_identity", lambda: _active_claude_identity())
+    monkeypatch.setattr(
+        "tokenkick.sources._fetch_claude_cli_usage",
+        lambda candidate, probe_context=None: calls.append(candidate.label)
+        or AccountStatus(
+            label=candidate.label,
+            state=AccountState.ACTIVE,
+            used_percent=13.0,
+            source_detail=CLAUDE_CLI_USAGE_SOURCE_DETAIL,
+        ),
+    )
+
+    with claude_cli_usage_refresh_allowed(force=True):
+        status = _fetch_claude_direct(account, claude_probe_context=context)
+
+    assert calls == ["claude"]
+    assert status.source_detail == CLAUDE_CLI_USAGE_SOURCE_DETAIL
+    assert status.used_percent == 13.0
+
+
 def test_claude_direct_recent_failure_reuses_recent_success(monkeypatch):
     account = _claude_account()
     context = ClaudeProbeContext(

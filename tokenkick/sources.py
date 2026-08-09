@@ -161,6 +161,10 @@ def _claude_cli_usage_refresh_allowed() -> bool:
     return bool(getattr(_CLAUDE_CLI_USAGE_REFRESH_STATE, "allowed", False))
 
 
+def _claude_cli_usage_force_refresh() -> bool:
+    return bool(getattr(_CLAUDE_CLI_USAGE_REFRESH_STATE, "force", False))
+
+
 def _claude_cli_usage_cache() -> AccountStatus | None:
     cached = getattr(_CLAUDE_CLI_USAGE_CACHE_STATE, "status", None)
     return cached if isinstance(cached, AccountStatus) else None
@@ -200,16 +204,19 @@ def polling_pass_cache() -> Iterator[None]:
 
 
 @contextmanager
-def claude_cli_usage_refresh_allowed() -> Iterator[None]:
+def claude_cli_usage_refresh_allowed(*, force: bool = False) -> Iterator[None]:
     """Allow one polling context to spend the low-but-nonzero Claude /usage cost."""
     previous = _claude_cli_usage_refresh_allowed()
+    previous_force = _claude_cli_usage_force_refresh()
     previous_cache = _claude_cli_usage_cache()
     _CLAUDE_CLI_USAGE_REFRESH_STATE.allowed = True
+    _CLAUDE_CLI_USAGE_REFRESH_STATE.force = previous_force or force
     _set_claude_cli_usage_cache(None)
     try:
         yield
     finally:
         _CLAUDE_CLI_USAGE_REFRESH_STATE.allowed = previous
+        _CLAUDE_CLI_USAGE_REFRESH_STATE.force = previous_force
         _set_claude_cli_usage_cache(previous_cache)
 
 
@@ -1052,6 +1059,9 @@ def _claude_cli_usage_gate_status(
             error=identity_error.message,
             source_detail=CLAUDE_CLI_USAGE_SOURCE_DETAIL,
         )
+
+    if _claude_cli_usage_force_refresh():
+        return None
 
     last_probe = _parse_claude_probe_time(context.last_direct_probe_at)
     if last_probe is None:

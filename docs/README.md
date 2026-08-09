@@ -515,13 +515,15 @@ Safe diagnostics do not kick or run provider model calls: `tk status`,
 windows: `tk kick`, force kicks, and the hidden `tk codex-surface-test`
 diagnostic.
 
-Claude direct `/usage` refreshes are treated as low-cost but nonzero-cost.
+Claude direct `/usage` refreshes read quota status without anchoring a session.
 TokenKick keeps the default poll interval at 5 minutes and uses cached status
 for routine `tk status`; run `tk status --refresh` when you explicitly want a
 fresh provider read. Repeated explicit refreshes within 5 minutes reuse the
 recent direct `/usage` result. A normal cached status is considered current
 until it is older than `2 x poll_interval`, unless the provider refresh failed
-or the account was explicitly marked stale.
+or the account was explicitly marked stale. A due Claude session auto-kick
+sends a tiny completion first, then bypasses that five-minute cache once to
+verify the new session reset clock.
 
 ## Running as a service
 
