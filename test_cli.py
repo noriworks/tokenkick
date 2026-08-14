@@ -21154,6 +21154,97 @@ def test_interactive_auto_menu_can_enable_all_accounts(monkeypatch):
     assert saved[-1].accounts[1].session_auto_kick is True
 
 
+def test_interactive_auto_menu_disable_selected_includes_hidden_accounts(monkeypatch):
+    import tokenkick.interactive as interactive
+
+    saved: list[Config] = []
+    accounts = [
+        AccountConfig(
+            label="codex",
+            provider="codex",
+            auto_kick=True,
+            weekly_auto_kick=True,
+            session_auto_kick=True,
+        ),
+        AccountConfig(
+            label="codex-spark",
+            provider="codex",
+            visible=False,
+            auto_kick=True,
+            weekly_auto_kick=True,
+            session_auto_kick=True,
+        ),
+    ]
+    selections = iter(
+        ["configure", "auto", "disable_selected", "all", "exit", "exit", "exit"]
+    )
+    checkbox_labels: list[list[str]] = []
+
+    def checkbox(_message, choices, **_kwargs):
+        checkbox_labels.append([choice.name for choice in choices])
+        return ["codex-spark"]
+
+    monkeypatch.setattr(interactive, "_select", lambda *_args, **_kwargs: next(selections))
+    monkeypatch.setattr(interactive, "_checkbox", checkbox)
+    monkeypatch.setattr(interactive, "_confirm", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(interactive, "_print_banner", lambda: None)
+    monkeypatch.setattr("tokenkick.cli.Config.load", lambda: Config(accounts=accounts))
+    monkeypatch.setattr("tokenkick.cli._load_accounts", lambda config: config.accounts)
+    monkeypatch.setattr("tokenkick.cli._load_status_cache", lambda _config: None)
+    monkeypatch.setattr("tokenkick.cli.Config.save", lambda self: saved.append(copy.deepcopy(self)))
+
+    result = CliRunner().invoke(cli, ["menu"])
+
+    assert result.exit_code == 0
+    assert any("codex-spark" in label and "[hidden]" in label for label in checkbox_labels[0])
+    assert saved[-1].accounts[0].auto_kick is True
+    assert saved[-1].accounts[1].auto_kick is False
+    assert saved[-1].accounts[1].weekly_auto_kick is False
+    assert saved[-1].accounts[1].session_auto_kick is False
+
+
+def test_interactive_auto_menu_disable_all_includes_hidden_accounts(monkeypatch):
+    import tokenkick.interactive as interactive
+
+    saved: list[Config] = []
+    accounts = [
+        AccountConfig(
+            label="codex",
+            provider="codex",
+            auto_kick=True,
+            weekly_auto_kick=True,
+            session_auto_kick=True,
+        ),
+        AccountConfig(
+            label="codex-spark",
+            provider="codex",
+            visible=False,
+            auto_kick=True,
+            weekly_auto_kick=True,
+            session_auto_kick=True,
+        ),
+    ]
+    selections = iter(["configure", "auto", "disable_all", "all", "exit", "exit", "exit"])
+    monkeypatch.setattr(interactive, "_select", lambda *_args, **_kwargs: next(selections))
+    monkeypatch.setattr(interactive, "_confirm", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(interactive, "_print_banner", lambda: None)
+    monkeypatch.setattr("tokenkick.cli.Config.load", lambda: Config(accounts=accounts))
+    monkeypatch.setattr("tokenkick.cli._load_accounts", lambda config: config.accounts)
+    monkeypatch.setattr("tokenkick.cli._load_status_cache", lambda _config: None)
+    monkeypatch.setattr("tokenkick.cli.Config.save", lambda self: saved.append(copy.deepcopy(self)))
+
+    result = CliRunner().invoke(cli, ["menu"])
+
+    assert result.exit_code == 0
+    assert len(saved) == 2
+    assert saved[0].accounts[0].auto_kick is False
+    assert saved[0].accounts[0].weekly_auto_kick is False
+    assert saved[0].accounts[0].session_auto_kick is False
+    assert saved[1].accounts[1].auto_kick is False
+    assert saved[1].accounts[1].weekly_auto_kick is False
+    assert saved[1].accounts[1].session_auto_kick is False
+
+
 def test_interactive_auto_menu_enable_all_skips_unusable_accounts(monkeypatch):
     import tokenkick.interactive as interactive
 

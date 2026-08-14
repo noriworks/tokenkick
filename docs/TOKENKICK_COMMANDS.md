@@ -121,6 +121,9 @@ tk daemon --background
 In the TUI, use `Configure -> Auto-kick -> Enable all usable accounts` only
 after reviewing setup/status. That bulk action skips accounts whose current
 status is unknown, stale, auth-expired, or otherwise unhealthy.
+`Disable selected accounts` includes hidden kickable accounts, and
+`Disable all kickable accounts` turns off auto-kick for both visible and hidden
+Codex or Claude accounts.
 For stale duplicate homes, re-auth and run `tk status --refresh`, or disable/hide
 the unwanted entry:
 

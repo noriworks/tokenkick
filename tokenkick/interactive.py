@@ -1247,7 +1247,8 @@ def _auto_menu(ctx: click.Context) -> None:
 
     while True:
         config = Config.load()
-        accounts = [account for account in _load_visible_accounts(config) if account.provider in KICKABLE_PROVIDERS]
+        accounts = [account for account in config.accounts if account.provider in KICKABLE_PROVIDERS]
+        visible_accounts = [account for account in accounts if account.visible]
         status_by_label = _auto_menu_status_by_label(config, cli_module)
         if not accounts:
             click.echo("No kickable accounts found.")
@@ -1257,7 +1258,7 @@ def _auto_menu(ctx: click.Context) -> None:
             [
                 MenuChoice("Show auto-kick status", "status"),
                 MenuChoice("Enable all usable accounts", "enable_all"),
-                MenuChoice("Disable all visible kickable accounts", "disable_all"),
+                MenuChoice("Disable all kickable accounts", "disable_all"),
                 MenuChoice("Enable selected accounts", "enable_selected"),
                 MenuChoice("Disable selected accounts", "disable_selected"),
                 MenuChoice("Back", MENU_EXIT),
@@ -1269,9 +1270,16 @@ def _auto_menu(ctx: click.Context) -> None:
             _invoke(ctx, cli_module.auto_status)
             continue
         if action.endswith("_selected"):
+            selectable_accounts = visible_accounts if action.startswith("enable") else accounts
+            if not selectable_accounts:
+                click.echo("No visible kickable accounts found.")
+                continue
             selected = _checkbox(
                 "Choose account(s)",
-                [*_account_menu_choices(accounts, only_kickable=True), MenuChoice("Back", MENU_EXIT)],
+                [
+                    *_auto_account_menu_choices(selectable_accounts),
+                    MenuChoice("Back", MENU_EXIT),
+                ],
             )
             if not selected:
                 continue
@@ -1279,7 +1287,10 @@ def _auto_menu(ctx: click.Context) -> None:
                 continue
             skipped: list[tuple[AccountConfig, str]] = []
         elif action == "enable_all":
-            usable_accounts, skipped = _usable_auto_enable_accounts(accounts, status_by_label)
+            usable_accounts, skipped = _usable_auto_enable_accounts(
+                visible_accounts,
+                status_by_label,
+            )
             selected = [account.label for account in usable_accounts]
             if not selected:
                 click.echo("No usable accounts found for bulk auto-kick enable.")
@@ -1322,6 +1333,20 @@ def _auto_menu(ctx: click.Context) -> None:
             _invoke(ctx, command, label=label)
         if enabled and action == "enable_all":
             _print_auto_enable_skipped(skipped)
+
+
+def _auto_account_menu_choices(accounts: list[AccountConfig]) -> list[MenuChoice]:
+    choices = _account_menu_choices(accounts, only_kickable=True)
+    account_by_label = {account.label: account for account in accounts}
+    return [
+        MenuChoice(
+            f"{choice.name} "
+            f"[{'visible' if account_by_label[choice.value].visible else 'hidden'}]",
+            choice.value,
+            choice.enabled,
+        )
+        for choice in choices
+    ]
 
 
 def _auto_menu_status_by_label(config: Config, cli_module: Any) -> dict[str, AccountStatus]:
