@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.21.5
+
+- Allow hidden Codex and Claude accounts, including Codex Spark surfaces, to
+  be selected and disabled from the Auto-kick TUI.
+- Make the bulk disable action cover every kickable account while keeping
+  auto-kick enable actions limited to visible accounts.
+
 ## v1.21.4
 
 - Make Claude session auto-kicks send a real tiny completion before checking
