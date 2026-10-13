@@ -145,3 +145,11 @@ unchanged:
 The CI matrix no longer cancels the other Python version after a failure, preserving both
 sets of diagnostics. The local 1.21.6 tag remains an unpublished earlier checkpoint; the final
 verified checkpoint is 1.21.7. No release tag has been pushed.
+
+
+CI's next run passed all 1,395 tests on both Python 3.10 and 3.13 and all 201 bundled Swift
+tests. Its remaining failure was a tooling mismatch: fresh installs selected Ruff 0.17,
+which enabled additional style/modernization checks beyond the audit's Ruff 0.15.20 policy.
+The existing development dependency is now pinned to 0.15.20 for reproducible validation.
+No test assertions or skips changed for this tooling correction; adopting newer lint rules
+is a separate reviewed change.

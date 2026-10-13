@@ -39,7 +39,8 @@ notify = ["httpx"]
 dev = [
     "pytest>=8.0",
     "pytest-cov",
-    "ruff",
+    # Keep the audited lint policy reproducible; upgrade in a reviewed tooling change.
+    "ruff==0.15.20",
 ]
 
 [project.scripts]
