@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.21.10
+
+- Use Antigravity's catalog-selected Low model variant without a redundant
+  `--effort low` flag, which CLI 1.3.3 rejects for those explicit variants.
+  Dynamic Low-only selection and plan-mode diagnostics remain in force.
+
 ## v1.21.9
 
 - Keep Claude's built-in `/usage` command enabled for quota reads while preserving

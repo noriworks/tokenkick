@@ -12318,8 +12318,6 @@ def _run_antigravity_probe_request(
         os.devnull,
         "--model",
         model,
-        "--effort",
-        "low",
         "--mode",
         "plan",
         "--disable-slash-commands",

@@ -26321,18 +26321,25 @@ def test_antigravity_probe_catalog_failure_sends_no_request(monkeypatch):
     assert "catalog unavailable" in result.output
 
 
-def test_antigravity_probe_request_overrides_interactive_effort(monkeypatch):
+@pytest.mark.parametrize("family,model", [
+    ("gemini", "Gemini 3.8 Flash (Low)"),
+    ("claude_gpt", "Claude Sonnet 5.5 (Low)"),
+])
+def test_antigravity_low_model_avoids_incompatible_effort_flag(monkeypatch, family, model):
     from tokenkick.cli import _run_antigravity_probe_request
     calls = []
     def run(command, **kwargs):
         calls.append(command)
+        # CLI 1.3.3 rejects --effort combined with a catalog's explicit Low variant.
+        if "--effort" in command:
+            return SimpleNamespace(returncode=1, stdout="", stderr="--effort is not supported for model")
         return SimpleNamespace(returncode=0, stdout="OK", stderr="")
     monkeypatch.setattr("tokenkick.cli.subprocess.run", run)
-    result = _run_antigravity_probe_request(family="claude_gpt", model="Claude Sonnet 5.5 (Low)", timeout_seconds=30)
+    result = _run_antigravity_probe_request(family=family, model=model, timeout_seconds=30)
     assert result["success"]
     command = calls[0]
-    assert command[command.index("--model") + 1] == "Claude Sonnet 5.5 (Low)"
-    assert command[command.index("--effort") + 1] == "low"
+    assert command[command.index("--model") + 1] == model
+    assert "--effort" not in command
     assert command[command.index("--mode") + 1] == "plan"
     assert command[command.index("--print") + 1] == "Reply with exactly: OK"
     assert "--dangerously-skip-permissions" not in command

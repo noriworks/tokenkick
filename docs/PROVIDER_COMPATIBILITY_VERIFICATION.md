@@ -40,3 +40,20 @@ sdist/wheel builds, bundled runtime startup, and MCP package-resource checks
 passed. Candidate code on Linux returned fresh Claude usage and all four live
 Antigravity quota windows without errors. Public app distribution remains an
 explicitly non-notarized, ad-hoc-signed macOS arm64 beta.
+
+## Antigravity generation follow-up — 1.21.10
+
+The approved native diagnostic returned: `--effort is not supported for model`
+when an explicit catalog `(Low)` model was combined with `--effort low`.
+Remove that redundant flag; the existing selector still requires a Low variant.
+
+Existing test change: `test_antigravity_probe_request_overrides_interactive_effort`
+was renamed to `test_antigravity_low_model_avoids_incompatible_effort_flag` and
+parameterized for Gemini and Claude. Its old assertion incorrectly required a
+flag rejected by the native CLI. The test now models that rejection and checks
+the selected Low model, absence of the incompatible flag, plan mode, bounded
+prompt, and lack of permission bypass. No other test was changed for this patch.
+
+The single approved additional diagnostic was used to capture this error. No
+further native generation was authorized; corrected-command acceptance and
+Antigravity quota anchoring remain unverified live.
