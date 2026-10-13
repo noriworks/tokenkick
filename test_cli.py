@@ -10957,7 +10957,7 @@ def test_background_status_refresh_invokes_cli_module(monkeypatch, tmp_path):
     assert calls[0][0][0] == [
         "/opt/tokenkick/python",
         "-m",
-        "tokenkick.cli",
+        "tokenkick",
         "refresh-cache",
     ]
     assert lock_file.read_text().splitlines()[0] == "4242"
@@ -22603,7 +22603,8 @@ def test_plan_source_labels_are_human_readable():
 
 
 def test_render_plan_uses_compact_human_output(capsys):
-    local_tz = datetime.now().astimezone().tzinfo
+    from zoneinfo import ZoneInfo
+    local_tz = ZoneInfo("Europe/Berlin")
     work_start = datetime(2026, 6, 9, 21, 0, tzinfo=local_tz)
     work_end = datetime(2026, 6, 10, 2, 0, tzinfo=local_tz)
     plan = OrchestrationPlan(

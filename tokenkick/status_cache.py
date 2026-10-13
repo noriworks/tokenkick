@@ -1029,7 +1029,7 @@ def _start_background_status_refresh() -> bool:
         with state_file_lock(_cli().STATUS_CACHE_REFRESH_LOCK_FILE):
             process = subprocess.Popen(
                 ([sys.executable] if getattr(sys, "frozen", False) else
-                 [sys.executable, "-m", "tokenkick.cli"]) + ["refresh-cache"],
+                 [sys.executable, "-m", "tokenkick"]) + ["refresh-cache"],
                 stdin=subprocess.DEVNULL, stdout=stdout, stderr=stderr,
                 start_new_session=True,
                 env={**os.environ, "TK_REFRESH_LOCK_TOKEN": _STATUS_REFRESH_OWNER or ""},

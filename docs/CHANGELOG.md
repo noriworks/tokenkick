@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.23.1
+
+- Fix Python-installed background refresh, which invoked a module without an
+  executable entry point. Add `python -m tokenkick` and use it for child refreshes.
+- Correct release-test portability: use an explicit Berlin timezone for the
+  Berlin rendering fixture and launch the real CLI through the active Python
+  interpreter instead of assuming a repository-local virtual environment.
+- Includes the 1.23.0 feature batch; its Linux verification gate prevented PyPI
+  publication. Existing test assertions are unchanged.
+
 ## v1.23.0
 
 - Add persistent daemon-owned Antigravity Gemini/Claude orchestration with a

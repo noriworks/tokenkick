@@ -92,12 +92,35 @@ def test_real_cli_mcp_propagates_diagnostic_and_pending_errors(tmp_path, monkeyp
     monkeypatch.setenv("HOME", str(tmp_path))
     (tmp_path / ".tokenkick").mkdir()
     (tmp_path / ".tokenkick/config.json").write_text("{bad")
-    core = TokenKickMCPCore(tk_path=str(Path(".venv/bin/tk").resolve()))
-    result = core._run(["app", "doctor"], risk="read_only", app_mode=True)
+    # CI installs into its active interpreter, without a repository-local .venv.
+    core = TokenKickMCPCore(tk_path=sys.executable)
+    result = core._run(["-m", "tokenkick", "app", "doctor"], risk="read_only", app_mode=True)
     assert result["ok"]  # Doctor successfully reports diagnostic failures.
     assert "not valid json" in json.dumps(result).lower()
-    result = core._run(["app", "snapshot"], risk="read_only", app_mode=True)
+    result = core._run(["-m", "tokenkick", "app", "snapshot"], risk="read_only", app_mode=True)
     assert not result["ok"]
+
+
+def test_python_background_refresh_writes_cache_and_releases_lock(tmp_path, monkeypatch):
+    directory = tmp_path / ".tokenkick"
+    directory.mkdir()
+    (directory / "config.json").write_text(json.dumps({
+        "accounts": [{"label": "fixture", "provider": "gemini", "source": "manual"}],
+    }))
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(cli, "CONFIG_DIR", directory)
+    monkeypatch.setattr(cli, "DAEMON_LOG_FILE", directory / "daemon.log")
+    lock = directory / "status-cache-refresh.pid"
+    monkeypatch.setattr(cli, "STATUS_CACHE_REFRESH_LOCK_FILE", lock)
+    assert status_cache._start_background_status_refresh()
+    deadline = time.monotonic() + 15
+    cache = directory / "status-cache.json"
+    while time.monotonic() < deadline:
+        if cache.exists() and not lock.exists():
+            assert json.loads(cache.read_text())
+            return
+        time.sleep(0.05)
+    pytest.fail("Python background refresh did not write its cache and release the lock")
 
 
 def test_mcp_timeout_terminates_owned_descendant(tmp_path):

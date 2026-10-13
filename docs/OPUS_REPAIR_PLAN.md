@@ -135,3 +135,17 @@ checks, exact wheel/sdist metadata, packaged MCP resources, and app/DMG signatur
 and integrity checks. Earlier no-publishing statements describe the pre-release
 verification boundary; they do not supersede this later explicit authorization.
 Deployment and protected backup details are kept in the private operator record.
+
+The initial 1.23.0 tag passed macOS verification but Linux CI found two
+nonportable test fixtures. No PyPI package was published. The forward release
+**1.23.1** corrects `test_cli.py::test_render_plan_uses_compact_human_output` to
+construct Berlin timestamps explicitly, and `test_review_integration.py` to run
+its real child CLI through `sys.executable -m tokenkick`. Both assertions are
+unchanged; no test was skipped or relaxed. The full suite was rerun with `TZ=UTC`.
+The 1.23.0 tag remains immutable.
+
+The executable-module regression also exposed an actual installed-runtime bug:
+`status_cache.py` launched `tokenkick.cli`, which has no module entry point.
+1.23.1 adds `tokenkick/__main__.py` and launches `python -m tokenkick`. The
+existing command-construction test now expects that entry point; a new real
+background-child test requires a written cache and removal of its owned lock.
