@@ -5,6 +5,7 @@ import copy
 import io
 import os
 import signal
+import time
 import subprocess
 from contextlib import nullcontext
 from dataclasses import replace
@@ -432,7 +433,7 @@ def test_codex_direct_discovery_ignores_retired_spark_bucket(monkeypatch, tmp_pa
     )
     monkeypatch.setattr(
         "tokenkick.cli.fetch_status",
-        lambda account: AccountStatus(label=account.label, state=AccountState.ACTIVE),
+        lambda account, **_options: AccountStatus(label=account.label, state=AccountState.ACTIVE),
     )
     monkeypatch.setattr(
         "tokenkick.discovery.codex_appserver_bucket_metadata",
@@ -478,7 +479,7 @@ def test_codex_direct_discovery_skips_spark_sibling_when_bucket_absent(monkeypat
     )
     monkeypatch.setattr(
         "tokenkick.cli.fetch_status",
-        lambda account: AccountStatus(label=account.label, state=AccountState.ACTIVE),
+        lambda account, **_options: AccountStatus(label=account.label, state=AccountState.ACTIVE),
     )
     monkeypatch.setattr(
         "tokenkick.discovery.codex_appserver_bucket_metadata",
@@ -1845,7 +1846,7 @@ def test_reset_log_ack_json_output(monkeypatch, tmp_path):
     assert latest["message"] == "No matching unacknowledged reset events."
 
     invalid_result = CliRunner().invoke(cli, ["reset-log", "ack", "--json-output"])
-    assert invalid_result.exit_code == 0
+    assert invalid_result.exit_code == 2
     invalid = json.loads(invalid_result.output)
     assert invalid["ok"] is False
     assert invalid["error_code"] == "reset_log_ack_invalid"
@@ -2261,7 +2262,7 @@ def test_history_details_marks_codex_command_only_as_attempted():
 def test_discover_accounts_from_codexbar(monkeypatch):
     monkeypatch.setattr("tokenkick.cli.shutil.which", lambda name: "/opt/homebrew/bin/codexbar")
     monkeypatch.setattr("tokenkick.cli.time.time", lambda: 1_779_000_000)
-    monkeypatch.setattr("tokenkick.cli._discover_direct_accounts", lambda: ([], []))
+    monkeypatch.setattr("tokenkick.cli._discover_direct_accounts", lambda _config=None, **_options: ([], []))
     monkeypatch.setattr("tokenkick.cli._discover_codex_session_accounts", lambda: ([], []))
     monkeypatch.setattr(
         "tokenkick.codexbar_source.subprocess.run",
@@ -2288,7 +2289,7 @@ def test_discover_accounts_from_codexbar(monkeypatch):
 def test_discover_uses_codexbar_all_accounts_and_skips_sessions(monkeypatch):
     monkeypatch.setattr("tokenkick.cli.shutil.which", lambda name: "/opt/homebrew/bin/codexbar")
     monkeypatch.setattr("tokenkick.sources.time.time", lambda: 1_779_000_000)
-    monkeypatch.setattr("tokenkick.cli._discover_direct_accounts", lambda: ([], []))
+    monkeypatch.setattr("tokenkick.cli._discover_direct_accounts", lambda _config=None, **_options: ([], []))
 
     all_accounts_payload = [
         {
@@ -2429,7 +2430,7 @@ def test_discover_codex_session_accounts_reads_primary_and_managed_homes(tmp_pat
     monkeypatch.setattr("tokenkick.cli.Path.home", lambda: home)
     monkeypatch.setattr(
         "tokenkick.cli.fetch_status",
-        lambda account: AccountStatus(
+        lambda account, **_options: AccountStatus(
             label=account.label,
             state=AccountState.ACTIVE,
             used_percent=12.0,
@@ -2500,7 +2501,7 @@ def test_discover_direct_accounts_reads_codex_and_claude_identity(tmp_path, monk
     monkeypatch.setattr("tokenkick.cli.Path.home", lambda: home)
     monkeypatch.setattr(
         "tokenkick.cli.fetch_status",
-        lambda account: AccountStatus(label=account.label, state=AccountState.ACTIVE),
+        lambda account, **_options: AccountStatus(label=account.label, state=AccountState.ACTIVE),
     )
 
     accounts, statuses = _discover_direct_accounts()
@@ -2531,7 +2532,7 @@ def test_discover_direct_accounts_reads_antigravity_cli_identity(tmp_path, monke
     monkeypatch.setattr("tokenkick.discovery.antigravity_cli_app_dir", lambda: app_dir)
     monkeypatch.setattr(
         "tokenkick.cli.fetch_status",
-        lambda account: AccountStatus(label=account.label, state=AccountState.UNKNOWN),
+        lambda account, **_options: AccountStatus(label=account.label, state=AccountState.UNKNOWN),
     )
 
     accounts, statuses = _discover_direct_accounts()
@@ -2557,7 +2558,7 @@ def test_discover_direct_accounts_adds_antigravity_cli_without_identity(tmp_path
     monkeypatch.setattr("tokenkick.discovery.antigravity_cli_app_dir", lambda: app_dir)
     monkeypatch.setattr(
         "tokenkick.cli.fetch_status",
-        lambda account: AccountStatus(label=account.label, state=AccountState.UNKNOWN),
+        lambda account, **_options: AccountStatus(label=account.label, state=AccountState.UNKNOWN),
     )
 
     accounts, statuses = _discover_direct_accounts()
@@ -2631,7 +2632,7 @@ def test_discover_direct_accounts_reads_tokenkick_managed_codex_homes(tmp_path, 
     monkeypatch.setattr("tokenkick.discovery.codex_appserver_bucket_metadata", lambda _home: [])
     monkeypatch.setattr(
         "tokenkick.cli.fetch_status",
-        lambda account: AccountStatus(label=account.label, state=AccountState.ACTIVE),
+        lambda account, **_options: AccountStatus(label=account.label, state=AccountState.ACTIVE),
     )
 
     accounts, statuses = _discover_direct_accounts()
@@ -2669,7 +2670,7 @@ def test_discover_direct_accounts_prepares_claude_setup(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(
         "tokenkick.cli.fetch_status",
-        lambda account: AccountStatus(label=account.label, state=AccountState.ACTIVE),
+        lambda account, **_options: AccountStatus(label=account.label, state=AccountState.ACTIVE),
     )
 
     accounts, _statuses = _discover_direct_accounts(prepare_claude_setup=True)
@@ -2745,7 +2746,7 @@ def test_configured_managed_codex_home_keeps_exact_status_when_primary_same_emai
 
     monkeypatch.setattr(
         "tokenkick.cli._discover_accounts_and_statuses",
-        lambda: (
+        lambda _config=None, **_options: (
             [primary, managed],
             [primary_status, managed_status],
             "Found 2 accounts via auto-discovery: codex.",
@@ -2870,6 +2871,7 @@ def test_codex_home_identity_repair_rebinds_primary_to_matching_managed_home(
         return None
 
     monkeypatch.setattr("tokenkick.cli.read_codex_identity", fake_identity)
+    monkeypatch.setattr("tokenkick.migrations.read_codex_identity", fake_identity)
     account = AccountConfig(
         label="codex (secondary)",
         provider="codex",
@@ -2983,7 +2985,7 @@ def test_v04_direct_source_migration_runs_once_and_writes_backup(tmp_path, monke
     )
     calls = 0
 
-    def discover_direct():
+    def discover_direct(_config=None, **_options):
         nonlocal calls
         calls += 1
         duplicate = replace(direct, label="dev-duplicate", session_path="/tmp/dev/other-sessions")
@@ -3047,7 +3049,7 @@ def test_v04_direct_source_migration_prunes_old_cache_entries(tmp_path, monkeypa
     )
     monkeypatch.setattr(
         "tokenkick.cli._discover_direct_accounts",
-        lambda: (
+        lambda _config=None, **_options: (
             [direct_account],
             [
                 AccountStatus(
@@ -3257,7 +3259,7 @@ def test_status_json_after_provider_first_migration_uses_new_label(
             )
         },
     )
-    monkeypatch.setattr("tokenkick.cli._discover_direct_accounts", lambda: ([], []))
+    monkeypatch.setattr("tokenkick.cli._discover_direct_accounts", lambda _config=None, **_options: ([], []))
 
     result = CliRunner().invoke(cli, ["status", "--json-output"])
 
@@ -3459,10 +3461,10 @@ def test_status_outputs_use_live_source_when_cache_key_is_misaligned(tmp_path, m
             source_detail="codexbar-history",
         )
     ]
-    monkeypatch.setattr("tokenkick.cli._discover_direct_accounts", lambda: ([], []))
+    monkeypatch.setattr("tokenkick.cli._discover_direct_accounts", lambda _config=None, **_options: ([], []))
     monkeypatch.setattr(
         "tokenkick.cli._discover_accounts_and_statuses",
-        lambda: (accounts, live_statuses, "Found 7 accounts via test discovery: codex."),
+        lambda _config=None, **_options: (accounts, live_statuses, "Found 7 accounts via test discovery: codex."),
     )
 
     captured: dict[str, str | None] = {}
@@ -3542,11 +3544,11 @@ def test_status_cache_miss_rechecks_and_migrates_working_appserver_direct(
     )
     monkeypatch.setattr(
         "tokenkick.cli._discover_direct_accounts",
-        lambda: ([direct_account], [direct_status]),
+        lambda _config=None, **_options: ([direct_account], [direct_status]),
     )
     monkeypatch.setattr(
         "tokenkick.cli._discover_accounts_and_statuses",
-        lambda: pytest.fail("status should reuse cache after v0.4.x recheck migration"),
+        lambda _config=None, **_options: pytest.fail("status should reuse cache after v0.4.x recheck migration"),
     )
 
     result = CliRunner().invoke(cli, ["status", "--json-output"])
@@ -3578,7 +3580,7 @@ def test_v04_direct_source_migration_leaves_unmatched_accounts(tmp_path, monkeyp
     )
     monkeypatch.setattr(
         "tokenkick.cli._discover_direct_accounts",
-        lambda: ([direct_account], [AccountStatus(label="other", state=AccountState.ACTIVE)]),
+        lambda _config=None, **_options: ([direct_account], [AccountStatus(label="other", state=AccountState.ACTIVE)]),
     )
 
     migrated = _migrate_v04_direct_sources_if_needed(Config.load(), emit_notice=False)
@@ -3608,7 +3610,7 @@ def test_v04_direct_source_migration_skips_unreadable_codex_direct(tmp_path, mon
     )
     monkeypatch.setattr(
         "tokenkick.cli._discover_direct_accounts",
-        lambda: (
+        lambda _config=None, **_options: (
             [direct_account],
             [
                 AccountStatus(
@@ -3645,7 +3647,7 @@ def test_unreadable_codex_direct_duplicate_is_not_surfaced_as_new_account(monkey
     )
     monkeypatch.setattr(
         "tokenkick.cli._discover_accounts_and_statuses",
-        lambda: (
+        lambda _config=None, **_options: (
             [legacy_account, direct_account],
             [
                 AccountStatus(
@@ -3702,7 +3704,7 @@ def test_v04_direct_source_migration_rechecks_skipped_codex_on_refresh(
     )
     monkeypatch.setattr(
         "tokenkick.cli._discover_direct_accounts",
-        lambda: ([direct_account], [status]),
+        lambda _config=None, **_options: ([direct_account], [status]),
     )
 
     first_pass = _migrate_v04_direct_sources_if_needed(Config.load(), emit_notice=False)
@@ -3746,7 +3748,7 @@ def test_v04_direct_source_migration_rechecks_skipped_codex_with_working_appserv
     )
     monkeypatch.setattr(
         "tokenkick.cli._discover_direct_accounts",
-        lambda: (
+        lambda _config=None, **_options: (
             [direct_account],
             [
                 AccountStatus(
@@ -3797,7 +3799,7 @@ def test_v04_direct_source_migration_does_not_count_codexbar_fallback_as_direct(
     )
     monkeypatch.setattr(
         "tokenkick.cli._discover_direct_accounts",
-        lambda: (
+        lambda _config=None, **_options: (
             [direct_account],
             [
                 AccountStatus(
@@ -3877,7 +3879,7 @@ def test_v04x_provider_usage_recheck_upgrades_skipped_codex_with_distinct_notice
     )
     monkeypatch.setattr(
         "tokenkick.cli._discover_direct_accounts",
-        lambda: (
+        lambda _config=None, **_options: (
             [direct_account],
             [
                 AccountStatus(
@@ -3928,7 +3930,7 @@ def test_status_json_preserves_migrated_claude_saved_label(tmp_path, monkeypatch
     )
     monkeypatch.setattr(
         "tokenkick.cli._discover_direct_accounts",
-        lambda: (
+        lambda _config=None, **_options: (
             [claude_direct],
             [
                 AccountStatus(
@@ -3984,7 +3986,7 @@ def test_status_json_auto_migration_uses_direct_source_details(tmp_path, monkeyp
         identity_org_id="claude-org",
     )
 
-    def discover_direct():
+    def discover_direct(_config=None, **_options):
         return (
             [codex_direct, claude_direct],
             [
@@ -4040,7 +4042,7 @@ def test_claude_direct_migration_requires_cli_usage(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(
         "tokenkick.cli._discover_direct_accounts",
-        lambda: (
+        lambda _config=None, **_options: (
             [claude_direct],
             [
                 AccountStatus(
@@ -4111,6 +4113,7 @@ def test_status_json_claude_direct_without_codexbar_shows_unknown_explanation(
 
 def test_status_json_routine_does_not_run_claude_usage_without_cache(tmp_path, monkeypatch):
     _config_file, _backup_file, _cache_file = _isolate_config_files(monkeypatch, tmp_path)
+    monkeypatch.setattr("tokenkick.sources.read_claude_identity", lambda: DirectIdentity("claude", provider_account_id="claude-account", organization_id="claude-org"))
     Config(
         accounts=[
             AccountConfig(
@@ -4122,7 +4125,7 @@ def test_status_json_routine_does_not_run_claude_usage_without_cache(tmp_path, m
             )
         ]
     ).save()
-    monkeypatch.setattr("tokenkick.cli._discover_accounts_and_statuses", lambda: ([], [], "No accounts found."))
+    monkeypatch.setattr("tokenkick.cli._discover_accounts_and_statuses", lambda _config=None, **_options: ([], [], "No accounts found."))
     monkeypatch.setattr(
         "tokenkick.sources._capture_claude_usage",
         lambda _binary: pytest.fail("routine status must not run Claude /usage"),
@@ -4157,7 +4160,7 @@ def test_status_refresh_can_run_claude_usage(tmp_path, monkeypatch):
         ]
     ).save()
     calls = []
-    monkeypatch.setattr("tokenkick.cli._discover_accounts_and_statuses", lambda: ([], [], "No accounts found."))
+    monkeypatch.setattr("tokenkick.cli._discover_accounts_and_statuses", lambda _config=None, **_options: ([], [], "No accounts found."))
     monkeypatch.setattr("tokenkick.sources.shutil.which", lambda _name: "/usr/bin/claude")
     monkeypatch.setattr(
         "tokenkick.sources.read_claude_identity",
@@ -4188,6 +4191,7 @@ def test_status_refresh_can_run_claude_usage(tmp_path, monkeypatch):
 
 def test_background_status_refresh_does_not_run_claude_usage(tmp_path, monkeypatch):
     _config_file, _backup_file, _cache_file = _isolate_config_files(monkeypatch, tmp_path)
+    monkeypatch.setattr("tokenkick.sources.read_claude_identity", lambda: DirectIdentity("claude", provider_account_id="claude-account", organization_id="claude-org"))
     account = AccountConfig(
         label="claude",
         provider="claude",
@@ -4621,7 +4625,7 @@ def test_status_summary_lists_only_fresh_kickable_accounts(monkeypatch):
     monkeypatch.setattr("tokenkick.cli.Config.load", lambda: Config())
     monkeypatch.setattr(
         "tokenkick.cli._discover_accounts_and_statuses",
-        lambda: (
+        lambda _config=None, **_options: (
             [],
             [
                 AccountStatus(label="shared (codex)", state=AccountState.FRESH),
@@ -4650,7 +4654,7 @@ def test_status_summary_excludes_session_cooldown_accounts(monkeypatch):
     monkeypatch.setattr("tokenkick.cli.Config.load", lambda: Config())
     monkeypatch.setattr(
         "tokenkick.cli._discover_accounts_and_statuses",
-        lambda: (
+        lambda _config=None, **_options: (
             [
                 AccountConfig(label="deferred", provider="codex"),
                 AccountConfig(label="ready", provider="codex"),
@@ -4690,7 +4694,7 @@ def test_status_summary_lists_session_ready_as_kick_ready(monkeypatch):
     monkeypatch.setattr("tokenkick.cli.Config.load", lambda: Config())
     monkeypatch.setattr(
         "tokenkick.cli._discover_accounts_and_statuses",
-        lambda: ([account], [status], "Found 1 account via auto-discovery: codex."),
+        lambda _config=None, **_options: ([account], [status], "Found 1 account via auto-discovery: codex."),
     )
 
     result = CliRunner().invoke(cli, ["status"])
@@ -4716,7 +4720,7 @@ def test_status_summary_suggests_session_auto_enable_when_manual_session_ready(m
     monkeypatch.setattr("tokenkick.cli.Config.load", lambda: Config())
     monkeypatch.setattr(
         "tokenkick.cli._discover_accounts_and_statuses",
-        lambda: ([account], [status], "Found 1 account via auto-discovery: codex."),
+        lambda _config=None, **_options: ([account], [status], "Found 1 account via auto-discovery: codex."),
     )
 
     result = CliRunner().invoke(cli, ["status"])
@@ -5078,7 +5082,7 @@ def test_antigravity_probe_kick_proved_and_stores_sanitized_evidence(tmp_path, m
     monkeypatch.setattr("tokenkick.cli.Config.load", lambda: Config(accounts=[account]))
     monkeypatch.setattr("tokenkick.cli._load_accounts", lambda config: [account])
     monkeypatch.setattr("tokenkick.cli.read_antigravity_cli_identity", lambda: "dev@example.test")
-    monkeypatch.setattr("tokenkick.cli.fetch_status", lambda _account: statuses.pop(0))
+    monkeypatch.setattr("tokenkick.cli.fetch_status", lambda _account, **_options: statuses.pop(0))
     monkeypatch.setattr(
         "tokenkick.cli._run_antigravity_probe_request",
         lambda **_kwargs: {
@@ -5143,7 +5147,7 @@ def test_antigravity_probe_kick_claude_gpt_json_output(monkeypatch):
     monkeypatch.setattr("tokenkick.cli.Config.load", lambda: Config(accounts=[account]))
     monkeypatch.setattr("tokenkick.cli._load_accounts", lambda config: [account])
     monkeypatch.setattr("tokenkick.cli.read_antigravity_cli_identity", lambda: "dev@example.test")
-    monkeypatch.setattr("tokenkick.cli.fetch_status", lambda _account: statuses.pop(0))
+    monkeypatch.setattr("tokenkick.cli.fetch_status", lambda _account, **_options: statuses.pop(0))
     monkeypatch.setattr("tokenkick.cli._append_antigravity_probe_evidence", lambda _report: None)
     monkeypatch.setattr(
         "tokenkick.cli._run_antigravity_probe_request",
@@ -5200,7 +5204,7 @@ def test_antigravity_probe_kick_allows_anonymous_cli_account(tmp_path, monkeypat
     monkeypatch.setattr("tokenkick.cli.Config.load", lambda: Config(accounts=[account]))
     monkeypatch.setattr("tokenkick.cli._load_accounts", lambda config: [account])
     monkeypatch.setattr("tokenkick.cli.read_antigravity_cli_identity", lambda: None)
-    monkeypatch.setattr("tokenkick.cli.fetch_status", lambda _account: statuses.pop(0))
+    monkeypatch.setattr("tokenkick.cli.fetch_status", lambda _account, **_options: statuses.pop(0))
     monkeypatch.setattr(
         "tokenkick.cli._run_antigravity_probe_request",
         lambda **_kwargs: {
@@ -5237,7 +5241,7 @@ def test_antigravity_probe_kick_fails_configured_account_without_verified_identi
     monkeypatch.setattr("tokenkick.cli.read_antigravity_cli_identity", lambda: None)
     monkeypatch.setattr(
         "tokenkick.cli.fetch_status",
-        lambda _account: pytest.fail("quota read must not run without identity"),
+        lambda _account, **_options: pytest.fail("quota read must not run without identity"),
     )
     monkeypatch.setattr(
         "tokenkick.cli._run_antigravity_probe_request",
@@ -5260,7 +5264,7 @@ def test_antigravity_probe_kick_fails_closed_on_incomplete_buckets(monkeypatch):
     monkeypatch.setattr("tokenkick.cli.read_antigravity_cli_identity", lambda: "dev@example.test")
     monkeypatch.setattr(
         "tokenkick.cli.fetch_status",
-        lambda _account: _antigravity_status_with_windows(windows=_antigravity_quota_windows()[:-1]),
+        lambda _account, **_options: _antigravity_status_with_windows(windows=_antigravity_quota_windows()[:-1]),
     )
     monkeypatch.setattr(
         "tokenkick.cli._run_antigravity_probe_request",
@@ -5286,7 +5290,7 @@ def test_antigravity_probe_kick_failed_request_saves_failed_evidence(tmp_path, m
     monkeypatch.setattr("tokenkick.cli.Config.load", lambda: Config(accounts=[account]))
     monkeypatch.setattr("tokenkick.cli._load_accounts", lambda config: [account])
     monkeypatch.setattr("tokenkick.cli.read_antigravity_cli_identity", lambda: "dev@example.test")
-    monkeypatch.setattr("tokenkick.cli.fetch_status", lambda _account: statuses.pop(0))
+    monkeypatch.setattr("tokenkick.cli.fetch_status", lambda _account, **_options: statuses.pop(0))
     monkeypatch.setattr(
         "tokenkick.cli._run_antigravity_probe_request",
         lambda **_kwargs: {
@@ -6621,10 +6625,10 @@ def test_status_surfaces_dormant_wake_hint_once_until_state_changes(monkeypatch,
     assert second.exit_code == 0
     assert cleared.exit_code == 0
     assert third.exit_code == 0
-    assert 'Run `tk wake "codex (work)"` to bootstrap it.' in first.output
-    assert 'Run `tk wake "codex (work)"` to bootstrap it.' not in second.output
-    assert 'Run `tk wake "codex (work)"` to bootstrap it.' in third.output
-    assert notifications == ["codex (work)", "codex (work)"]
+    assert "is dormant" in first.output
+    assert "is dormant" in second.output
+    assert "is dormant" in third.output
+    assert notifications == []  # rendering has no external side effects
 
 
 def test_status_summary_excludes_phantom_confirmed_session_cooldown(monkeypatch, tmp_path):
@@ -7067,7 +7071,7 @@ def test_status_json_output_is_sorted_by_actionability(monkeypatch):
     monkeypatch.setattr("tokenkick.cli.Config.load", lambda: Config())
     monkeypatch.setattr(
         "tokenkick.cli._discover_accounts_and_statuses",
-        lambda: (
+        lambda _config=None, **_options: (
             accounts,
             [
                 AccountStatus(label="unknown", state=AccountState.UNKNOWN),
@@ -7100,7 +7104,7 @@ def test_status_hides_hidden_accounts_by_default_and_all_shows_them(monkeypatch)
     monkeypatch.setattr("tokenkick.cli.Config.load", lambda: Config(accounts=accounts))
     monkeypatch.setattr(
         "tokenkick.cli._discover_accounts_and_statuses",
-        lambda: (accounts, statuses, "Found 2 accounts via auto-discovery: codex."),
+        lambda _config=None, **_options: (accounts, statuses, "Found 2 accounts via auto-discovery: codex."),
     )
 
     default = CliRunner().invoke(cli, ["status", "--json-output"])
@@ -7140,7 +7144,7 @@ def test_status_codex_filter_hides_non_codex_table_rows(monkeypatch):
     monkeypatch.setattr("tokenkick.cli.Config.load", lambda: Config())
     monkeypatch.setattr(
         "tokenkick.cli._discover_accounts_and_statuses",
-        lambda: (
+        lambda _config=None, **_options: (
             accounts,
             [
                 AccountStatus(label="codex", state=AccountState.ACTIVE),
@@ -7166,7 +7170,7 @@ def test_status_codex_filter_applies_to_json_output(monkeypatch):
     monkeypatch.setattr("tokenkick.cli.Config.load", lambda: Config())
     monkeypatch.setattr(
         "tokenkick.cli._discover_accounts_and_statuses",
-        lambda: (
+        lambda _config=None, **_options: (
             accounts,
             [
                 AccountStatus(label="codex", state=AccountState.ACTIVE),
@@ -7187,7 +7191,7 @@ def test_status_auto_discovers_when_config_has_no_accounts(monkeypatch):
     monkeypatch.setattr("tokenkick.cli.Config.load", lambda: Config())
     monkeypatch.setattr(
         "tokenkick.cli._discover_accounts_and_statuses",
-        lambda: (
+        lambda _config=None, **_options: (
             [],
             [
                 AccountStatus(
@@ -7222,7 +7226,9 @@ def test_status_json_wrapper_present_with_zero_accounts(monkeypatch):
 
     assert result.exit_code == 0
     data = _status_json_payload(result.output)
-    assert data == {
+    assert data["stagger"]["recurring"] is True
+    assert data["stagger"]["enabled"] is False
+    assert {k: v for k, v in data.items() if k != "stagger"} == {
         "cached": False,
         "cached_at": None,
         "refresh_error": None,
@@ -7430,7 +7436,7 @@ def test_status_refresh_codex_direct_failure_flows_through_codexbar_fallback(
     )
 
     monkeypatch.setattr("tokenkick.cli.Config.load", lambda: Config(accounts=[account]))
-    monkeypatch.setattr("tokenkick.cli._discover_accounts_and_statuses", lambda: ([], [], "none"))
+    monkeypatch.setattr("tokenkick.cli._discover_accounts_and_statuses", lambda _config=None, **_options: ([], [], "none"))
     monkeypatch.setattr("tokenkick.cli._prune_phantom_session_observations_for_accounts", lambda _accounts: None)
     monkeypatch.setattr(
         "tokenkick.sources.read_codex_identity",
@@ -8403,6 +8409,8 @@ def test_claude_session_kick_uses_completion_then_usage_verification(monkeypatch
         session_window_minutes=300,
         source_detail="claude-cli-usage",
     )
+    pre_status.session_resets_at = 9_990
+    post_status.session_resets_at = 27_880
     recorded = []
     saved = []
     notified = []
@@ -8420,6 +8428,7 @@ def test_claude_session_kick_uses_completion_then_usage_verification(monkeypatch
             prompt_text="1+1",
         ),
     )
+    post_status._claude_probe_context = ClaudeProbeContext(direct_probe_performed=True)
     monkeypatch.setattr("tokenkick.cli._fetch_status", lambda _account, _config=None: post_status)
     monkeypatch.setattr("tokenkick.cli._save_status_cache", lambda *args, **kwargs: saved.append((args, kwargs)))
     monkeypatch.setattr("tokenkick.cli.append_kick_event", lambda event: recorded.append(event))
@@ -8589,6 +8598,7 @@ def test_claude_session_kick_accepts_completion_evidence_when_usage_lags(monkeyp
             prompt_text="1+1",
         ),
     )
+    post_status._claude_probe_context = ClaudeProbeContext(direct_probe_performed=True)
     monkeypatch.setattr("tokenkick.cli._fetch_status", lambda _account, _config=None: post_status)
     monkeypatch.setattr("tokenkick.cli._save_status_cache", lambda *_args, **_kwargs: None)
     monkeypatch.setattr("tokenkick.cli.append_kick_event", lambda event: recorded.append(event))
@@ -8602,11 +8612,11 @@ def test_claude_session_kick_accepts_completion_evidence_when_usage_lags(monkeyp
     )
 
     assert event.success is True
-    assert event.confirmed is True
+    assert event.confirmed is False
     assert event.evidence_provider_moved is False
     assert event.evidence_tokens is True
     assert event.post_kick_status == "provider_accepted"
-    assert event.error is None
+    assert "anchor unverified" in event.error
     assert event.kind == "session"
     assert event.kick_type == "session"
     assert recorded == [event]
@@ -8662,11 +8672,11 @@ def test_claude_session_kick_keeps_completion_confirmation_on_non_direct_fallbac
     )
 
     assert event.success is True
-    assert event.confirmed is True
+    assert event.confirmed is False
     assert event.evidence_tokens is True
     assert event.evidence_provider_moved is False
     assert event.post_kick_status == "provider_accepted"
-    assert event.error is None
+    assert "anchor unverified" in event.error
     assert recorded == [event]
 
 
@@ -8706,6 +8716,7 @@ def test_claude_reconciliation_probe_records_tracked_status_touch(monkeypatch):
     recorded = []
     notified = []
     monkeypatch.setattr("tokenkick.cli._status_cache_now", lambda: datetime(2026, 5, 28, 12, 1, tzinfo=timezone.utc))
+    fresh_status._claude_probe_context = ClaudeProbeContext(direct_probe_performed=True)
     monkeypatch.setattr("tokenkick.cli._fetch_status", lambda _account, _config=None: fresh_status)
     monkeypatch.setattr("tokenkick.cli._save_status_cache", lambda *_args, **_kwargs: None)
     monkeypatch.setattr("tokenkick.cli.append_kick_event", lambda event: recorded.append(event))
@@ -8761,6 +8772,7 @@ def test_claude_reconciliation_probe_notifies_when_session_jumps(monkeypatch):
     recorded = []
     notified = []
     monkeypatch.setattr("tokenkick.cli._status_cache_now", lambda: datetime(2026, 5, 28, 12, 1, tzinfo=timezone.utc))
+    fresh_status._claude_probe_context = ClaudeProbeContext(direct_probe_performed=True)
     monkeypatch.setattr("tokenkick.cli._fetch_status", lambda _account, _config=None: fresh_status)
     monkeypatch.setattr("tokenkick.cli._save_status_cache", lambda *_args, **_kwargs: None)
     monkeypatch.setattr("tokenkick.cli.append_kick_event", lambda event: recorded.append(event))
@@ -8840,6 +8852,13 @@ def test_claude_usage_touch_persists_direct_success_timestamp(monkeypatch, tmp_p
         source_detail="claude-cli-usage",
     )
     observed_at = "2026-05-30T10:00:00Z"
+    status.observed_at = observed_at
+    status._claude_probe_context = ClaudeProbeContext(
+        direct_probe_performed=True,
+        last_direct_probe_at=observed_at,
+        last_direct_success_at=observed_at,
+        last_direct_success_status=status,
+    )
 
     monkeypatch.setattr("tokenkick.cli.STATUS_CACHE_FILE", tmp_path / "status-cache.json")
     monkeypatch.setattr("tokenkick.cli.CONFIG_DIR", tmp_path)
@@ -9017,7 +9036,7 @@ def test_bare_command_auto_discovers_and_prints_setup_hint(monkeypatch):
     monkeypatch.setattr("tokenkick.cli.Config.load", lambda: Config())
     monkeypatch.setattr(
         "tokenkick.cli._discover_accounts_and_statuses",
-        lambda: (
+        lambda _config=None, **_options: (
             [],
             [
                 AccountStatus(
@@ -9086,11 +9105,11 @@ def test_load_accounts_reads_saved_config_without_live_discovery(monkeypatch):
 
     monkeypatch.setattr(
         "tokenkick.cli._discover_accounts_and_statuses",
-        lambda: (_ for _ in ()).throw(AssertionError("discovery should not run")),
+        lambda _config=None, **_options: (_ for _ in ()).throw(AssertionError("discovery should not run")),
     )
     monkeypatch.setattr(
         "tokenkick.cli.fetch_status",
-        lambda _account: (_ for _ in ()).throw(AssertionError("fetch_status should not run")),
+        lambda _account, **_options: (_ for _ in ()).throw(AssertionError("fetch_status should not run")),
     )
 
     assert _load_accounts(Config(accounts=[account])) == [account]
@@ -9105,11 +9124,11 @@ def test_account_only_commands_do_not_discover_or_fetch_status(monkeypatch):
     monkeypatch.setattr("tokenkick.cli.Config.load", lambda: Config(accounts=accounts))
     monkeypatch.setattr(
         "tokenkick.cli._discover_accounts_and_statuses",
-        lambda: (_ for _ in ()).throw(AssertionError("discovery should not run")),
+        lambda _config=None, **_options: (_ for _ in ()).throw(AssertionError("discovery should not run")),
     )
     monkeypatch.setattr(
         "tokenkick.cli.fetch_status",
-        lambda _account: (_ for _ in ()).throw(AssertionError("fetch_status should not run")),
+        lambda _account, **_options: (_ for _ in ()).throw(AssertionError("fetch_status should not run")),
     )
 
     listed = CliRunner().invoke(cli, ["accounts", "list"])
@@ -9132,11 +9151,11 @@ def test_account_only_mutations_do_not_discover_or_fetch_status(monkeypatch):
     monkeypatch.setattr("tokenkick.cli.Config.save", lambda self: saved.append(copy.deepcopy(self)))
     monkeypatch.setattr(
         "tokenkick.cli._discover_accounts_and_statuses",
-        lambda: (_ for _ in ()).throw(AssertionError("discovery should not run")),
+        lambda _config=None, **_options: (_ for _ in ()).throw(AssertionError("discovery should not run")),
     )
     monkeypatch.setattr(
         "tokenkick.cli.fetch_status",
-        lambda _account: (_ for _ in ()).throw(AssertionError("fetch_status should not run")),
+        lambda _account, **_options: (_ for _ in ()).throw(AssertionError("fetch_status should not run")),
     )
 
     enabled = CliRunner().invoke(cli, ["auto", "enable", "codex"], input="ENABLE\n")
@@ -9152,11 +9171,11 @@ def test_account_only_commands_with_no_saved_accounts_stay_fast(monkeypatch):
     monkeypatch.setattr("tokenkick.cli.Config.load", lambda: Config())
     monkeypatch.setattr(
         "tokenkick.cli._discover_accounts_and_statuses",
-        lambda: (_ for _ in ()).throw(AssertionError("discovery should not run")),
+        lambda _config=None, **_options: (_ for _ in ()).throw(AssertionError("discovery should not run")),
     )
     monkeypatch.setattr(
         "tokenkick.cli.fetch_status",
-        lambda _account: (_ for _ in ()).throw(AssertionError("fetch_status should not run")),
+        lambda _account, **_options: (_ for _ in ()).throw(AssertionError("fetch_status should not run")),
     )
 
     listed = CliRunner().invoke(cli, ["accounts", "list"])
@@ -9690,7 +9709,7 @@ def test_status_cache_footer_labels_claude_passive_refresh_failure(monkeypatch):
     )
 
     assert "claude (work)" in footer
-    assert "passive refresh unavailable; last provider read 22m ago" in footer
+    assert "Claude usage refresh unavailable; showing cached direct data; last provider read 22m ago" in footer
     assert "last refresh failed" not in footer
 
 
@@ -10605,11 +10624,11 @@ def test_status_uses_daemon_cache_without_live_discovery(monkeypatch, tmp_path):
     monkeypatch.setattr("tokenkick.cli.Config.load", lambda: Config(accounts=[account]))
     monkeypatch.setattr(
         "tokenkick.cli._discover_accounts_and_statuses",
-        lambda: (_ for _ in ()).throw(AssertionError("discovery should not run")),
+        lambda _config=None, **_options: (_ for _ in ()).throw(AssertionError("discovery should not run")),
     )
     monkeypatch.setattr(
         "tokenkick.cli.fetch_status",
-        lambda _account: (_ for _ in ()).throw(AssertionError("fetch_status should not run")),
+        lambda _account, **_options: (_ for _ in ()).throw(AssertionError("fetch_status should not run")),
     )
 
     result = CliRunner().invoke(cli, ["status"])
@@ -10660,7 +10679,7 @@ def test_status_refresh_bypasses_daemon_cache(monkeypatch, tmp_path):
     monkeypatch.setattr("tokenkick.cli.Config.load", lambda: Config(accounts=[live_account]))
     monkeypatch.setattr(
         "tokenkick.cli._discover_accounts_and_statuses",
-        lambda: (
+        lambda _config=None, **_options: (
             [live_account],
             [AccountStatus(label="live", state=AccountState.FRESH)],
             "Found 1 account via auto-discovery: codex.",
@@ -10682,7 +10701,7 @@ def test_status_refresh_updates_cache_on_success(monkeypatch, tmp_path):
     monkeypatch.setattr("tokenkick.cli.Config.load", lambda: Config(accounts=[account]))
     monkeypatch.setattr(
         "tokenkick.cli._discover_accounts_and_statuses",
-        lambda: (
+        lambda _config=None, **_options: (
             [account],
             [AccountStatus(label="live", state=AccountState.ACTIVE, used_percent=42.0)],
             "Found 1 account via auto-discovery: codex.",
@@ -10719,7 +10738,7 @@ def test_status_refresh_fetches_saved_accounts_without_discovery(monkeypatch, tm
     monkeypatch.setattr("tokenkick.cli.Config.load", lambda: Config(accounts=[codex, antigravity]))
     monkeypatch.setattr(
         "tokenkick.cli._discover_accounts_and_statuses",
-        lambda: (_ for _ in ()).throw(AssertionError("discovery should not run for saved refresh")),
+        lambda _config=None, **_options: (_ for _ in ()).throw(AssertionError("discovery should not run for saved refresh")),
     )
 
     def fake_fetch(account, _config=None):
@@ -10746,7 +10765,7 @@ def test_status_without_cache_writes_cache_from_live_fetch(monkeypatch, tmp_path
     monkeypatch.setattr("tokenkick.cli.Config.load", lambda: Config(accounts=[account]))
     monkeypatch.setattr(
         "tokenkick.cli._discover_accounts_and_statuses",
-        lambda: (
+        lambda _config=None, **_options: (
             [account],
             [AccountStatus(label="live", state=AccountState.ACTIVE, used_percent=42.0)],
             "Found 1 account via auto-discovery: codex.",
@@ -10785,7 +10804,7 @@ def test_status_stale_cache_starts_background_refresh(monkeypatch, tmp_path):
     monkeypatch.setattr("tokenkick.cli.Config.load", lambda: Config(accounts=[account]))
     monkeypatch.setattr(
         "tokenkick.cli._discover_accounts_and_statuses",
-        lambda: (_ for _ in ()).throw(AssertionError("live discovery should not block cached status")),
+        lambda _config=None, **_options: (_ for _ in ()).throw(AssertionError("live discovery should not block cached status")),
     )
 
     class FakePopen:
@@ -10912,7 +10931,7 @@ def test_status_background_refresh_lock_oserror_fails_closed_with_diagnostic(
 
     assert result.exit_code == 0
     assert calls == []
-    assert "Background refresh lock could not be acquired" in result.output
+    assert "Background refresh lock could not be read" in result.output
     assert "read-only filesystem" in result.output
 
 
@@ -10941,7 +10960,8 @@ def test_background_status_refresh_invokes_cli_module(monkeypatch, tmp_path):
         "tokenkick.cli",
         "refresh-cache",
     ]
-    assert lock_file.read_text() == "4242"
+    assert lock_file.read_text().splitlines()[0] == "4242"
+    assert len(lock_file.read_text().splitlines()[1]) == 32
 
 
 def test_refresh_cache_command_updates_cache(monkeypatch, tmp_path):
@@ -10952,7 +10972,7 @@ def test_refresh_cache_command_updates_cache(monkeypatch, tmp_path):
     monkeypatch.setattr("tokenkick.cli.Config.load", lambda: Config(accounts=[account]))
     monkeypatch.setattr(
         "tokenkick.cli._discover_accounts_and_statuses",
-        lambda: (
+        lambda _config=None, **_options: (
             [account],
             [AccountStatus(label="live", state=AccountState.ACTIVE, used_percent=55.0)],
             "Found 1 account via auto-discovery: codex.",
@@ -10995,7 +11015,7 @@ def test_status_setup_hint_does_not_offer_notifications_when_enabled(monkeypatch
     )
     monkeypatch.setattr(
         "tokenkick.cli._discover_accounts_and_statuses",
-        lambda: (
+        lambda _config=None, **_options: (
             [],
             [
                 AccountStatus(
@@ -11033,7 +11053,7 @@ def test_load_account_status_pairs_merges_newly_discovered_accounts(monkeypatch)
 
     monkeypatch.setattr(
         "tokenkick.cli.fetch_status",
-        lambda account: AccountStatus(
+        lambda account, **_options: AccountStatus(
             label=account.label,
             state=AccountState.ACTIVE,
             used_percent=10.0,
@@ -11041,7 +11061,7 @@ def test_load_account_status_pairs_merges_newly_discovered_accounts(monkeypatch)
     )
     monkeypatch.setattr(
         "tokenkick.cli._discover_accounts_and_statuses",
-        lambda: (
+        lambda _config=None, **_options: (
             [saved_account, gemini_account],
             [
                 AccountStatus(label="dev", state=AccountState.ACTIVE, used_percent=10.0),
@@ -11261,7 +11281,7 @@ def test_load_account_status_pairs_reuses_discovered_status_for_saved_codexbar_a
     monkeypatch.setattr("tokenkick.cli.fetch_status", fail_fetch)
     monkeypatch.setattr(
         "tokenkick.cli._discover_accounts_and_statuses",
-        lambda: (
+        lambda _config=None, **_options: (
             [discovered_account],
             [AccountStatus(label="dev", state=AccountState.ACTIVE, used_percent=15.0)],
             "Found 1 account via CodexBar: codex.",
@@ -11295,7 +11315,7 @@ def test_load_account_status_pairs_uses_configured_fallback_when_discovery_is_un
 
     monkeypatch.setattr(
         "tokenkick.cli.fetch_status",
-        lambda account: AccountStatus(
+        lambda account, **_options: AccountStatus(
             label=account.label,
             state=AccountState.ACTIVE,
             used_percent=15.0,
@@ -11303,7 +11323,7 @@ def test_load_account_status_pairs_uses_configured_fallback_when_discovery_is_un
     )
     monkeypatch.setattr(
         "tokenkick.cli._discover_accounts_and_statuses",
-        lambda: (
+        lambda _config=None, **_options: (
             [discovered_account],
             [AccountStatus(label="dev", state=AccountState.UNKNOWN, error="Provider failed")],
             "Found 1 account via CodexBar: codex.",
@@ -11362,7 +11382,7 @@ def test_load_account_status_pairs_reuses_codexbar_result_for_saved_fallbacks(mo
 
     monkeypatch.setattr(
         "tokenkick.cli._discover_accounts_and_statuses",
-        lambda: ([], [], "No accounts found."),
+        lambda _config=None, **_options: ([], [], "No accounts found."),
     )
     monkeypatch.setattr("tokenkick.codexbar_source.CODEXBAR_WIDGET_SNAPSHOT_FILES", [])
     monkeypatch.setattr("tokenkick.codexbar_source.CODEXBAR_HISTORY_DIR", tmp_path / "missing-history")
@@ -11401,11 +11421,11 @@ def test_status_prints_new_account_note_for_existing_config(monkeypatch):
     monkeypatch.setattr("tokenkick.cli.Config.load", lambda: Config(accounts=[saved_account]))
     monkeypatch.setattr(
         "tokenkick.cli.fetch_status",
-        lambda account: AccountStatus(label=account.label, state=AccountState.ACTIVE),
+        lambda account, **_options: AccountStatus(label=account.label, state=AccountState.ACTIVE),
     )
     monkeypatch.setattr(
         "tokenkick.cli._discover_accounts_and_statuses",
-        lambda: (
+        lambda _config=None, **_options: (
             [saved_account, gemini_account],
             [
                 AccountStatus(label="dev", state=AccountState.ACTIVE),
@@ -11441,11 +11461,11 @@ def test_load_account_status_pairs_disambiguates_new_provider_label_against_save
     monkeypatch.setattr("tokenkick.cli.Config.load", lambda: Config(accounts=[saved_account]))
     monkeypatch.setattr(
         "tokenkick.cli.fetch_status",
-        lambda account: AccountStatus(label=account.label, state=AccountState.ACTIVE),
+        lambda account, **_options: AccountStatus(label=account.label, state=AccountState.ACTIVE),
     )
     monkeypatch.setattr(
         "tokenkick.cli._discover_accounts_and_statuses",
-        lambda: (
+        lambda _config=None, **_options: (
             [saved_account, new_account],
             [
                 AccountStatus(label="shared", state=AccountState.ACTIVE),
@@ -11481,11 +11501,11 @@ def test_load_account_status_pairs_normalizes_stale_suffixed_saved_provider_labe
 
     monkeypatch.setattr(
         "tokenkick.cli.fetch_status",
-        lambda account: AccountStatus(label=account.label, state=AccountState.ACTIVE),
+        lambda account, **_options: AccountStatus(label=account.label, state=AccountState.ACTIVE),
     )
     monkeypatch.setattr(
         "tokenkick.cli._discover_accounts_and_statuses",
-        lambda: (
+        lambda _config=None, **_options: (
             [codex_account, gemini_account],
             [
                 AccountStatus(label="work", state=AccountState.ACTIVE),
@@ -11692,7 +11712,7 @@ def test_saved_account_status_snapshot_fetches_each_account_and_reuses_for_targe
     statuses_by_key, failures_by_key = _load_saved_account_status_snapshot(accounts)
     monkeypatch.setattr(
         "tokenkick.cli.fetch_status",
-        lambda _account: (_ for _ in ()).throw(AssertionError("target scan should reuse snapshot")),
+        lambda _account, **_options: (_ for _ in ()).throw(AssertionError("target scan should reuse snapshot")),
     )
 
     targets, deferred = _kickable_window_targets(accounts, statuses_by_key)
@@ -11910,7 +11930,7 @@ def test_kick_all_dry_run_does_not_record_phantom_session(monkeypatch, tmp_path)
     monkeypatch.setattr("tokenkick.cli.load_kick_history", lambda limit=200: [])
     monkeypatch.setattr(
         "tokenkick.cli.fetch_status",
-        lambda _account: AccountStatus(
+        lambda _account, **_options: AccountStatus(
             label=account.label,
             state=AccountState.FRESH,
             used_percent=0.0,
@@ -12013,7 +12033,7 @@ def test_phantom_session_requires_basically_full_session_reset(monkeypatch, tmp_
     monkeypatch.setattr("tokenkick.cli.load_kick_history", lambda limit=200: [])
     monkeypatch.setattr(
         "tokenkick.cli.fetch_status",
-        lambda _account: AccountStatus(
+        lambda _account, **_options: AccountStatus(
             label=account.label,
             state=AccountState.FRESH,
             used_percent=0.0,
@@ -12189,7 +12209,7 @@ def test_phantom_session_observations_prune_stale_entries(monkeypatch, tmp_path)
     monkeypatch.setattr("tokenkick.cli.time.time", lambda: 200_000.0)
     monkeypatch.setattr(
         "tokenkick.cli.fetch_status",
-        lambda _account: AccountStatus(
+        lambda _account, **_options: AccountStatus(
             label=account.label,
             state=AccountState.FRESH,
             used_percent=0.0,
@@ -12248,7 +12268,7 @@ def test_kickable_window_targets_skips_auto_kick_disabled_accounts(monkeypatch):
 
     monkeypatch.setattr(
         "tokenkick.cli.fetch_status",
-        lambda account: AccountStatus(
+        lambda account, **_options: AccountStatus(
             label=account.label,
             state=AccountState.FRESH,
             used_percent=0.0,
@@ -12271,7 +12291,7 @@ def test_kickable_window_targets_skips_hidden_accounts(monkeypatch):
 
     monkeypatch.setattr(
         "tokenkick.cli.fetch_status",
-        lambda account: AccountStatus(
+        lambda account, **_options: AccountStatus(
             label=account.label,
             state=AccountState.FRESH,
             used_percent=0.0,
@@ -12802,15 +12822,16 @@ def test_multi_codex_auto_kick_kicks_all_eligible_accounts_with_each_codex_home(
     tmp_path,
 ):
     homes = [tmp_path / "codex-a", tmp_path / "codex-b"]
+    monkeypatch.setattr("tokenkick.kicker.read_codex_identity", lambda _home: DirectIdentity("codex", email="kick-fixture@example.test"))
     accounts = [
-        AccountConfig(
+        AccountConfig(identity_email="kick-fixture@example.test",
             label="codex-a",
             provider="codex",
             source=DataSource.CODEX_DIRECT,
             auto_kick=True,
             provider_home=str(homes[0]),
         ),
-        AccountConfig(
+        AccountConfig(identity_email="kick-fixture@example.test",
             label="codex-b",
             provider="codex",
             source=DataSource.CODEX_DIRECT,
@@ -12851,6 +12872,13 @@ def test_multi_codex_auto_kick_kicks_all_eligible_accounts_with_each_codex_home(
     monkeypatch.setattr("tokenkick.kicker.subprocess.run", fake_run)
     monkeypatch.setattr("tokenkick.cli.append_kick_event", lambda event: events.append(event))
     monkeypatch.setattr("tokenkick.cli.notify_kick", lambda event, notifications: None)
+    fresh_reads = []
+
+    def fresh_status(account, *_args):
+        fresh_reads.append(account.label)
+        return statuses_by_key[account_key_string(account)]
+
+    monkeypatch.setattr("tokenkick.cli._fetch_status", fresh_status)
     monkeypatch.setattr("tokenkick.cli.load_kick_history", lambda limit=200: [])
     monkeypatch.setattr("tokenkick.cli.load_pending_kicks", lambda now=None: {})
 
@@ -12872,6 +12900,7 @@ def test_multi_codex_auto_kick_kicks_all_eligible_accounts_with_each_codex_home(
     assert observed_stdin == [subprocess.DEVNULL, subprocess.DEVNULL]
     assert [event.label for event in events] == ["codex-a", "codex-b"]
     assert all(event.success for event in events)
+    assert set(fresh_reads) == {account.label for account in accounts}
 
 
 def test_successful_weekly_kick_marks_status_cache_entry_stale(monkeypatch):
@@ -12976,6 +13005,7 @@ def test_kick_all_staggers_codex_targets_when_batch_state_passed(monkeypatch):
 
 def test_codex_kick_surfaces_json_error_from_stdout(monkeypatch):
     # The catalog can advertise a model that is rejected later at request time.
+    monkeypatch.setattr("tokenkick.kicker.read_codex_identity", lambda _home: DirectIdentity("codex", email="kick-fixture@example.test"))
     monkeypatch.setattr("tokenkick.kicker.read_codex_model_catalog", lambda _home: [
         {"model": "bad-model", "supportedReasoningEfforts": [{"reasoningEffort": "low"}]}
     ])
@@ -13010,7 +13040,7 @@ def test_codex_kick_surfaces_json_error_from_stdout(monkeypatch):
     monkeypatch.setattr("tokenkick.kicker.subprocess.run", fake_run)
 
     event = kick_account(
-        AccountConfig(label="codex", provider="codex", kick_model="bad-model"),
+        AccountConfig(identity_email="kick-fixture@example.test", label="codex", provider="codex", kick_model="bad-model"),
         record=False,
     )
 
@@ -13104,6 +13134,13 @@ def test_multi_codex_kick_exception_on_one_account_does_not_abort_others(
     monkeypatch.setattr("tokenkick.cli.kick_account", fake_kick)
     monkeypatch.setattr("tokenkick.cli.append_kick_event", lambda event: None)
     monkeypatch.setattr("tokenkick.cli.notify_kick", lambda event, notifications: None)
+    fresh_reads = []
+
+    def fresh_status(account, *_args):
+        fresh_reads.append(account.label)
+        return replace(status, label=account.label)
+
+    monkeypatch.setattr("tokenkick.cli._fetch_status", fresh_status)
     monkeypatch.setattr("tokenkick.cli.load_kick_history", lambda limit=200: [])
 
     attempted, deferred = _kick_all_enabled_accounts(
@@ -13120,6 +13157,7 @@ def test_multi_codex_kick_exception_on_one_account_does_not_abort_others(
     assert attempted == 2
     assert deferred == 0
     assert kicked == ["codex-b"]
+    assert set(fresh_reads) == {account.label for account in accounts}
 
 
 def test_multi_codex_phantom_observations_are_keyed_per_codex_home(monkeypatch, tmp_path):
@@ -14011,7 +14049,7 @@ def test_phantom_kick_records_unconfirmed_attempt_when_status_stays_ambiguous(mo
         lambda account, **kwargs: kick_calls.append(kwargs)
         or KickEvent(label=account.label, success=True),
     )
-    monkeypatch.setattr("tokenkick.cli.fetch_status", lambda account: phantom_status)
+    monkeypatch.setattr("tokenkick.cli.fetch_status", lambda account, **_options: phantom_status)
     monkeypatch.setattr("tokenkick.cli.append_kick_event", lambda event: recorded.append(event))
     monkeypatch.setattr(
         "tokenkick.cli.notify_kick",
@@ -14070,7 +14108,7 @@ def test_kick_label_force_bypasses_already_session_kicked(monkeypatch):
         lambda candidate, **_kwargs: kicked.append(candidate.label)
         or KickEvent(label=candidate.label, success=True, input_tokens=1),
     )
-    monkeypatch.setattr("tokenkick.cli.fetch_status", lambda candidate: status)
+    monkeypatch.setattr("tokenkick.cli.fetch_status", lambda candidate, **_options: status)
     monkeypatch.setattr("tokenkick.cli.append_kick_event", lambda event: None)
     monkeypatch.setattr("tokenkick.cli.notify_kick", lambda event, notifications: None)
 
@@ -14642,6 +14680,8 @@ def test_verify_claude_session_anchor_accepts_real_anchor_post_status():
         error=CLAUDE_SESSION_ANCHOR_NOT_OBSERVED_ERROR,
     )
 
+    pre_status.session_resets_at = time.time() - 60
+    post_status.session_resets_at = time.time() + 17880
     verified = _verify_claude_session_anchor(event, pre_status, post_status)
 
     assert verified.confirmed is True
@@ -14758,7 +14798,7 @@ def test_codex_phantom_kick_stays_unconfirmed_when_exec_reports_tokens(monkeypat
             output_tokens=4,
         ),
     )
-    monkeypatch.setattr("tokenkick.cli.fetch_status", lambda account: phantom_status)
+    monkeypatch.setattr("tokenkick.cli.fetch_status", lambda account, **_options: phantom_status)
     monkeypatch.setattr("tokenkick.cli.append_kick_event", lambda event: recorded.append(event))
     monkeypatch.setattr("tokenkick.cli.notify_kick", lambda event, notifications: None)
 
@@ -18143,7 +18183,7 @@ def test_expired_ambiguous_phantom_backoff_allows_retry(monkeypatch):
         lambda account, **_kwargs: kicked.append(account.label)
         or KickEvent(label=account.label, success=True),
     )
-    monkeypatch.setattr("tokenkick.cli.fetch_status", lambda account: status)
+    monkeypatch.setattr("tokenkick.cli.fetch_status", lambda account, **_options: status)
     monkeypatch.setattr("tokenkick.cli.append_kick_event", lambda event: None)
     monkeypatch.setattr("tokenkick.cli.notify_kick", lambda event, notifications: None)
 
@@ -18189,7 +18229,7 @@ def test_phantom_kick_records_confirmed_when_status_changes(monkeypatch):
         "tokenkick.cli.kick_account",
         lambda account, **_kwargs: KickEvent(label=account.label, success=True),
     )
-    monkeypatch.setattr("tokenkick.cli.fetch_status", lambda account: active_status)
+    monkeypatch.setattr("tokenkick.cli.fetch_status", lambda account, **_options: active_status)
     monkeypatch.setattr("tokenkick.cli.append_kick_event", lambda event: recorded.append(event))
     monkeypatch.setattr("tokenkick.cli.notify_kick", lambda event, notifications: None)
 
@@ -18691,7 +18731,7 @@ def test_kick_specific_skips_non_fresh_account(monkeypatch):
     monkeypatch.setattr("tokenkick.cli._load_accounts", lambda config: [account])
     monkeypatch.setattr(
         "tokenkick.cli.fetch_status",
-        lambda loaded: AccountStatus(label="active", state=AccountState.ACTIVE),
+        lambda loaded, **_options: AccountStatus(label="active", state=AccountState.ACTIVE),
     )
 
     result = CliRunner().invoke(cli, ["kick", "active"])
@@ -18707,10 +18747,10 @@ def test_kick_specific_uses_saved_label_then_fetches_live_status(monkeypatch):
     monkeypatch.setattr("tokenkick.cli.Config.load", lambda: Config(accounts=[account]))
     monkeypatch.setattr(
         "tokenkick.cli._discover_accounts_and_statuses",
-        lambda: (_ for _ in ()).throw(AssertionError("discovery should not run")),
+        lambda _config=None, **_options: (_ for _ in ()).throw(AssertionError("discovery should not run")),
     )
 
-    def fake_fetch(loaded):
+    def fake_fetch(loaded, **_options):
         fetched.append(loaded.label)
         return AccountStatus(label=loaded.label, state=AccountState.ACTIVE)
 
@@ -18974,7 +19014,7 @@ def test_setup_saves_discovered_accounts_without_prompt(monkeypatch):
 
     monkeypatch.setattr(
         "tokenkick.cli._discover_accounts_and_statuses",
-        lambda: (
+        lambda _config=None, **_options: (
             [account],
             [AccountStatus(label="dev", state=AccountState.ACTIVE, used_percent=15.0)],
             "Found 1 account via CodexBar: codex.",
@@ -19027,7 +19067,7 @@ def test_setup_dry_run_prints_config_diff_without_writing(monkeypatch):
 
     monkeypatch.setattr(
         "tokenkick.cli._discover_accounts_and_statuses",
-        lambda: (
+        lambda _config=None, **_options: (
             [existing_account, new_account],
             [
                 AccountStatus(label="dev", state=AccountState.ACTIVE),
@@ -19066,7 +19106,7 @@ def test_setup_shows_notification_hint_when_notifications_disabled(monkeypatch):
 
     monkeypatch.setattr(
         "tokenkick.cli._discover_accounts_and_statuses",
-        lambda: (
+        lambda _config=None, **_options: (
             [account],
             [AccountStatus(label="dev", state=AccountState.ACTIVE, used_percent=15.0)],
             "Found 1 account via CodexBar: codex.",
@@ -19097,7 +19137,7 @@ def test_setup_saves_discovery_status_cache_for_onboarding(monkeypatch, tmp_path
 
     monkeypatch.setattr(
         "tokenkick.cli._discover_accounts_and_statuses",
-        lambda: ([account], [status], "Found 1 account via auto-discovery: codex."),
+        lambda _config=None, **_options: ([account], [status], "Found 1 account via auto-discovery: codex."),
     )
 
     result = CliRunner().invoke(cli, ["setup", "--no-daemon-prompt"])
@@ -19126,7 +19166,7 @@ def test_setup_preserves_existing_auto_kick_settings_on_rediscovery(monkeypatch)
 
     monkeypatch.setattr(
         "tokenkick.cli._discover_accounts_and_statuses",
-        lambda: (
+        lambda _config=None, **_options: (
             [discovered],
             [AccountStatus(label="codex (dev)", state=AccountState.ACTIVE)],
             "Found 1 account via auto-discovery: codex.",
@@ -19169,7 +19209,7 @@ def test_setup_preserves_unmodified_top_level_config_fields(monkeypatch):
     )
     monkeypatch.setattr(
         "tokenkick.cli._discover_accounts_and_statuses",
-        lambda: (
+        lambda _config=None, **_options: (
             [discovered],
             [AccountStatus(label=discovered.label, state=AccountState.ACTIVE)],
             "Found 1 account via auto-discovery: codex.",
@@ -19202,7 +19242,7 @@ def _rediscovery_setup(monkeypatch, existing: AccountConfig, discovered: Account
     saved: list[Config] = []
     monkeypatch.setattr(
         "tokenkick.cli._discover_accounts_and_statuses",
-        lambda: (
+        lambda _config=None, **_options: (
             [discovered],
             [AccountStatus(label=discovered.label, state=AccountState.ACTIVE)],
             "Found 1 account via auto-discovery: codex.",
@@ -19358,7 +19398,7 @@ def test_setup_warns_about_duplicate_codex_homes(monkeypatch, tmp_path):
 
     monkeypatch.setattr(
         "tokenkick.cli._discover_accounts_and_statuses",
-        lambda: (
+        lambda _config=None, **_options: (
             [primary, duplicate],
             [
                 AccountStatus(label="personal", state=AccountState.ACTIVE, source_detail="codex-direct"),
@@ -19413,7 +19453,7 @@ def test_setup_does_not_auto_hide_existing_duplicate_codex_home(monkeypatch, tmp
 
     monkeypatch.setattr(
         "tokenkick.cli._discover_accounts_and_statuses",
-        lambda: (
+        lambda _config=None, **_options: (
             [primary, duplicate],
             [
                 AccountStatus(label="personal", state=AccountState.ACTIVE, source_detail="codex-direct"),
@@ -19450,7 +19490,7 @@ def test_setup_prints_macos_codex_permission_note(monkeypatch, tmp_path):
     monkeypatch.setattr("tokenkick.cli.sys.platform", "darwin")
     monkeypatch.setattr(
         "tokenkick.cli._discover_accounts_and_statuses",
-        lambda: (
+        lambda _config=None, **_options: (
             [account],
             [AccountStatus(label="codex", state=AccountState.ACTIVE)],
             "Found 1 account via auto-discovery: codex.",
@@ -19481,7 +19521,7 @@ def test_setup_prompts_to_start_daemon_when_interactive(monkeypatch):
 
     monkeypatch.setattr(
         "tokenkick.cli._discover_accounts_and_statuses",
-        lambda: (
+        lambda _config=None, **_options: (
             [account],
             [AccountStatus(label="dev", state=AccountState.ACTIVE, used_percent=15.0)],
             "Found 1 account via CodexBar: codex.",
@@ -19519,7 +19559,7 @@ def test_setup_auto_enables_claude_direct_usage_when_not_explicit(monkeypatch):
 
     monkeypatch.setattr(
         "tokenkick.cli._discover_accounts_and_statuses",
-        lambda: (
+        lambda _config=None, **_options: (
             [account],
             [AccountStatus(label="claude", state=AccountState.ACTIVE)],
             "Found 1 account via auto-discovery: claude.",
@@ -19549,7 +19589,7 @@ def test_setup_preserves_explicit_claude_direct_usage_disable(monkeypatch):
 
     monkeypatch.setattr(
         "tokenkick.cli._discover_accounts_and_statuses",
-        lambda: (
+        lambda _config=None, **_options: (
             [account],
             [AccountStatus(label="claude", state=AccountState.ACTIVE)],
             "Found 1 account via auto-discovery: claude.",
@@ -19581,7 +19621,7 @@ def test_setup_migrates_legacy_claude_direct_usage_disable(monkeypatch):
 
     monkeypatch.setattr(
         "tokenkick.cli._discover_accounts_and_statuses",
-        lambda: (
+        lambda _config=None, **_options: (
             [account],
             [AccountStatus(label="claude", state=AccountState.ACTIVE)],
             "Found 1 account via auto-discovery: claude.",
@@ -19613,7 +19653,7 @@ def test_setup_dry_run_does_not_auto_enable_claude_direct_usage(monkeypatch):
 
     monkeypatch.setattr(
         "tokenkick.cli._discover_accounts_and_statuses",
-        lambda: (
+        lambda _config=None, **_options: (
             [account],
             [AccountStatus(label="claude", state=AccountState.ACTIVE)],
             "Found 1 account via auto-discovery: claude.",
@@ -19645,7 +19685,7 @@ def test_setup_preserves_claude_account_direct_usage_opt_out(monkeypatch):
 
     monkeypatch.setattr(
         "tokenkick.cli._discover_accounts_and_statuses",
-        lambda: (
+        lambda _config=None, **_options: (
             [discovered],
             [AccountStatus(label="claude", state=AccountState.ACTIVE)],
             "Found 1 account via auto-discovery: claude.",
@@ -19692,7 +19732,7 @@ def test_setup_merges_discovered_accounts_without_touching_notifications(monkeyp
 
     monkeypatch.setattr(
         "tokenkick.cli._discover_accounts_and_statuses",
-        lambda: (
+        lambda _config=None, **_options: (
             [existing_account, new_account, claude_account],
             [
                 AccountStatus(label="dev", state=AccountState.ACTIVE),
@@ -19751,7 +19791,7 @@ def test_setup_preserves_explicit_codex_auto_kick_opt_outs(monkeypatch):
 
     monkeypatch.setattr(
         "tokenkick.cli._discover_accounts_and_statuses",
-        lambda: (
+        lambda _config=None, **_options: (
             [enabled_account, disabled_account, claude_account],
             [
                 AccountStatus(label="enabled", state=AccountState.ACTIVE),
@@ -20131,6 +20171,11 @@ def test_interactive_prompt_wrappers_map_escape_skip_to_back(monkeypatch):
     calls = []
 
     class Prompt:
+        def __init__(self):
+            from prompt_toolkit.layout import Layout, Window
+            self.application = SimpleNamespace(layout=Layout(Window()))
+            self.selected_choices = []
+
         def execute(self):
             return None
 
@@ -20560,6 +20605,7 @@ def test_interactive_configure_menu_splits_accounts_and_auto_kick(monkeypatch):
             "setup",
             "accounts",
             "auto",
+            "stagger",
             "codex_settings",
             "notifications",
             "remote_telegram",
@@ -20765,6 +20811,9 @@ def test_interactive_remote_telegram_test_targets_telegram_only(monkeypatch):
                 "telegram": None,
                 "telegram_remote": None,
                 "disable_backend": None,
+                "enable_backend": None,
+                "save_ntfy": None,
+                "save_telegram": None,
                 "policy": None,
                 "test_backend": "telegram",
                 "action": "test",
@@ -20773,39 +20822,31 @@ def test_interactive_remote_telegram_test_targets_telegram_only(monkeypatch):
     ]
 
 
-def test_interactive_remote_telegram_configure_is_remote_only(monkeypatch):
-    import tokenkick.cli as cli_module
+def test_interactive_remote_telegram_configure_preserves_push_settings(monkeypatch):
     import tokenkick.interactive as interactive
 
-    calls = []
-    selections = iter(["configure", interactive.MENU_EXIT])
-
+    saved: list[Config] = []
+    original = Config(notifications=NotifyConfig(
+        enabled=True, ntfy_topic="topic", telegram_bot_token="old-token",
+        telegram_chat_id="old-chat", enabled_backends=["ntfy", "telegram"],
+    ), telegram_remote_enabled=True)
+    selections = iter(["configure", "configure", "exit", "exit"])
     monkeypatch.setattr(interactive, "_select", lambda *_args, **_kwargs: next(selections))
-    monkeypatch.setattr(interactive, "_secret_action", lambda *_args, **_kwargs: "token")
-    monkeypatch.setattr(interactive, "_text_action", lambda *_args, **_kwargs: "chat-id")
+    monkeypatch.setattr(interactive, "_secret_action", lambda *_args, **_kwargs: "new-token")
+    monkeypatch.setattr(interactive, "_text_action", lambda *_args, **_kwargs: "new-chat")
     monkeypatch.setattr(interactive, "_confirm", lambda *_args, **_kwargs: True)
-    monkeypatch.setattr(
-        interactive,
-        "_invoke",
-        lambda _ctx, command, **kwargs: calls.append((command, kwargs)),
-    )
+    monkeypatch.setattr("tokenkick.cli.Config.load", lambda: copy.deepcopy(saved[-1] if saved else original))
+    monkeypatch.setattr("tokenkick.cli.Config.save", lambda self: saved.append(copy.deepcopy(self)))
 
     interactive._remote_telegram_menu(click.Context(cli))
 
-    assert calls == [
-        (
-            cli_module.notify,
-            {
-                "ntfy_topic": None,
-                "telegram": None,
-                "telegram_remote": ("token", "chat-id"),
-                "disable_backend": None,
-                "policy": None,
-                "test_backend": "all",
-                "action": None,
-            },
-        )
-    ]
+    assert len(saved) == 1
+    assert saved[0].notifications.telegram_bot_token == "new-token"
+    assert saved[0].notifications.telegram_chat_id == "new-chat"
+    assert saved[0].notifications.enabled_backends == ["ntfy", "telegram"]
+    assert saved[0].notifications.enabled is True
+    assert saved[0].notifications.ntfy_topic == "topic"
+    assert saved[0].telegram_remote_enabled is True
 
 
 def test_interactive_remote_telegram_can_disable_push_notifications(monkeypatch):
@@ -21149,7 +21190,7 @@ def test_interactive_auto_menu_can_enable_all_accounts(monkeypatch):
     result = CliRunner().invoke(cli, ["menu"], input="ENABLE\nENABLE\n")
 
     assert result.exit_code == 0
-    assert confirm_defaults == [True]
+    assert confirm_defaults == [False]
     assert [config.accounts[0].session_auto_kick for config in saved] == [True, False]
     assert saved[-1].accounts[1].session_auto_kick is True
 
@@ -22570,7 +22611,7 @@ def test_render_plan_uses_compact_human_output(capsys):
         applied=False,
         work_start=work_start,
         work_end=work_end,
-        timezone="UTC",
+        timezone="Europe/Berlin",
         accounts_considered=[
             {
                 "account_key": "manual|codex|personal",
@@ -23090,21 +23131,23 @@ def test_interactive_notifications_menu_saves_ntfy(monkeypatch):
     import tokenkick.interactive as interactive
 
     saved: list[Config] = []
-    selections = iter(["configure", "notifications", "ntfy", "exit", "exit", "exit"])
+    selections = iter(["configure", "notifications", "ntfy", "topic", "enable", "exit", "exit", "exit", "exit"])
     monkeypatch.setattr(interactive, "_select", lambda *_args, **_kwargs: next(selections))
     monkeypatch.setattr(interactive, "_text_action", lambda *_args, **_kwargs: "topic-name")
     monkeypatch.setattr(interactive, "_confirm", lambda *_args, **_kwargs: True)
     monkeypatch.setattr(interactive, "_print_banner", lambda: None)
-    monkeypatch.setattr("tokenkick.cli.Config.load", lambda: Config(notifications=NotifyConfig(policy="errors")))
+    monkeypatch.setattr("tokenkick.cli.Config.load", lambda: copy.deepcopy(saved[-1]) if saved else Config(notifications=NotifyConfig(policy="errors")))
     monkeypatch.setattr("tokenkick.cli.Config.save", lambda self: saved.append(copy.deepcopy(self)))
 
     result = CliRunner().invoke(cli, ["menu"])
 
     assert result.exit_code == 0
-    assert saved[0].notifications.enabled is True
+    assert saved[0].notifications.enabled is False
+    assert saved[1].notifications.enabled is True
     assert saved[0].notifications.backend == "ntfy"
     assert saved[0].notifications.ntfy_topic == "topic-name"
     assert saved[0].notifications.policy == "errors"
+    assert saved[1].notifications.policy == "errors"
 
 
 def test_interactive_notifications_menu_sets_policy(monkeypatch):
@@ -23162,7 +23205,7 @@ def test_interactive_notifications_menu_toggles_account_notifications(monkeypatc
     assert result.exit_code == 0
     assert saved[0].accounts[0].notifications_enabled is False
     assert saved[0].accounts[1].notifications_enabled is True
-    assert confirm_defaults == [True]
+    assert confirm_defaults == [False]
 
 
 def test_interactive_notifications_menu_toggles_one_account_without_confirm(monkeypatch):
@@ -23430,7 +23473,7 @@ def test_schedule_set_rejects_nonexistent_dst_boundary(monkeypatch):
         ],
     )
 
-    assert result.exit_code == 0
+    assert result.exit_code == 2
     assert "does not exist" in result.output
     assert "DST" in result.output
     assert "transition" in result.output
@@ -24396,7 +24439,7 @@ def test_session_schedule_pending_executes_when_due(monkeypatch, tmp_path, capsy
         ),
     )
     monkeypatch.setattr("tokenkick.cli.datetime", FixedDateTime)
-    monkeypatch.setattr("tokenkick.cli.fetch_status", lambda _account: status)
+    monkeypatch.setattr("tokenkick.cli.fetch_status", lambda _account, **_options: status)
     monkeypatch.setattr(
         "tokenkick.cli.kick_account",
         lambda account, **_kwargs: KickEvent(label=account.label, success=True),
@@ -24433,7 +24476,7 @@ def test_session_schedule_pending_executes_when_due(monkeypatch, tmp_path, capsy
     assert scheduling_mod.load_pending_kicks(FixedDateTime.current) == {}
     assert history[0]["label"] == "claude"
     assert "[scheduled_kick_executed]" in output
-    assert "[scheduled_kick_confirmed]" in output
+    assert "[scheduled_kick_attempted]" in output
 
 
 def test_due_pending_codex_kicks_share_batch_stagger(monkeypatch, tmp_path):
@@ -24493,6 +24536,7 @@ def test_due_pending_codex_kicks_share_batch_stagger(monkeypatch, tmp_path):
         current_time[0] += seconds
 
     monkeypatch.setattr("tokenkick.cli.datetime", FixedDateTime)
+    monkeypatch.setattr(scheduling_mod, "utc_now", lambda: FixedDateTime.now(timezone.utc))
     monkeypatch.setattr("tokenkick.cli.time.monotonic", lambda: current_time[0])
     monkeypatch.setattr("tokenkick.cli.time.sleep", fake_sleep)
     monkeypatch.setattr("tokenkick.cli.load_kick_history", lambda limit=200: [])
@@ -24593,8 +24637,16 @@ def test_same_provider_home_main_and_spark_due_kicks_are_serialized(monkeypatch,
         current_time[0] += seconds
 
     monkeypatch.setattr("tokenkick.cli.datetime", FixedDateTime)
+    monkeypatch.setattr(scheduling_mod, "utc_now", lambda: FixedDateTime.now(timezone.utc))
     monkeypatch.setattr("tokenkick.cli.time.monotonic", lambda: current_time[0])
     monkeypatch.setattr("tokenkick.cli.time.sleep", fake_sleep)
+    fresh_reads = []
+
+    def fresh_status(account, *_args):
+        fresh_reads.append(account.label)
+        return replace(statuses_by_key[account_key_string(account)], source_detail=CODEX_PROVIDER_USAGE_SOURCE_DETAIL)
+
+    monkeypatch.setattr("tokenkick.cli._fetch_status", fresh_status)
     monkeypatch.setattr("tokenkick.cli.load_kick_history", lambda limit=200: [])
     monkeypatch.setattr("tokenkick.cli.append_kick_event", lambda _event: None)
     monkeypatch.setattr("tokenkick.cli.notify_scheduled_kick", lambda *_args: None)
@@ -24614,6 +24666,7 @@ def test_same_provider_home_main_and_spark_due_kicks_are_serialized(monkeypatch,
     assert executed == 2
     assert kicked == ["codex-main", "codex-spark"]
     assert sleeps == [CODEX_KICK_STAGGER_SECONDS]
+    assert set(fresh_reads) == {account.label for account in accounts}
 
 
 def test_due_pending_kick_survives_transient_unknown_status(monkeypatch, tmp_path, capsys):
@@ -26296,7 +26349,7 @@ def test_init_invokes_setup_with_deprecation_message(monkeypatch):
     monkeypatch.setattr("tokenkick.cli.Config.load", lambda: Config())
     monkeypatch.setattr(
         "tokenkick.cli._discover_accounts_and_statuses",
-        lambda: (
+        lambda _config=None, **_options: (
             [],
             [],
             "No CodexBar CLI or Codex session files found.",

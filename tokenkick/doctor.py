@@ -675,7 +675,7 @@ def _doctor_notifications(config: Config) -> tuple[dict, list[DoctorCheck]]:
         "enabled": notifications.enabled,
         "backend": notifications.backend,
         "enabled_backends": enabled_backends,
-        "ntfy_topic": notifications.ntfy_topic,
+        "ntfy_topic": _mask_last4(notifications.ntfy_topic),
         "telegram_chat_id": _mask_last4(notifications.telegram_chat_id),
         "telegram_bot_token": "configured" if notifications.telegram_bot_token else None,
     }
@@ -687,7 +687,7 @@ def _doctor_notifications(config: Config) -> tuple[dict, list[DoctorCheck]]:
             DoctorCheck(
                 "OK",
                 "notifications_ntfy_configured",
-                f"notifications: ntfy configured (topic: {notifications.ntfy_topic})",
+                f"notifications: ntfy configured (topic: {_mask_last4(notifications.ntfy_topic)})",
             )
         )
     if "telegram" in enabled_backends and notifications.telegram_chat_id:

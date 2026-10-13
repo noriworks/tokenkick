@@ -47,6 +47,8 @@ public final class SnapshotStore {
     }
 
     private let autoRefresh = AutoRefreshBox()
+    private var refreshTask: Task<Void, Never>?
+    private var refreshAgain = false
 
     public init(
         provider: any SnapshotProviding,
@@ -98,11 +100,26 @@ public final class SnapshotStore {
 
     /// Coalesces overlapping requests; callers can always `await` safely.
     public func refresh() async {
-        guard !isRefreshing else { return }
-        isRefreshing = true
-        if phase == .initial { phase = .loading }
-        defer { isRefreshing = false }
+        if let task = refreshTask {
+            refreshAgain = true
+            await task.value
+            return
+        }
+        let task = Task { @MainActor in
+            self.isRefreshing = true
+            if self.phase == .initial { self.phase = .loading }
+            repeat {
+                self.refreshAgain = false
+                await self.fetchOnce()
+            } while self.refreshAgain
+            self.isRefreshing = false
+            self.refreshTask = nil
+        }
+        refreshTask = task
+        await task.value
+    }
 
+    private func fetchOnce() async {
         do {
             let envelope = try await provider.fetchSnapshot()
             envelopeOK = envelope.ok

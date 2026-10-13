@@ -128,7 +128,7 @@ final class WarningDerivationTests: XCTestCase {
         XCTAssertEqual(WarningDerivation.menuBarIndicator(for: items(snapshot: unacknowledged)), .normal)
 
         let acknowledged = try ShellFixtures.snapshot(
-            resetObservations: [["provider": "codex", "acknowledged": true]]
+            resetObservations: [["provider": "codex", "acknowledged_at": "2026-10-13T12:00:00Z"]]
         )
         XCTAssertFalse(
             items(snapshot: acknowledged).contains { $0.id == "reset-observation" }

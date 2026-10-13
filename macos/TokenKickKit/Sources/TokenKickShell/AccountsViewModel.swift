@@ -57,7 +57,7 @@ public enum AccountMutation: Equatable, Sendable {
         }
     }
 
-    public func arguments(label: String, acceptingRisk: Bool = false) -> [String] {
+    public func arguments(label: String, acceptingRisk: Bool = false, consentToken: String = "ENABLE", consentVersion: Int? = nil) -> [String] {
         var arguments: [String]
         switch self {
         case .setVisible(let visible):
@@ -82,7 +82,8 @@ public enum AccountMutation: Equatable, Sendable {
             arguments = ["accounts", "set-notifications", label] + route.flags + ["--json-output"]
         }
         if acceptingRisk && enablesAutoKick {
-            arguments.insert(contentsOf: ["--accept-risk", "ENABLE"], at: arguments.count - 1)
+            arguments.insert(contentsOf: ["--accept-risk", consentToken], at: arguments.count - 1)
+            if let consentVersion { arguments.insert(contentsOf: ["--consent-version", String(consentVersion)], at: arguments.count - 1) }
         }
         return arguments
     }
@@ -94,6 +95,7 @@ public struct AutoKickConsentRequest: Identifiable, Equatable, Sendable {
     public let text: String
     public let confirmation: String
     public let mutation: AccountMutation
+    public var version: Int? = nil
 
     public var id: String { "\(provider):\(label)" }
 }
@@ -154,18 +156,17 @@ public enum NotificationRoute: String, CaseIterable, Identifiable, Equatable, Se
         }
     }
 
-    /// Best-effort mapping from the core's route display strings.
-    public static func from(routeDisplay: String, enabled: Bool) -> NotificationRoute {
+    /// Stored route preferences; nil inherits global routing even if delivery is suppressed.
+    public static func from(backends: [String]?, enabled: Bool) -> NotificationRoute {
         if !enabled { return .none }
-        let lowered = routeDisplay.lowercased()
-        let hasNtfy = lowered.contains("ntfy")
-        let hasTelegram = lowered.contains("telegram")
-        if hasNtfy && hasTelegram { return .both }
-        if hasNtfy { return .ntfy }
-        if hasTelegram { return .telegram }
-        if lowered.contains("disabled") || lowered.contains("off") { return .none }
-        return .globalDefault
+        guard let backends else { return .globalDefault }
+        let values = Set(backends)
+        if values.contains("ntfy") && values.contains("telegram") { return .both }
+        if values.contains("ntfy") { return .ntfy }
+        if values.contains("telegram") { return .telegram }
+        return .none
     }
+
 }
 
 /// One row joining list + planning payloads for the Accounts screen.
@@ -266,7 +267,9 @@ public final class AccountsViewModel {
     private func apply(
         _ mutation: AccountMutation,
         to label: String,
-        acceptingRisk: Bool
+        acceptingRisk: Bool,
+        consentToken: String = "ENABLE",
+        consentVersion: Int? = nil
     ) async {
         guard !isBusy(label) else { return }
         busyLabels.insert(label)
@@ -274,7 +277,7 @@ public final class AccountsViewModel {
         defer { busyLabels.remove(label) }
         do {
             let envelope = try await service.runMutation(
-                arguments: mutation.arguments(label: label, acceptingRisk: acceptingRisk)
+                arguments: mutation.arguments(label: label, acceptingRisk: acceptingRisk, consentToken: consentToken, consentVersion: consentVersion)
             )
             if !envelope.ok {
                 if let request = consentRequest(
@@ -302,7 +305,7 @@ public final class AccountsViewModel {
     public func confirmAutoKickConsent() async {
         guard let request = pendingAutoKickConsent else { return }
         pendingAutoKickConsent = nil
-        await apply(request.mutation, to: request.label, acceptingRisk: true)
+        await apply(request.mutation, to: request.label, acceptingRisk: true, consentToken: request.confirmation, consentVersion: request.version)
     }
 
     private func consentRequest(
@@ -323,7 +326,8 @@ public final class AccountsViewModel {
             provider: provider,
             text: text,
             confirmation: confirmation,
-            mutation: mutation
+            mutation: mutation,
+            version: consent["version"]?.numberValue.flatMap { Int(exactly: $0) }
         )
     }
 

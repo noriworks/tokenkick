@@ -8,9 +8,10 @@ set -eu
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PYTHON="${PYTHON:-$REPO_ROOT/.venv/bin/python}"
 TK="$REPO_ROOT/.venv/bin/tk"
-FIXTURES="$REPO_ROOT/macos/TokenKickKit/Tests/TokenKickKitTests/Fixtures"
+FIXTURES="${FIXTURES:-$REPO_ROOT/macos/TokenKickKit/Tests/TokenKickKitTests/Fixtures}"
 FIXTURE_HOME="$(mktemp -d)"
 FIXTURE_PATH="/usr/bin:/bin"
+trap 'rm -rf "$FIXTURE_HOME"' EXIT HUP INT TERM
 
 if [ ! -x "$TK" ]; then
     echo "error: no tk at $TK (pip install -e . into .venv first)" >&2
@@ -109,7 +110,7 @@ append_reset_event(
 EOF
 
 run_tk() {
-    HOME="$FIXTURE_HOME" PATH="$FIXTURE_PATH" TK_APP_MODE=1 "$TK" "$@"
+    HOME="$FIXTURE_HOME" PATH="$FIXTURE_PATH" TK_APP_MODE=1 "$PYTHON" "$REPO_ROOT/scripts/fixture-cli.py" "$@"
 }
 
 echo "==> Capturing fixtures"
@@ -118,7 +119,7 @@ run_tk daemon --status --json-output > "$FIXTURES/daemon_status.json"
 run_tk accounts list --json-output > "$FIXTURES/accounts_list.json"
 run_tk accounts hide nope --json-output > "$FIXTURES/mutation_error.json" || true
 run_tk frobnicate > "$FIXTURES/usage_error.json" || true
-run_tk kick "codex (fixture)" --json-output > "$FIXTURES/kick_skipped.json" || true
+run_tk kick "codex (fixture)" --dry-run --json-output > "$FIXTURES/kick_skipped.json" || true
 run_tk history --json-output > "$FIXTURES/history.json"
 run_tk reset-log --json-output > "$FIXTURES/reset_log.json"
 run_tk app doctor > "$FIXTURES/app_doctor.json"
@@ -158,6 +159,8 @@ forbidden = re.compile(r"/private/var/folders/|/var/folders/|/tmp/|/Users/(?!fix
 for path in sorted(fixtures.glob("*.json")):
     text = path.read_text()
     json.loads(text)
+    if any(not email.endswith("@example.test") for email in re.findall(r"[\w.+-]+@[\w.-]+\.[a-z]+", text)):
+        sys.exit(f"{path.name}: non-synthetic identity")
     if match := forbidden.search(text):
         sys.exit(f"{path.name}: machine-specific path left in fixture: {match.group(0)}")
     print(f"  {path.name}: ok")

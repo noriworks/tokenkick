@@ -351,7 +351,8 @@ def _fetch_codexbar_local_status(
             reads.append(_codexbar_widget_snapshot_entry(provider, account.label))
     elif provider == "claude":
         reads.append(_codexbar_local_history_entry(provider, account.codexbar_account, account.label))
-        reads.append(_codexbar_widget_snapshot_entry(provider, account.label))
+        if not account.codexbar_account:
+            reads.append(_codexbar_widget_snapshot_entry(provider, account.label))
     else:
         reads.append(_codexbar_widget_snapshot_entry(provider, account.label))
 
@@ -418,6 +419,9 @@ def _codexbar_local_history_entry(
         window_sets = (data.get("accounts") or {}).get(account_key) if account_key else None
         if window_sets is None:
             return _CodexBarLocalRead()
+    if account and provider != "codex":
+        # Current local Claude history has no verifiable email binding.
+        return _CodexBarLocalRead()
     if window_sets is None and isinstance(data.get("unscoped"), list):
         window_sets = data.get("unscoped")
     if window_sets is None and isinstance(data.get("preferredAccountKey"), str):
@@ -766,8 +770,6 @@ def _select_codexbar_entry(entries: list, provider: str | None, account: str | N
                 return entry
             if email is None:
                 provider_entries_without_email.append(entry)
-        if len(provider_entries_without_email) == 1:
-            return provider_entries_without_email[0]
         return {}
 
     if provider:
@@ -812,7 +814,7 @@ def _parse_codexbar_json(
     common patterns. When the format is unrecognized, returns UNKNOWN.
     """
     entries = _codexbar_json_entries(data)
-    if isinstance(data, list) or (isinstance(data, dict) and entries and entries[0] is not data):
+    if account or isinstance(data, list) or (isinstance(data, dict) and entries and entries[0] is not data):
         if not entries:
             return AccountStatus(label=label, state=AccountState.UNKNOWN, error="Empty response")
         data = _select_codexbar_entry(entries, provider, account)

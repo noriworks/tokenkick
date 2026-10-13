@@ -46,7 +46,8 @@ public struct LiveLaunchAgentManager: LaunchAgentManaging {
         let runtime = try TKRuntimeLocator.bundledTkURL()
         return TKLaunchAgentManager(
             runtime: runtime,
-            daemonClient: try LiveTKClient.make(timeout: 60)
+            daemonClient: try LiveTKClient.make(timeout: 60),
+            extraPathEntries: AppSettingsModel.storedExtraPathEntries()
         )
     }
 
@@ -66,7 +67,11 @@ public struct LiveLaunchAgentManager: LaunchAgentManaging {
     }
 
     public func startAgent(daemon: TKDaemonStatus?, takeover: Bool) async throws -> TKLaunchAgentStatus {
-        try await manager().start(daemon: daemon, takeover: takeover)
+        let envelope = try await LiveTKClient.make(timeout: 60).snapshot()
+        guard envelope.ok, let current = envelope.payload?.daemon else {
+            throw DaemonActionError(message: "Cannot verify current daemon ownership; refresh before enabling background service.")
+        }
+        return try await manager().start(daemon: current, takeover: takeover)
     }
 
     public func removeAgent() async throws -> TKLaunchAgentStatus {
@@ -246,7 +251,6 @@ public final class DaemonViewModel {
             let envelope = try await controller.restartDaemon()
             return try resultMessage(envelope, fallback: "Background service restarted.")
         case .enableBackground:
-            _ = try agent.installAgent()
             _ = try await agent.startAgent(daemon: daemon, takeover: false)
             return "Background service installed and started. It now starts at login."
         case .repairAgent:
@@ -256,7 +260,6 @@ public final class DaemonViewModel {
             _ = try await agent.removeAgent()
             return "Background service removed. Start it manually any time."
         case .takeover:
-            _ = try agent.installAgent()
             _ = try await agent.startAgent(daemon: daemon, takeover: true)
             return "TokenKick now manages the background service."
         }

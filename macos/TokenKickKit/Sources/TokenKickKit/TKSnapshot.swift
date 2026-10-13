@@ -139,6 +139,8 @@ public struct TKSnapshotPayload: Decodable, Sendable {
     public let paths: [String: String]
     public let daemon: TKDaemonStatus
     public let status: StatusSection
+    /// Persistent daemon orchestration; absent on older runtimes.
+    public let stagger: TKJSONValue?
     public let pendingKicks: [TKJSONValue]
     public let schedule: TKJSONValue
     public let advisories: [TKJSONValue]
@@ -154,6 +156,7 @@ public struct TKSnapshotPayload: Decodable, Sendable {
         case paths
         case daemon
         case status
+        case stagger
         case pendingKicks = "pending_kicks"
         case schedule
         case advisories

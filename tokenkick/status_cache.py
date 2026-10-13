@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import uuid
 import os
 import subprocess
 import sys
@@ -12,6 +13,7 @@ from dataclasses import fields, replace
 from datetime import datetime, timezone
 from pathlib import Path
 
+from .claude_monitoring import cooling_down, diagnostic_text, failure_count, parse_time
 from .direct import normalize_source_detail
 from .models import (
     AccountConfig,
@@ -35,6 +37,7 @@ from .sources import (
 from .state_io import atomic_write_text, locked_atomic_write_text, state_file_lock
 
 _STATUS_REFRESH_LOCK_ACQUIRE_ERROR: str | None = None
+_STATUS_REFRESH_OWNER: str | None = None
 
 
 def _cli():
@@ -66,16 +69,13 @@ def _fetch_status(account: AccountConfig, config: Config | None = None) -> Accou
     )
     if config is None:
         return _cli().fetch_status(account)
-    try:
-        kwargs = {
-            "codexbar_staleness_threshold_seconds": config.codexbar_staleness_threshold_seconds,
-            "codexbar_rejection_threshold_seconds": config.codexbar_rejection_threshold_seconds,
-        }
-        if claude_probe_context is not None:
-            kwargs["claude_probe_context"] = claude_probe_context
-        status = _cli().fetch_status(account, **kwargs)
-    except TypeError:
-        status = _cli().fetch_status(account)
+    kwargs = {
+        "codexbar_staleness_threshold_seconds": config.codexbar_staleness_threshold_seconds,
+        "codexbar_rejection_threshold_seconds": config.codexbar_rejection_threshold_seconds,
+    }
+    if claude_probe_context is not None:
+        kwargs["claude_probe_context"] = claude_probe_context
+    status = _cli().fetch_status(account, **kwargs)
     if claude_probe_context is not None:
         setattr(status, "_claude_probe_context", claude_probe_context)
     return status
@@ -99,12 +99,14 @@ def _claude_probe_context_for_account(account: AccountConfig, config: Config) ->
             and _claude_cached_success_status_usable(status)
         ):
             last_success_status = status
-            last_success_at = last_success_at or entry.get("cached_at")
+            last_success_at = (last_success_at or status.observed_at
+                               or entry.get("provider_observed_at") or entry.get("cached_at"))
         if not _claude_cached_success_status_usable(last_success_status):
             last_success_status = None
             last_success_at = None
     return ClaudeProbeContext(
         direct_usage_enabled=config.claude.direct_usage_enabled,
+        direct_rate_limit_failures=failure_count((entry or {}).get("direct_rate_limit_failures")),
         last_direct_probe_at=last_probe_at if isinstance(last_probe_at, str) else None,
         last_direct_probe_error=last_error if isinstance(last_error, ClaudeProbeError) else None,
         last_direct_success_at=last_success_at if isinstance(last_success_at, str) else None,
@@ -188,6 +190,19 @@ def _format_status_footer_timestamp(value: datetime, *, now: datetime | None = N
 
 
 def _format_status_cache_footer(entries: dict[str, dict], config: Config) -> str:
+    footer = _format_status_cache_footer_base(entries, config)
+    # Fresh fallback data and a failed direct monitor are independent facts.
+    for entry in entries.values():
+        account = entry.get("account")
+        if (isinstance(account, AccountConfig) and account.provider == "claude"
+                and not _status_cache_entry_is_stale(entry, config)):
+            detail = diagnostic_text(entry)
+            if detail:
+                footer += f" {account.label}: {detail}."
+    return footer
+
+
+def _format_status_cache_footer_base(entries: dict[str, dict], config: Config) -> str:
     freshness = _status_cache_freshness(entries, config)
     if freshness["stale"] == 0:
         cached_at = freshness["fresh_cached_at"]
@@ -264,6 +279,11 @@ def _status_cache_entry_provider_age(entry: dict) -> str | None:
 
 
 def _status_cache_stale_reason(entry: dict) -> str | None:
+    account = entry.get("account")
+    if isinstance(account, AccountConfig) and account.provider == "claude":
+        detail = diagnostic_text(entry)
+        if detail:
+            return detail
     if entry.get("needs_refresh"):
         return "needs refresh"
     status = entry.get("status")
@@ -271,9 +291,6 @@ def _status_cache_stale_reason(entry: dict) -> str | None:
         return "weekly exhausted"
     refresh_error = entry.get("refresh_error")
     if isinstance(refresh_error, str) and refresh_error:
-        account = entry.get("account")
-        if isinstance(account, AccountConfig) and account.provider == "claude":
-            return "passive refresh unavailable"
         return f"last refresh failed: {refresh_error}"
     return None
 
@@ -320,6 +337,13 @@ def _account_status_from_cache(data: dict) -> AccountStatus | None:
         status_data["state"] = AccountState(state)
         status = AccountStatus(**status_data)
         status.source_detail = normalize_source_detail(status.source_detail)
+        if (status.codex_limits_version is None and status.session_window_minutes == 10080
+                and status.source_detail in {"codex-provider-usage", "codex-session-jsonl", "codex-session-file"}):
+            status = replace(status, state=AccountState.UNKNOWN, stale=True,
+                             session_window_minutes=None, session_resets_at=None,
+                             session_resets_in_seconds=None, session_used_percent=None,
+                             codex_session_limit="unknown",
+                             error="Legacy Codex window mapping requires a fresh provider read.")
         _recompute_status_cache_countdowns(status)
         return status
     except (TypeError, ValueError):
@@ -440,6 +464,9 @@ def _load_status_cache_entries() -> dict[str, dict]:
             continue
         if _claude_direct_status_missing_weekly_reset(status):
             refresh_error = "IncompleteClaudeWeeklyReset"
+        if (status.codex_session_limit == "unknown" and status.stale
+                and status.error == "Legacy Codex window mapping requires a fresh provider read."):
+            needs_refresh = True
         if not _claude_cached_success_status_usable(last_direct_success_status):
             last_direct_success_status = None
             last_direct_success_at = None
@@ -455,6 +482,7 @@ def _load_status_cache_entries() -> dict[str, dict]:
             "refresh_error": refresh_error,
             "last_direct_probe_at": last_direct_probe_at if isinstance(last_direct_probe_at, str) else None,
             "last_direct_probe_error": last_direct_probe_error,
+            "direct_rate_limit_failures": failure_count(entry.get("direct_rate_limit_failures")),
             "last_direct_success_at": last_direct_success_at if isinstance(last_direct_success_at, str) else None,
             "last_direct_success_status": last_direct_success_status,
             "needs_refresh": needs_refresh,
@@ -551,6 +579,9 @@ def _status_cache_needs_refresh(entries: dict[str, dict], config: Config) -> boo
         return True
     now = _cli()._status_cache_now()
     for entry in entries.values():
+        account = entry.get("account")
+        if isinstance(account, AccountConfig) and account.provider == "claude" and cooling_down(entry, now):
+            continue
         if entry.get("needs_refresh"):
             return True
         if entry.get("refresh_error"):
@@ -597,6 +628,7 @@ def _failures_by_key_from_status_pairs(
 def _copy_existing_claude_probe_metadata(existing: dict, entry: dict) -> None:
     for key in (
         "last_direct_probe_at",
+        "direct_rate_limit_failures",
         "last_direct_probe_error",
         "last_direct_success_at",
         "last_direct_success_status",
@@ -611,10 +643,16 @@ def _apply_claude_probe_context_to_entry(
 ) -> None:
     if context is None:
         return
+    previous = parse_time(entry.get("last_direct_probe_at"))
+    incoming = parse_time(context.last_direct_probe_at)
+    if previous is not None and (incoming is None or previous > incoming):
+        return
+    entry["direct_rate_limit_failures"] = failure_count(context.direct_rate_limit_failures)
     entry["last_direct_probe_at"] = context.last_direct_probe_at
     entry["last_direct_probe_error"] = context.last_direct_probe_error
-    entry["last_direct_success_at"] = context.last_direct_success_at
-    entry["last_direct_success_status"] = context.last_direct_success_status
+    if context.last_direct_success_status is not None:
+        entry["last_direct_success_at"] = context.last_direct_success_at
+        entry["last_direct_success_status"] = context.last_direct_success_status
 
 
 def _entry_provider_observed_at(entry: dict, fallback: str | None = None) -> str | None:
@@ -641,6 +679,7 @@ def _status_cache_entry_dict(entry: dict) -> dict:
         "refresh_error": entry.get("refresh_error"),
         "needs_refresh": bool(entry.get("needs_refresh", False)),
         "last_direct_probe_at": entry.get("last_direct_probe_at"),
+        "direct_rate_limit_failures": failure_count(entry.get("direct_rate_limit_failures")),
         "last_direct_probe_error": (
             entry["last_direct_probe_error"].to_dict()
             if isinstance(entry.get("last_direct_probe_error"), ClaudeProbeError)
@@ -832,7 +871,8 @@ def _read_refresh_lock(path: Path) -> tuple[int | None, int | None] | None:
     try:
         stat = path.stat()
         age_seconds = max(0, int(time.time() - stat.st_mtime))
-        raw_pid = path.read_text().strip()
+        lines = path.read_text().splitlines()
+        raw_pid = lines[0] if lines else ""
     except OSError:
         return None
 
@@ -844,12 +884,21 @@ def _read_refresh_lock(path: Path) -> tuple[int | None, int | None] | None:
 
 
 def _reap_dead_refresh_lock(path: Path) -> dict[str, int | None] | None:
+    try:
+        with state_file_lock(path):
+            return _reap_dead_refresh_lock_unlocked(path)
+    except OSError as exc:
+        _set_status_refresh_lock_acquire_error(f"Background refresh lock could not be read: {exc}")
+        return None
+
+
+def _reap_dead_refresh_lock_unlocked(path: Path) -> dict[str, int | None] | None:
     info = _read_refresh_lock(path)
     if info is None:
         return None
     pid, age_seconds = info
-    if pid is not None:
-        if _pid_is_running(pid):
+    if pid is not None or (age_seconds is not None and age_seconds > _cli().STATUS_CACHE_REFRESH_LOCK_MAX_AGE_SECONDS):
+        if pid is not None and _pid_is_running(pid):
             return None
         try:
             path.unlink()
@@ -906,6 +955,16 @@ def _clear_status_refresh_lock_acquire_error() -> None:
 
 
 def _acquire_status_refresh_lock() -> bool:
+    try:
+        with state_file_lock(_cli().STATUS_CACHE_REFRESH_LOCK_FILE):
+            return _acquire_status_refresh_lock_unlocked()
+    except OSError as exc:
+        _set_status_refresh_lock_acquire_error(f"Background refresh lock could not be acquired: {exc}")
+        return False
+
+
+def _acquire_status_refresh_lock_unlocked() -> bool:
+    global _STATUS_REFRESH_OWNER
     _clear_status_refresh_lock_acquire_error()
     if _status_refresh_lock_active():
         return False
@@ -923,8 +982,9 @@ def _acquire_status_refresh_lock() -> bool:
         )
         return False
     try:
+        _STATUS_REFRESH_OWNER = uuid.uuid4().hex
         with os.fdopen(fd, "w") as handle:
-            handle.write(str(os.getpid()))
+            handle.write(f"{os.getpid()}\n{_STATUS_REFRESH_OWNER}\n")
     except OSError as exc:
         _set_status_refresh_lock_acquire_error(
             f"Background refresh lock could not be written: {exc}"
@@ -938,12 +998,17 @@ def _acquire_status_refresh_lock() -> bool:
 
 
 def _release_status_refresh_lock() -> None:
-    try:
-        _cli().STATUS_CACHE_REFRESH_LOCK_FILE.unlink()
-    except FileNotFoundError:
+    path = _cli().STATUS_CACHE_REFRESH_LOCK_FILE
+    owner = os.environ.get("TK_REFRESH_LOCK_TOKEN") or _STATUS_REFRESH_OWNER
+    if not owner:
         return
-    except OSError:
-        return
+    with state_file_lock(path):
+        try:
+            lines = path.read_text().splitlines()
+            if len(lines) > 1 and lines[1] == owner:
+                path.unlink()
+        except OSError:
+            pass
 
 
 def _start_background_status_refresh() -> bool:
@@ -959,17 +1024,18 @@ def _start_background_status_refresh() -> bool:
         except OSError:
             stdout = subprocess.DEVNULL
             stderr = subprocess.DEVNULL
-        process = subprocess.Popen(
-            [sys.executable, "-m", "tokenkick.cli", "refresh-cache"],
-            stdin=subprocess.DEVNULL,
-            stdout=stdout,
-            stderr=stderr,
-            start_new_session=True,
-        )
-        try:
-            _cli().STATUS_CACHE_REFRESH_LOCK_FILE.write_text(str(process.pid))
-        except OSError:
-            pass
+        # Hold the ownership transaction until the child PID is installed. A fast
+        # child's cleanup waits for this handoff, then removes only its own token.
+        with state_file_lock(_cli().STATUS_CACHE_REFRESH_LOCK_FILE):
+            process = subprocess.Popen(
+                ([sys.executable] if getattr(sys, "frozen", False) else
+                 [sys.executable, "-m", "tokenkick.cli"]) + ["refresh-cache"],
+                stdin=subprocess.DEVNULL, stdout=stdout, stderr=stderr,
+                start_new_session=True,
+                env={**os.environ, "TK_REFRESH_LOCK_TOKEN": _STATUS_REFRESH_OWNER or ""},
+            )
+            atomic_write_text(_cli().STATUS_CACHE_REFRESH_LOCK_FILE,
+                              f"{process.pid}\n{_STATUS_REFRESH_OWNER}\n")
         return True
     except OSError:
         _release_status_refresh_lock()

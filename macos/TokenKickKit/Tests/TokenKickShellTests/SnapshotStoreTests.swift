@@ -119,3 +119,40 @@ final class SnapshotStoreTests: XCTestCase {
         XCTAssertEqual(store.phase, .initial)
     }
 }
+
+private actor HeldSnapshotProvider: SnapshotProviding {
+    var calls = 0
+    var first: CheckedContinuation<TKEnvelope<TKSnapshotPayload>, Never>?
+    let old: TKEnvelope<TKSnapshotPayload>
+    let new: TKEnvelope<TKSnapshotPayload>
+    init(old: TKEnvelope<TKSnapshotPayload>, new: TKEnvelope<TKSnapshotPayload>) {
+        self.old = old; self.new = new
+    }
+    func fetchSnapshot() async throws -> TKEnvelope<TKSnapshotPayload> {
+        calls += 1
+        if calls == 1 { return await withCheckedContinuation { first = $0 } }
+        return new
+    }
+    func release() { first?.resume(returning: old); first = nil }
+}
+
+extension SnapshotStoreTests {
+    func testOverlappingMutationRefreshAwaitsNewSnapshot() async throws {
+        let provider = HeldSnapshotProvider(
+            old: try ShellFixtures.envelope(warnings: ["old"]),
+            new: try ShellFixtures.envelope(warnings: ["new"]))
+        let store = SnapshotStore(provider: provider)
+        let first = Task { await store.refresh() }
+        while await provider.calls == 0 { await Task.yield() }
+        var secondFinished = false
+        let second = Task { await store.refresh(); secondFinished = true }
+        await Task.yield()
+        XCTAssertFalse(secondFinished)
+        await provider.release()
+        await second.value
+        await first.value
+        XCTAssertEqual(store.envelopeWarnings, ["new"])
+        let calls = await provider.calls
+        XCTAssertEqual(calls, 2)
+    }
+}

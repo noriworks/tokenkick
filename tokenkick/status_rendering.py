@@ -4,10 +4,13 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
+from rich.markup import escape
 from rich.table import Table
 from rich.text import Text
 
+from .claude_monitoring import diagnostic_text, diagnostics
 from .kicker import KICKABLE_PROVIDERS, account_is_kickable
+from .codex_limits import display_status as codex_display_status, session_limit_info
 from .models import (
     AccountConfig,
     AccountState,
@@ -55,9 +58,16 @@ def _format_session_reset_for_status(
     *,
     phantom_session: bool = False,
     codex_unconfirmed_session: bool = False,
+    codex_session_limit: str | None = None,
 ) -> str:
+    if codex_session_limit == "absent":
+        return "[dim]No five-hour limit[/dim]"
+    if codex_session_limit == "unknown":
+        return "[dim]5h limit unknown[/dim]"
     if _status_weekly_exhausted(status):
         return "[cyan]session blocked[/cyan]"
+    if status.source_detail == "antigravity-cli" and status.window_anchor_state == "available_unanchored":
+        return "[cyan]session not started[/cyan]"
     if phantom_session:
         return "[cyan]session phantom[/cyan]"
     if codex_unconfirmed_session:
@@ -117,7 +127,7 @@ def _format_used_labeled_cell(
 ) -> str:
     label = "s" if session else "w"
     value = _format_used_cell(status, provider, session=session)
-    return f"[dim]{label}[/dim] {value}"
+    return f"[dim]{escape(label)}[/dim] {value}"
 
 
 def _format_antigravity_quota_label(window: dict) -> str:
@@ -138,7 +148,7 @@ def _format_antigravity_quota_reset(window: dict) -> str:
     seconds = _numeric_int(window.get("resets_in_seconds"))
     label = "weekly" if kind == "weekly" else "session"
     include_days = kind == "weekly"
-    return f"[dim]{label}[/dim]  {_format_relative_reset(seconds, include_days=include_days)}"
+    return f"[dim]{escape(label)}[/dim]  {_format_relative_reset(seconds, include_days=include_days)}"
 
 
 def _antigravity_quota_targets(status: AccountStatus) -> list[dict]:
@@ -333,7 +343,23 @@ def _status_rows_as_dict(
         entry = cache_entries.get(account_key_string(account)) if account is not None else None
         if entry is not None:
             status = effective_cached_status(status, entry, config or Config())
+        limit_info = session_limit_info(account, status) if account and account.provider == "codex" else {}
+        if account is not None:
+            status = codex_display_status(account, status)
         row = status.to_dict()
+        if account is not None:
+            from . import stagger
+            row["automation_owner"] = stagger.ownership(account, _cli().CONFIG_DIR)
+        if account is not None and account.provider == "claude":
+            probe = getattr(status, "_claude_probe_context", None)
+            monitoring_entry = dict(entry or {})
+            if probe is not None and entry is None:
+                monitoring_entry.update(vars(probe))
+            monitoring_entry["status"] = status
+            monitoring = diagnostics(monitoring_entry)
+            if monitoring:
+                row["usage_monitoring"] = monitoring
+        row.update(limit_info)
         row.setdefault("observed_at", _cli()._status_cache_observed_at())
         row.setdefault("source_detail", account.source.value if account is not None else "unknown")
         row.setdefault("stale", False)
@@ -426,6 +452,7 @@ def _status_json_payload(
 ) -> dict:
     account_rows = _status_rows_as_dict(statuses, accounts, config, cache_entries)
     return {
+        "stagger": _cli()._stagger_status_payload(),
         "cached": cached,
         "cached_at": _oldest_status_observed_at(account_rows),
         "refresh_error": refresh_error,
@@ -497,7 +524,16 @@ def _render_status_table(
         provider = _cli()._status_provider(s, providers_by_label)
         account = accounts_by_label.get(s.label)
         cache_entry = cache_entries.get(account_key_string(account)) if account is not None else None
+        if cache_entry is not None and provider == "codex":
+            s = effective_cached_status(s, cache_entry, config or Config())
+        limit_info = session_limit_info(account, s) if account and provider == "codex" else {}
+        if account is not None:
+            s = codex_display_status(account, s)
         refresh_failed = bool(cache_entry and cache_entry.get("refresh_error"))
+        if provider == "claude":
+            probe = getattr(s, "_claude_probe_context", None)
+            monitoring_entry = cache_entry or {**(vars(probe) if probe is not None else {}), "status": s}
+            refresh_failed = refresh_failed or bool(diagnostics(monitoring_entry))
         claude_cached_refresh_unavailable = bool(
             refresh_failed and account is not None and account.provider == "claude"
         )
@@ -525,7 +561,7 @@ def _render_status_table(
         )
         if provider == "antigravity" and not (account and account.antigravity_family) and (quota_targets := _antigravity_quota_targets(s)):
             row = [
-                s.label,
+                Text(s.label),
                 state_display,
                 "[dim]quota buckets[/dim]",
                 "—",
@@ -544,7 +580,7 @@ def _render_status_table(
             for target in quota_targets:
                 target_row = [
                     "",
-                    f"[dim]{target['title']}[/dim]",
+                    f"[dim]{escape(target['title'])}[/dim]",
                     _format_antigravity_target_session_reset(target),
                     _format_antigravity_target_session_used(target),
                 ]
@@ -555,7 +591,7 @@ def _render_status_table(
             continue
 
         row = [
-            s.label,
+            Text(s.label),
             state_display,
             _format_weekly_reset(s.resets_in_seconds),
             _format_used_labeled_cell(s, provider),
@@ -573,17 +609,24 @@ def _render_status_table(
         table.add_row(*row)
         session_row = [
             "",
-            "",
+            (f"Plan: {limit_info['detected_plan_type'] or 'unknown'}"
+             + (" (stale)" if limit_info['plan_stale'] else "")) if limit_info else "",
             _format_session_reset_for_status(
                 s,
                 phantom_session=phantom_session_display,
                 codex_unconfirmed_session=codex_unconfirmed_session,
+                codex_session_limit=(limit_info.get("session_limit_effective")
+                                     if s.codex_limits_version is not None or (account and account.codex_session_limit_override != "auto")
+                                     else None),
             ),
             _format_used_labeled_cell(s, provider, session=True),
         ]
         if show_queued_column:
             session_row.append("")
-        session_row.append("")
+        session_row.append(limit_info.get("session_limit_warning") or (
+            f"Session override: {limit_info['session_limit_override']}"
+            if limit_info and limit_info['session_limit_override'] != 'auto' else ""
+        ))
         table.add_row(*session_row)
         if verbose and provider == "antigravity" and isinstance(s.quota_windows, list):
             for window in s.quota_windows:
@@ -601,6 +644,8 @@ def _render_status_table(
                 table.add_row(*quota_row)
 
     _cli().console.print(table)
+    from . import stagger
+    stagger.render(_cli().console, _cli()._stagger_status_payload())
 
     fresh = []
     for s in sorted_statuses:
@@ -625,7 +670,7 @@ def _render_status_table(
             if all(_cli()._long_kick_eligible(s) for s in fresh)
             else "Kick-ready windows"
         )
-        _cli().console.print(f"\n[green bold]→ {prompt_label}:[/green bold] {labels}")
+        _cli().console.print(f"\n[green bold]→ {prompt_label}:[/green bold] {escape(labels)}")
         auto_enabled = [
             s
             for s in fresh
@@ -653,8 +698,8 @@ def _render_status_table(
             else:
                 auto_command = "auto enable"
             _cli().console.print(
-                f'  Run [bold]tk kick "{label}"[/bold] now, or '
-                f'[bold]tk {auto_command} "{label}"[/bold] for automatic kicks.'
+                f'  Run [bold]tk kick "{escape(label)}"[/bold] now, or '
+                f'[bold]tk {auto_command} "{escape(label)}"[/bold] for automatic kicks.'
             )
         else:
             _cli().console.print(
@@ -665,8 +710,19 @@ def _render_status_table(
     if stale_statuses:
         stale_labels = ", ".join(s.label for s in stale_statuses)
         _cli().console.print(
-            f"\n[yellow]Stale CodexBar data blocks automatic kicks:[/yellow] {stale_labels}"
+            f"\n[yellow]Stale usage data blocks automatic kicks:[/yellow] {escape(stale_labels)}"
         )
+    for status in sorted_statuses:
+        account = accounts_by_label.get(status.label)
+        if account is None or account.provider != "claude":
+            continue
+        entry = cache_entries.get(account_key_string(account))
+        if entry is None:
+            probe = getattr(status, "_claude_probe_context", None)
+            entry = {**(vars(probe) if probe is not None else {}), "status": status}
+        detail = diagnostic_text(entry)
+        if detail:
+            _cli().console.print(Text(f"{status.label}: {detail}", style="yellow"))
     refresh_failed_statuses = [
         s
         for s in sorted_statuses
@@ -679,7 +735,7 @@ def _render_status_table(
         _cli().console.print(
             "\n[yellow]Refresh failed; automatic kicks are blocked until fresh data "
             "is available:[/yellow] "
-            f"{failed_labels}"
+            f"{escape(failed_labels)}"
         )
         for status in refresh_failed_statuses:
             account = accounts_by_label.get(status.label)
@@ -694,15 +750,15 @@ def _render_status_table(
             if hint is None:
                 continue
             _cli().console.print(
-                f"[yellow]Recovery hint:[/yellow] {hint.label} has not refreshed for "
+                f"[yellow]Recovery hint:[/yellow] {escape(hint.label)} has not refreshed for "
                 f"{hint.age_text}."
             )
-            _cli().console.print(f"  1. Check the Codex home: [bold]{hint.codex_command}[/bold]")
+            _cli().console.print(f"  1. Check the Codex home: [bold]{escape(hint.codex_command)}[/bold]")
             _cli().console.print(
                 "  2. If Codex opens but TokenKick still cannot refresh, run a "
                 f"one-time recovery kick: [bold]{hint.force_kick_command}[/bold]"
             )
-            _cli().console.print(f"  3. Then refresh: [bold]{hint.refresh_command}[/bold]")
+            _cli().console.print(f"  3. Then refresh: [bold]{escape(hint.refresh_command)}[/bold]")
             _cli().console.print(
                 "[dim]  The recovery kick consumes a small amount of Codex usage; "
                 "TokenKick will not run it automatically.[/dim]"
@@ -716,7 +772,7 @@ def _render_status_table(
         fallback_labels = ", ".join(s.label for s in codexbar_fallback_statuses)
         _cli().console.print(
             "\n[dim]* indirect Codex data via CodexBar fallback; automatic kicks are "
-            f"blocked until direct provider usage is available:[/dim] {fallback_labels}"
+            f"blocked until direct provider usage is available:[/dim] {escape(fallback_labels)}"
         )
     _surface_dormant_account_hints(sorted_statuses, accounts_by_label, config)
     codexbar_errors = [
@@ -727,47 +783,37 @@ def _render_status_table(
     if codexbar_errors:
         _cli().console.print("\n[yellow]CodexBar diagnostics:[/yellow]")
         for label, error in codexbar_errors:
-            _cli().console.print(f"[yellow]- {label}: {error}[/yellow]")
+            _cli().console.print(f"[yellow]- {escape(label)}: {escape(error)}[/yellow]")
 
 
-def _surface_dormant_account_hints(
-    statuses: list[AccountStatus],
-    accounts_by_label: dict[str, AccountConfig],
-    config: Config | None,
-) -> None:
+def _surface_dormant_account_hints(statuses, accounts_by_label, config) -> None:
     if config is None:
         return
-    state = _read_dormant_hint_state()
-    changed = False
+    from rich.text import Text
     for status in statuses:
-        account = accounts_by_label.get(status.label)
-        if account is None:
-            continue
-        key = account_key_string(account)
-        previous = state.get(key)
-        if status.state == AccountState.FRESH and status.stale:
-            if not (isinstance(previous, dict) and previous.get("hinted")):
-                _cli().console.print(
-                    f'[yellow]Account {status.label} is dormant. Run `tk wake "{status.label}"` '
-                    "to bootstrap it.[/yellow]"
-                )
+        if status.label in accounts_by_label and status.state == AccountState.FRESH and status.stale:
+            _cli().console.print(Text(f'Account {status.label} is dormant. Use tk wake to bootstrap it.', style="yellow"))
+
+
+def notify_dormant_accounts(statuses, accounts_by_label, config) -> None:
+    from .state_io import state_file_lock
+    with state_file_lock(_cli().DORMANT_HINTS_FILE):
+        state = _read_dormant_hint_state()
+        for status in statuses:
+            account = accounts_by_label.get(status.label)
+            if account is None:
+                continue
+            key = account_key_string(account)
+            if status.state == AccountState.FRESH and status.stale:
+                if state.get(key, {}).get("hinted"):
+                    continue
+                state[key] = {"hinted": True}
+                # Persist before send: dedupe survives a crash or disk failure.
+                _write_dormant_hint_state(state)
                 _cli().notify_dormant_account_for_account(account, config)
-                state[key] = {
-                    "label": status.label,
-                    "state": status.state.value,
-                    "stale": True,
-                    "hinted": True,
-                }
-                changed = True
-            continue
-        if previous is not None:
-            state.pop(key, None)
-            changed = True
-    if changed:
-        try:
-            _write_dormant_hint_state(state)
-        except OSError:
-            return
+            elif key in state:
+                state.pop(key)
+                _write_dormant_hint_state(state)
 
 
 def _sort_statuses(
@@ -949,7 +995,7 @@ def _status_action(
     if status.state == AccountState.UNKNOWN and status.error:
         if status.error.startswith("No session data"):
             return "No session data"
-        return status.error[:24]
+        return escape(status.error[:24])
     return status.state.action
 
 
@@ -1115,6 +1161,8 @@ def _status_state_display(
             display = f"{display} ⏱"
         return f"{display}*" if indirect else display
     display = f"{status.state.emoji} {status.state.value.capitalize()}"
+    if provider == "antigravity" and status.window_anchor_state == "available_unanchored":
+        display = "🟢 Session ready"
     if phantom_session and _status_has_session_artifact(status):
         display = "🟡 Phantom session"
     elif codex_unconfirmed_session:

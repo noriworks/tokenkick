@@ -411,3 +411,11 @@ def _notify_telegram_message(message: str, config: NotifyConfig) -> bool:
         return 200 <= response.status_code < 300
     except Exception:
         return False  # Best-effort
+
+
+def notify_stagger(message: str, config: NotifyConfig) -> bool:
+    """Only controller state changes call this, not routine successful cycles."""
+    if not config.enabled:
+        return False
+    return _notify_raw(message, config, title="TokenKick — Antigravity stagger",
+                       priority="default", tags="clock1")

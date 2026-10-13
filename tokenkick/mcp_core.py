@@ -15,6 +15,7 @@ import json
 import os
 import re
 import secrets
+import signal
 import shlex
 import shutil
 import subprocess
@@ -210,6 +211,55 @@ class TokenKickMCPCore:
             raise ValueError("Account identity or auto-kick settings changed; create a new preview")
         return self._run([*argv, "--expected-auto-fingerprint", preview.expected_plan],
                          risk=risk, app_mode=True, timeout=MUTATION_TIMEOUT_SECONDS)
+
+    def tokenkick_stagger_status(self) -> dict:
+        """Read persistent orchestration, not a finite work-window plan."""
+        return self._run(["stagger", "status", "--json-output"], risk="cached_read", app_mode=True)
+
+    def _stagger_argv(self, action, gemini, claude):
+        _require_choice("action", action, {"enable", "resume", "pause", "disable", "recover"})
+        argv = ["--action", action]
+        if action == "enable":
+            argv += ["--gemini", _safe_label(gemini), "--claude", _safe_label(claude)]
+        elif gemini is not None or claude is not None:
+            raise ValueError("Account labels are only accepted for enable")
+        return argv
+
+    def tokenkick_stagger_preview(self, *, action: str, gemini: str | None = None,
+                                  claude: str | None = None) -> dict:
+        args = self._stagger_argv(action, gemini, claude)
+        result = self._run(["stagger", "preview", *args, "--json-output"],
+                           risk="cached_read", app_mode=True)
+        if not result.get("ok"):
+            return result
+        payload = result.get("payload", {})
+        if not isinstance(payload, dict) or not isinstance(payload.get("fingerprint"), str):
+            raise ValueError("Stagger preview did not return a settings fingerprint")
+        risk = "dangerous_quota_operational" if action in {"enable", "resume"} else "low_risk_mutation"
+        result["preview_token"] = self.token_store.create(
+            tool_name="tokenkick_stagger_apply", argv=args, risk=risk,
+            expected_plan=payload["fingerprint"],
+        ).to_dict()
+        result["requires_quota_ack"] = action in {"enable", "resume"}
+        return result
+
+    def tokenkick_stagger_apply(self, *, action: str, preview_token: str, confirm: bool,
+                                gemini: str | None = None, claude: str | None = None,
+                                quota_ack: bool = False, accept_risk: bool = False) -> dict:
+        args = self._stagger_argv(action, gemini, claude)
+        self._require_confirm(confirm)
+        enabling = action in {"enable", "resume"}
+        if enabling:
+            self._require_quota_ack(quota_ack)
+            if accept_risk is not True:
+                raise ValueError("accept_risk=true is required after reviewing the provider disclosure")
+        risk = "dangerous_quota_operational" if enabling else "low_risk_mutation"
+        token = self.token_store.consume(preview_token, tool_name="tokenkick_stagger_apply",
+                                         argv=args, risk=risk)
+        return self._run(["stagger", "apply", *args, "--expected", token.expected_plan,
+                          "--yes", "--json-output", *(["--accept-risk", "ENABLE"] if enabling else [])],
+                         risk=risk, app_mode=True, provider_refresh=action == "recover",
+                         timeout=QUOTA_TIMEOUT_SECONDS if action == "recover" else MUTATION_TIMEOUT_SECONDS)
 
     def tokenkick_snapshot(self, *, include_paths: bool = False) -> dict[str, Any]:
         result = self._run(
@@ -655,12 +705,15 @@ class TokenKickMCPCore:
             argv.append("--codex")
         self._require_confirm(confirm)
         self._require_quota_ack(quota_ack)
-        self.token_store.consume(
+        preview = self.token_store.consume(
             preview_token,
             tool_name="tokenkick_run_apply",
             argv=argv,
             risk="dangerous_quota_operational",
         )
+        if preview.expected_plan is None:
+            raise ValueError("Run preview lacks approved targets; update TokenKick and preview again")
+        argv.extend(["--expected-targets", preview.expected_plan])
         return self._run(
             argv,
             risk="dangerous_quota_operational",
@@ -672,7 +725,8 @@ class TokenKickMCPCore:
         label = _safe_label(label)
         apply_argv = ["kick", label, "--json-output", "--yes"]
         preview_argv = ["kick", label, "--dry-run", "--json-output"]
-        result = self._run(preview_argv, risk="cached_read", app_mode=True)
+        result = self._run(preview_argv, risk="live_provider_read", app_mode=True,
+                           provider_refresh=True, timeout=LIVE_PROVIDER_TIMEOUT_SECONDS)
         return self._attach_preview_token(
             result,
             tool_name="tokenkick_kick_account",
@@ -752,6 +806,8 @@ class TokenKickMCPCore:
 
     def tokenkick_recovery_hint(self, *, label: str) -> dict[str, Any]:
         doctor = self.tokenkick_doctor(label=label)
+        if not doctor.get("ok"):
+            return doctor
         hints = []
         for account in _doctor_accounts(doctor.get("payload")):
             for check in account.get("checks", []):
@@ -788,7 +844,9 @@ class TokenKickMCPCore:
         return (
             "Use TokenKick MCP safely to plan a coding session. Start with cached snapshot/status, "
             "refresh provider status only if freshness matters, preview `tokenkick_plan_preview`, "
-            "show the user the plan, and apply only with an explicit preview token and confirmation."
+            "show the user the plan, and apply only with an explicit preview token and confirmation. "
+            "For ongoing Antigravity staggering use tokenkick_stagger_preview/apply instead: "
+            "the TokenKick daemon maintains recurrence; do not create an agent cron job."
         )
 
     def prompt_check_health(self) -> str:
@@ -971,7 +1029,11 @@ class TokenKickMCPCore:
         preview = self.token_store.create(
             tool_name=tool_name, argv=argv, risk=risk,
             preview_at=payload.get("built_at") if isinstance(payload, dict) else None,
-            expected_plan=payload.get("plan_fingerprint") if tool_name == "tokenkick_plan_apply" and isinstance(payload, dict) else None,
+            expected_plan=(json.dumps(payload["approval_targets"], sort_keys=True)
+                           if tool_name == "tokenkick_run_apply" and isinstance(payload, dict)
+                           and isinstance(payload.get("approval_targets"), list)
+                           else payload.get("plan_fingerprint")
+                           if tool_name == "tokenkick_plan_apply" and isinstance(payload, dict) else None),
         )
         result["preview_token"] = preview.to_dict()
         return result
@@ -1002,15 +1064,27 @@ class TokenKickMCPCore:
             env["TK_APP_MODE"] = "1"
         timeout = timeout or _timeout_for_risk(risk)
         try:
-            completed = subprocess.run(
-                command,
-                text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                env=env,
-                timeout=timeout,
-                check=False,
-            )
+            process = subprocess.Popen(command, text=True, stdout=subprocess.PIPE,
+                                       stderr=subprocess.PIPE, env=env, start_new_session=True)
+            try:
+                stdout, stderr = process.communicate(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                try:
+                    os.killpg(process.pid, signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
+                try:
+                    process.communicate(timeout=2)
+                except subprocess.TimeoutExpired:
+                    pass
+                finally:
+                    try:
+                        os.killpg(process.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                    process.communicate()
+                raise
+            completed = subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
         except subprocess.TimeoutExpired as exc:
             return _error_result(
                 risk=risk,
@@ -1018,8 +1092,11 @@ class TokenKickMCPCore:
                 may_read_environment=may_read_environment,
                 command=command,
                 include_paths=include_paths,
-                error_code="timeout",
-                message=f"TokenKick command timed out after {timeout:g}s.",
+                error_code="outcome_unknown" if risk in {"quota_consuming", "dangerous_recovery", "dangerous_quota_operational"} else "timeout",
+                message=(f"TokenKick command timed out after {timeout:g}s. "
+                         + ("Outcome unknown; retry is not safe. Inspect history and provider status before recovery."
+                            if risk in {"quota_consuming", "dangerous_recovery", "dangerous_quota_operational"}
+                            else "No completed result is available.")),
                 stderr=exc.stderr if isinstance(exc.stderr, str) else None,
             )
         except OSError as exc:

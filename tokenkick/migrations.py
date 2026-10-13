@@ -128,20 +128,13 @@ def _migrate_v04_direct_sources_if_needed(
             provider_usage_upgraded_labels.append(f"{account.label} ({account.provider})")
         else:
             migrated_labels.append(f"{account.label} ({account.provider})")
-        migrated_accounts.append(
-            replace(
-                direct_account,
-                label=account.label,
-                label_origin=account.label_origin,
-                auto_kick=account.auto_kick,
-                weekly_auto_kick=account.weekly_auto_kick,
-                session_auto_kick=account.session_auto_kick,
-                visible=account.visible,
-                status_probe_enabled=account.status_probe_enabled,
-                direct_usage_enabled=account.direct_usage_enabled,
-                kick_model=account.kick_model,
-            )
-        )
+        # Source/identity metadata changes; user policy remains the configured one.
+        migrated_accounts.append(replace(
+            account, source=direct_account.source, provider_home=direct_account.provider_home,
+            session_path=direct_account.session_path, codexbar_account=direct_account.codexbar_account,
+            identity_provider_id=direct_account.identity_provider_id,
+            identity_email=direct_account.identity_email, identity_org_id=direct_account.identity_org_id,
+        ))
 
     updated_config = replace(
         config,
@@ -161,6 +154,8 @@ def _migrate_v04_direct_sources_if_needed(
             _write_pre_v04_config_backup()
         _prune_migrated_status_cache_entries(old_keys)
         updated_config.save()
+        from .scheduling import rekey_pending_accounts
+        rekey_pending_accounts(config.accounts, migrated_accounts)
 
     if emit_notice and changed:
         if provider_usage_upgraded_labels:
@@ -350,7 +345,8 @@ def _write_config_backup(path: Path) -> None:
     if not CONFIG_FILE.exists() or path.exists():
         return
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    path.write_text(CONFIG_FILE.read_text())
+    from .state_io import atomic_write_text
+    atomic_write_text(path, CONFIG_FILE.read_text())
 
 
 def _prune_migrated_status_cache_entries(old_keys: list[str]) -> None:
@@ -476,7 +472,8 @@ def _repair_codex_home_identity_drift_account(
         or not _cli()._codex_has_home_scope(account)
     ):
         return None
-    if _codex_configured_home_identity_current(account):
+    # Missing/unreadable auth is not evidence that the account moved.
+    if _codex_configured_home_identity_not_mismatched(account):
         return None
 
     managed = _managed_codex_account_for_configured_identity(account, managed_by_identity)
@@ -486,6 +483,10 @@ def _repair_codex_home_identity_drift_account(
     if not managed_home or managed_home == account.provider_home:
         return None
 
+    candidate = replace(account, provider_home=managed_home,
+                        session_path=str(Path(managed_home) / "sessions"))
+    if not _codex_configured_home_identity_current(candidate):
+        return None
     managed_email = managed.get("email") or account.identity_email
     managed_provider_id = managed.get("provider_id") or account.identity_provider_id
     return replace(

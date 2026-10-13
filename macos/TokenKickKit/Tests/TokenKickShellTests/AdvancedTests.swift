@@ -3,6 +3,7 @@ import TokenKickKit
 @testable import TokenKickShell
 
 private final class StubAdvancedService: AdvancedServicing, @unchecked Sendable {
+    var surfaceHandler: (@Sendable (String) async throws -> TKCodexSurfacesPayload)?
     var strategyResult: Result<TKCodexStrategyPayload, Error>
     var accountsResult: Result<TKEnvelope<TKAccountsListPayload>, Error>
     var surfacesResult: Result<TKCodexSurfacesPayload, Error>
@@ -42,7 +43,8 @@ private final class StubAdvancedService: AdvancedServicing, @unchecked Sendable 
     }
 
     func codexSurfaces(label: String) async throws -> TKCodexSurfacesPayload {
-        try surfacesResult.get()
+        if let surfaceHandler { return try await surfaceHandler(label) }
+        return try surfacesResult.get()
     }
 
     func codexSurfacePatterns(label: String?) async throws -> TKCodexSurfacePatternsPayload {
@@ -390,5 +392,39 @@ final class AdvancedViewModelTests: XCTestCase {
             AdvancedViewModel.parseSurfaceList("repo, legacy\nrepo-skip"),
             ["repo", "legacy", "repo-skip"]
         )
+    }
+}
+
+private actor HeldSurfaces {
+    var started = false
+    var continuation: CheckedContinuation<TKCodexSurfacesPayload, Never>?
+    func fetch(_ label: String) async -> TKCodexSurfacesPayload {
+        if label == "codex (a)" {
+            started = true
+            return await withCheckedContinuation { continuation = $0 }
+        }
+        return StubAdvancedService.surfacesPayload()
+    }
+    func release() { continuation?.resume(returning: StubAdvancedService.surfacesPayload()); continuation = nil }
+}
+
+extension AdvancedViewModelTests {
+    func testLateAccountDetailsCannotOverwriteNewSelection() async throws {
+        let service = StubAdvancedService(accounts: StubAdvancedService.accountsEnvelope(codexAccounts: [
+            StubAdvancedService.account(label: "codex (a)", provider: "codex"),
+            StubAdvancedService.account(label: "codex (b)", provider: "codex")]))
+        let model = makeModel(service: service)
+        await model.load()
+        let held = HeldSurfaces()
+        service.surfaceHandler = { await held.fetch($0) }
+        let first = Task { await model.loadSelectedCodexDetails() }
+        while await !held.started { await Task.yield() }
+        await model.selectCodexAccount("codex (b)")
+        model.forceKeepText = "legacy"
+        await held.release()
+        await first.value
+        XCTAssertEqual(model.selectedCodexLabel, "codex (b)")
+        XCTAssertEqual(model.forceKeepText, "legacy", "old response must not overwrite the current editor")
+        XCTAssertFalse(model.isLoadingDetails)
     }
 }

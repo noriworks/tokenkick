@@ -29,7 +29,7 @@ except ModuleNotFoundError:  # pragma: no cover
 
 MCP_SERVER_NAME = "tokenkick"
 MCP_ARGS = ["mcp", "serve"]
-MCP_TOOL_TIMEOUT_SECONDS = 180
+MCP_TOOL_TIMEOUT_SECONDS = 240
 MCP_STARTUP_TIMEOUT_SECONDS = 20
 APP_SUPPORT_RELATIVE = Path("Library") / "Application Support" / "TokenKick"
 MCP_HELPER_NAME = "tokenkick-mcp-helper.sh"
@@ -707,7 +707,7 @@ def _write_if_changed(path: Path, text: str) -> MCPWriteResult:
     if current is not None:
         backup = path.with_name(f"{path.name}.tokenkick-backup-{_timestamp()}")
         backup.parent.mkdir(parents=True, exist_ok=True)
-        backup.write_text(current, encoding="utf-8")
+        atomic_write_text(backup, current)
         backup_path = str(backup)
     atomic_write_text(path, text)
     return MCPWriteResult(changed=True, backup_path=backup_path)

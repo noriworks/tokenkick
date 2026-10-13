@@ -95,7 +95,8 @@ def test_catalog_failure_records_failure_without_generation(monkeypatch, error):
     event = kick_account(AccountConfig(label="example", provider="codex"))
     assert not event.success
     assert "secret details" not in event.error
-    assert events == [event]
+    assert events == []
+    assert event.dispatch_state == "not_sent"
 
 
 def test_claude_economical_settings_override_environment(monkeypatch):

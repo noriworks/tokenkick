@@ -805,7 +805,7 @@ def test_fetch_antigravity_cli_rejects_local_api_identity_mismatch(monkeypatch):
 
     assert status.state == AccountState.UNKNOWN
     assert status.source_detail == "antigravity-cli"
-    assert "identity mismatch" in status.error
+    assert "identity" in status.error
     assert "cli@example.test" in status.error
     assert "desktop@example.test" in status.error
 
@@ -1896,7 +1896,7 @@ def test_claude_direct_recent_failure_without_recent_success_falls_back(monkeypa
     assert status.used_percent == 64.0
 
 
-def test_claude_direct_identity_mismatch_falls_back(monkeypatch):
+def test_claude_direct_identity_mismatch_blocks_fallback(monkeypatch):
     account = _claude_account()
     context = ClaudeProbeContext()
     monkeypatch.setattr(
@@ -1916,7 +1916,8 @@ def test_claude_direct_identity_mismatch_falls_back(monkeypatch):
     with claude_cli_usage_refresh_allowed():
         status = _fetch_claude_direct(account, claude_probe_context=context)
 
-    assert status.source_detail == "claude-codexbar-fallback"
+    assert status.state == AccountState.UNKNOWN
+    assert "identity" in status.error
     assert context.last_direct_probe_error.category == ClaudeProbeErrorCategory.IDENTITY_MISMATCH
 
 
@@ -2104,6 +2105,7 @@ def test_claude_probe_raw_redaction_removes_email_and_plan():
 
 
 def test_claude_probe_is_last_resort(monkeypatch):
+    monkeypatch.setattr("tokenkick.sources.read_claude_identity", lambda: _active_claude_identity())
     account = _claude_account(status_probe_enabled=True)
     monkeypatch.setattr(
         "tokenkick.sources._fetch_codexbar_cli",
@@ -2377,9 +2379,8 @@ def test_codex_direct_session_jsonl_overrides_appserver_phantom(monkeypatch, tmp
 
     status = _fetch_codex_direct(account)
 
-    assert status.state == AccountState.ACTIVE
-    assert status.source_detail == "codex-session-jsonl"
-    assert status.used_percent == 12.0
+    assert status is appserver_status
+    assert status.source_detail == CODEX_PROVIDER_USAGE_SOURCE_DETAIL
 
 
 def test_codex_direct_uses_session_jsonl_when_appserver_and_codexbar_unavailable(
@@ -2462,7 +2463,7 @@ def test_codex_direct_blocks_home_identity_mismatch(monkeypatch, tmp_path):
 
     assert status.state == AccountState.UNKNOWN
     assert status.source_detail == "codex-auth-json"
-    assert "identity mismatch" in status.error
+    assert "identity" in status.error
 
 
 def test_codex_direct_missing_auth_identity_falls_back_to_codexbar_history(
@@ -2524,9 +2525,9 @@ def test_codex_direct_missing_auth_identity_falls_back_to_codexbar_history(
 
     status = _fetch_codex_direct(account)
 
-    assert status.state == AccountState.ACTIVE
-    assert status.source_detail == "codexbar-history"
-    assert status.used_percent == 11.0
+    assert status.state == AccountState.UNKNOWN
+    assert status.source_detail == "codex-auth-json"
+    assert "identity is unavailable" in status.error
 
 
 def test_codex_direct_uses_appserver_when_sessions_missing(monkeypatch, tmp_path):
@@ -2616,10 +2617,8 @@ def test_codex_direct_prefers_session_jsonl_when_appserver_is_phantom(monkeypatc
 
     status = _fetch_codex_direct(account)
 
-    assert status.state == AccountState.ACTIVE
-    assert status.source_detail == "codex-session-jsonl"
-    assert status.used_percent == 3.0
-    assert status.session_used_percent == 8.0
+    assert status is appserver_status
+    assert status.source_detail == CODEX_PROVIDER_USAGE_SOURCE_DETAIL
 
 
 def test_codex_direct_prefers_clean_appserver_reset_over_stale_session_jsonl(
@@ -2812,10 +2811,8 @@ def test_codex_direct_prefers_session_jsonl_when_appserver_is_active_weekly_phan
 
     status = _fetch_codex_direct(account)
 
-    assert status.state == AccountState.ACTIVE
-    assert status.source_detail == "codex-session-jsonl"
-    assert status.used_percent == 51.0
-    assert status.session_used_percent == 8.0
+    assert status is appserver_status
+    assert status.source_detail == CODEX_PROVIDER_USAGE_SOURCE_DETAIL
 
 
 def test_codex_appserver_reader_is_cached_within_polling_pass(monkeypatch, tmp_path):
@@ -3122,7 +3119,7 @@ class TestFindLatestRateLimit:
             + "\n"
         )
 
-        assert _find_latest_rate_limit(sessions_dir) == latest_payload
+        assert _find_latest_rate_limit(sessions_dir) == {**latest_payload, "observed_at": "2026-05-17T19:38:37.361Z"}
 
 
 class TestParseCodexBarJson:
@@ -3515,7 +3512,7 @@ class TestParseCodexBarJson:
             provider="gemini",
             source=DataSource.CODEXBAR_CLI,
             codexbar_provider="gemini",
-            codexbar_account="work@example.test",
+            codexbar_account=None,  # Unscoped widget data cannot identify a saved account.
         )
 
         status = _fetch_codexbar_cli(account)
@@ -3685,8 +3682,8 @@ def test_codex_direct_missing_sessions_does_not_fall_back_to_codexbar(monkeypatc
     status = _fetch_codex_direct(account)
 
     assert status.state == AccountState.UNKNOWN
-    assert status.source_detail == "codex-session-jsonl"
-    assert "No Codex session data" in status.error
+    assert status.source_detail == "codex-auth-json"
+    assert "identity" in status.error
 
 
 def test_claude_direct_uses_codexbar_fallback_when_available(monkeypatch, tmp_path):
@@ -3741,12 +3738,12 @@ def test_claude_direct_uses_codexbar_fallback_when_available(monkeypatch, tmp_pa
 
     status = _fetch_claude_direct(account)
 
-    assert status.state == AccountState.ACTIVE
-    assert status.used_percent == 4.0
-    assert status.source_detail == "claude-codexbar-fallback"
+    assert status.state == AccountState.UNKNOWN
+    assert "identity" in status.error
 
 
 def test_claude_direct_without_codexbar_is_unknown(monkeypatch, tmp_path):
+    monkeypatch.setattr("tokenkick.sources.read_claude_identity", lambda: DirectIdentity("claude", provider_account_id="account-uuid", organization_id="org-uuid"))
     monkeypatch.setattr("tokenkick.codexbar_source.CODEXBAR_HISTORY_DIR", tmp_path / "history")
     monkeypatch.setattr("tokenkick.codexbar_source.CODEXBAR_WIDGET_SNAPSHOT_FILES", [])
     monkeypatch.setattr(
@@ -3771,6 +3768,7 @@ def test_claude_direct_without_codexbar_is_unknown(monkeypatch, tmp_path):
 
 
 def test_claude_direct_probe_is_explicit(monkeypatch):
+    monkeypatch.setattr("tokenkick.sources.read_claude_identity", lambda: DirectIdentity("claude", provider_account_id="account-uuid", organization_id="org-uuid"))
     monkeypatch.setattr("tokenkick.sources.probe_claude_status", lambda: (True, None))
     monkeypatch.setattr(
         "tokenkick.sources._fetch_codexbar_cli",

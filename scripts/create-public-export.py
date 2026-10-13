@@ -10,6 +10,11 @@ def export(root: Path, destination: Path) -> None:
     root, destination = root.resolve(), destination.resolve()
     if destination == root or root in destination.parents or destination in root.parents:
         raise ValueError("Export destination overlaps the source repository")
+    if destination.exists():
+        raise FileExistsError(destination)
+    dirty = subprocess.check_output(["git", "-C", str(root), "status", "--porcelain", "--untracked-files=all"])
+    if dirty.strip():
+        raise ValueError("Export requires a clean, verified commit; commit or isolate the current batch first")
     tracked = subprocess.check_output(["git", "-C", str(root), "ls-files", "-z"])
     destination.mkdir(parents=True, exist_ok=False)
     omitted = {"docs/APP_UX_PLAN.md", "docs/RELEASE.md"}

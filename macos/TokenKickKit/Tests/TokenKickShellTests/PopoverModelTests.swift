@@ -135,3 +135,20 @@ final class PopoverModelTests: XCTestCase {
         XCTAssertTrue(row.stale)
     }
 }
+
+extension PopoverModelTests {
+    func testAbandonedOrExpiredPendingDoesNotAdvertiseNextKick() throws {
+        var abandoned = ShellFixtures.pendingKick(accountLabel: "abandoned", kickAt: "2026-06-12T20:00:00Z")
+        abandoned["gave_up_at"] = "2026-06-11T12:00:00Z"
+        var expired = ShellFixtures.pendingKick(accountLabel: "expired", kickAt: "2026-06-12T20:00:00Z")
+        expired["work_end"] = "2026-06-10T12:00:00Z"
+        let snapshot = try ShellFixtures.snapshot(pendingKicks: [abandoned, expired])
+        let model = PopoverModel(snapshot: snapshot, warnings: [], now: Date(timeIntervalSince1970: 1781180000))
+        XCTAssertNil(model.nextActionLine)
+        XCTAssertTrue(model.cancelPlanVisible, "Retained entries remain cancellable")
+    }
+
+    func testCopiedShellLabelQuotesApostropheAndSubstitution() {
+        XCTAssertEqual(ConfirmedAction.shellQuote("a'b$(x)"), "'a'\"'\"'b$(x)'")
+    }
+}

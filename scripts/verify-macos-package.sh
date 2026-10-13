@@ -47,7 +47,11 @@ codesign --verify --strict --verbose=4 "$APP_DIR"
 
 if [ -f "$DMG_PATH" ]; then
     hdiutil verify "$DMG_PATH"
-    codesign --verify --verbose=4 "$DMG_PATH" || true
+    if [ "${ALLOW_UNSIGNED_BETA:-0}" = 1 ]; then
+        echo "==> Explicit unsigned beta policy: DMG signature is not required"
+    else
+        codesign --verify --verbose=4 "$DMG_PATH"
+    fi
 fi
 
 echo "==> Package verification passed"

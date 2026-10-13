@@ -1,0 +1,230 @@
+{
+  "build-results.json": [
+    {
+      "case": "process_identity_timezone",
+      "same_process_different_identity": true,
+      "identities_available": true
+    },
+    {
+      "case": "discovery_typeerror_retry",
+      "calls": 2,
+      "retry_without_config": true
+    }
+  ],
+  "claude-confirmation-results.json": {
+    "case": "claude_weekly_confirmation",
+    "request_success": true,
+    "confirmed_without_provider_read": true,
+    "post_kick_status": null
+  },
+  "execution-results.json": [
+    {
+      "case": "reset_prose",
+      "input": "Reset time unknown",
+      "seconds": 0
+    },
+    {
+      "case": "reset_prose",
+      "input": "Resets in 3d (known issue)",
+      "seconds": 0
+    },
+    {
+      "case": "reset_prose",
+      "input": "Resets now",
+      "seconds": 0
+    },
+    {
+      "case": "failed_immediate_kick",
+      "pending_removed": true,
+      "reported_executed": true
+    },
+    {
+      "case": "claude_invocation_identity",
+      "executable": "claude",
+      "identity_in_command": false,
+      "cwd": "None"
+    }
+  ],
+  "interface-results.json": [
+    {
+      "case": "interactive_exception",
+      "escaped": true
+    },
+    {
+      "case": "doctor_topic_exposure",
+      "topic_exposed": true,
+      "in_message": true
+    },
+    {
+      "case": "recovery_hides_doctor_failure",
+      "result": {
+        "ok": true,
+        "risk": "diagnostic_read",
+        "provider_refresh": false,
+        "may_read_environment": true,
+        "command_summary": "derived from tokenkick_doctor",
+        "payload": {
+          "account": "fixture",
+          "hints": []
+        },
+        "warnings": [],
+        "error": null
+      }
+    },
+    {
+      "case": "telegram_nonfinite",
+      "value": "nan",
+      "error": "ValueError"
+    },
+    {
+      "case": "telegram_nonfinite",
+      "value": "inf",
+      "error": "OverflowError"
+    },
+    {
+      "case": "status_renderer_sends_notification",
+      "calls": 1
+    },
+    {
+      "case": "kick_event_signature",
+      "signature": "(label: 'str', timestamp: 'float' = <factory>, success: 'bool' = True, error: 'Optional[str]' = None, confirmed: 'bool' = True, kind: 'str' = 'kick', kick_type: 'Optional[str]' = None, kick_model: 'Optional[str]' = None, reported_model: 'Optional[str]' = None, input_tokens: 'Optional[int]' = None, output_tokens: 'Optional[int]' = None, total_tokens: 'Optional[int]' = None, prompt_text: 'Optional[str]' = None, response_text: 'Optional[str]' = None, provider_output_excerpt: 'Optional[str]' = None, codex_surface: 'Optional[str]' = None, codex_attempt: 'Optional[int]' = None, codex_max_attempts: 'Optional[int]' = None, codex_cluster_id: 'Optional[str]' = None, codex_cluster_origin: 'Optional[str]' = None, codex_attempt_started_at: 'Optional[float]' = None, codex_attempt_finished_at: 'Optional[float]' = None, codex_inferred_anchor_at: 'Optional[float]' = None, codex_anchor_match_delta_seconds: 'Optional[float]' = None, codex_confirmation_method: 'Optional[str]' = None, codex_attribution: 'Optional[str]' = None, codex_provider_observed_at: 'Optional[str]' = None, codex_provider_session_resets_at: 'Optional[float]' = None, codex_provider_session_used_percent: 'Optional[float]' = None, codex_provider_stale: 'Optional[bool]' = None, evidence_response: 'Optional[bool]' = None, evidence_tokens: 'Optional[bool]' = None, evidence_provider_moved: 'Optional[bool]' = None, post_kick_status: 'Optional[str]' = None) -> None"
+    }
+  ],
+  "latency-results.json": {
+    "case": "successful_slow_read",
+    "error": "Codex provider usage read completed in 10500ms.",
+    "detected_capability": "absent",
+    "display_capability": "unknown"
+  },
+  "monitoring-results.json": [
+    {
+      "case": "identity_mismatch_probe_fallthrough",
+      "generation_probe_called": true,
+      "returned_state": "active"
+    },
+    {
+      "case": "expired_jsonl_overrides_native",
+      "overrides": true
+    },
+    {
+      "case": "empty_stale_refresh_lock",
+      "lock_info": {
+        "pid": null,
+        "age_seconds": 7200
+      }
+    },
+    {
+      "case": "agy_lock_owner_loss",
+      "second_entered_while_first_active": true,
+      "second_lock_removed_by_first": true
+    }
+  ],
+  "planner-results.json": {
+    "case": "cross_day_plan_and_timezone",
+    "replaces": 1,
+    "conflicts": 0,
+    "berlin_14_displayed_as": "12:00",
+    "advisory_clock": "12:00"
+  },
+  "presentation-results.json": [
+    {
+      "case": "history_unescaped_markup",
+      "field": "label",
+      "error": "MarkupError"
+    },
+    {
+      "case": "history_unescaped_markup",
+      "field": "response_text",
+      "error": "MarkupError"
+    },
+    {
+      "case": "history_unescaped_markup",
+      "field": "error",
+      "error": "MarkupError"
+    },
+    {
+      "case": "telegram_warning_truncation",
+      "warning_visible": false,
+      "warning_count_visible": true
+    }
+  ],
+  "stagger-results.json": [
+    {
+      "case": "missing_member_notification",
+      "raised": "StaggerError",
+      "message": "Member missing or ambiguous; reconfigure the stagger."
+    },
+    {
+      "case": "disable_after_identity_drift",
+      "markers_remaining": 1,
+      "owned_after_disable": [
+        "gemini"
+      ]
+    },
+    {
+      "case": "fractional_reset_advisory",
+      "compromised": true
+    }
+  ],
+  "state-race-results.json": [
+    {
+      "case": "pending_cancel_race",
+      "B_resurrected": true
+    },
+    {
+      "case": "migration_settings_loss",
+      "notifications_enabled": true,
+      "orchestration_role": "normal",
+      "weekly_reserve": null
+    }
+  ],
+  "swift-results.json": {
+    "globally_disabled_inferred_route": "none",
+    "inherited_ntfy_inferred_route": "ntfy",
+    "loaded_account": "A",
+    "overlapping_refresh_returned_before_completion": true,
+    "selected_account": "B",
+    "snapshot_fetches": 1
+  },
+  "validation-results.json": [
+    {
+      "case": "backup_permissions",
+      "mode": "0o644"
+    },
+    {
+      "case": "unknown_field_roundtrip",
+      "top_preserved": false,
+      "account_preserved": false
+    },
+    {
+      "case": "config_validation",
+      "input": {
+        "migrations": null
+      },
+      "exception": "AttributeError"
+    },
+    {
+      "case": "config_validation",
+      "input": {
+        "poll_interval_minutes": 0
+      },
+      "loaded": true,
+      "poll_interval": 0,
+      "remote_enabled": false
+    },
+    {
+      "case": "config_validation",
+      "input": {
+        "telegram_remote_enabled": "false"
+      },
+      "loaded": true,
+      "poll_interval": 5,
+      "remote_enabled": true
+    }
+  ],
+  "weekly-guard-results.json": {
+    "case": "weekly_pending_guard",
+    "recent_pending_recognized": false,
+    "previous_cycle_pending_blocks": true
+  }
+}

@@ -211,6 +211,13 @@ public struct TKScheduleMutationPayload: Decodable, Equatable, Sendable {
 }
 
 extension TKClient {
+    private static func checkPlanError(_ data: Data) throws {
+        if let envelope = try? JSONDecoder().decode(TKEnvelope<TKJSONValue>.self, from: data), !envelope.ok {
+            throw NSError(domain: "TokenKick", code: 1, userInfo: [NSLocalizedDescriptionKey:
+                envelope.message ?? envelope.errorCode ?? "Plan could not be applied."])
+        }
+    }
+
     public func plan(
         workWindow: String,
         date: String,
@@ -239,6 +246,7 @@ extension TKClient {
             arguments: arguments,
             environment: environment
         )
+        try Self.checkPlanError(result.stdout)
         return try JSONDecoder().decode(TKPlanPayload.self, from: result.stdout)
     }
 
@@ -252,6 +260,7 @@ extension TKClient {
             arguments: arguments,
             environment: environment
         )
+        try Self.checkPlanError(result.stdout)
         return try JSONDecoder().decode(TKPlanCancelPayload.self, from: result.stdout)
     }
 

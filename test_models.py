@@ -562,7 +562,7 @@ class TestConfig:
         assert loaded.schedule.accounts["personal"].weekends == "10:00-16:00"
         assert loaded.schedule.usable_session_tier_defaults == {"plus": 90, "pro_5x": 240}
 
-    def test_invalid_schedule_target_defaults_to_auto(self, tmp_path, monkeypatch):
+    def test_invalid_schedule_target_is_rejected(self, tmp_path, monkeypatch):
         config_file = tmp_path / "config.json"
         config_file.write_text(
             '{"poll_interval_minutes": 5, "schedule": {"enabled": true, "scheduling_target": "weird"}}\n'
@@ -570,9 +570,8 @@ class TestConfig:
         import tokenkick.models as models_mod
         monkeypatch.setattr(models_mod, "CONFIG_FILE", config_file)
 
-        config = Config.load()
-
-        assert config.schedule.scheduling_target == "auto"
+        with pytest.raises(StateFileError, match="invalid values"):
+            Config.load()
 
     def test_malformed_json_reports_state_file_error(self, tmp_path, monkeypatch):
         config_file = tmp_path / "config.json"
@@ -827,8 +826,10 @@ def _merge_existing_account() -> AccountConfig:
         antigravity_family="gemini",
         kick_model="model-user",
         plan_tier="pro",
+        codex_session_limit_override="absent",
         usable_session_minutes=150,
         orchestration_role="backup",
+        stagger_group_id="antigravity-default",
         weekly_reserve_threshold_percent=70,
         codex_surface_auto_demote=True,
         codex_surface_demote_after_strong_clusters=7,
@@ -868,6 +869,7 @@ def _merge_discovered_account_fixture() -> AccountConfig:
         antigravity_family="claude_gpt",
         kick_model="model-discovered",
         plan_tier="spark",
+        codex_session_limit_override="auto",
         usable_session_minutes=120,
         orchestration_role="normal",
         weekly_reserve_threshold_percent=40,

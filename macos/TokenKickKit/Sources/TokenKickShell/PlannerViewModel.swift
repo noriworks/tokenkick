@@ -38,6 +38,7 @@ public struct LivePlannerService: PlannerServicing {
         try await LiveTKClient.make(timeout: timeout).plan(
             workWindow: workWindow,
             date: date,
+            timezone: TimeZone.current.identifier,
             usage: usage
         )
     }
@@ -52,6 +53,7 @@ public struct LivePlannerService: PlannerServicing {
         try await LiveTKClient.make(timeout: timeout).plan(
             workWindow: workWindow,
             date: date,
+            timezone: TimeZone.current.identifier,
             usage: usage,
             apply: true,
             expectedPlan: expectedPlan,
@@ -197,12 +199,18 @@ public enum PlannerFormatting {
 
     static func time(_ date: Date) -> String {
         let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.timeZone = TimeZone.current
         formatter.dateFormat = "HH:mm"
         return formatter.string(from: date)
     }
 
     static func date(_ date: Date) -> String {
         let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.timeZone = TimeZone.current
         formatter.dateFormat = "yyyy-MM-dd"
         return formatter.string(from: date)
     }

@@ -39,11 +39,16 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install build frontend
-        run: python -m pip install --upgrade build
+      - name: Install verified build backend
+        run: python -m pip install hatchling==1.32.4
 
       - name: Build distributions
-        run: python -m build
+        run: python -c 'from hatchling.build import build_wheel, build_sdist; build_wheel("dist"); build_sdist("dist")'
+
+      - name: Verify exact distribution and release version
+        run: |
+          python scripts/verify-release-artifacts.py --tag "$GITHUB_REF_NAME" dist/*
+          python scripts/verify-package-resources.py --wheel dist/*.whl
 
       - name: Upload distributions
         uses: actions/upload-artifact@v4

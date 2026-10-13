@@ -94,6 +94,8 @@ public final class AdvancedViewModel {
     private let service: any AdvancedServicing
     private let onMutation: @MainActor () async -> Void
     private var pendingMutationArguments: [String]?
+    private var detailGeneration = 0
+    private var loadedCodexLabel: String?
 
     public init(
         service: any AdvancedServicing,
@@ -169,7 +171,15 @@ public final class AdvancedViewModel {
     }
 
     public func loadSelectedCodexDetails() async {
+        detailGeneration += 1
+        let generation = detailGeneration
+        loadedCodexLabel = nil
+        surfaces = nil
+        patterns = nil
+        forceKeepText = ""
+        forcePruneText = ""
         guard let selectedCodexLabel else {
+            isLoadingDetails = false
             surfaces = nil
             patterns = nil
             return
@@ -180,11 +190,14 @@ public final class AdvancedViewModel {
             async let surfacePayload = service.codexSurfaces(label: selectedCodexLabel)
             async let patternPayload = service.codexSurfacePatterns(label: selectedCodexLabel)
             let (surfaces, patterns) = try await (surfacePayload, patternPayload)
+            guard generation == detailGeneration, self.selectedCodexLabel == selectedCodexLabel else { return }
+            loadedCodexLabel = selectedCodexLabel
             self.surfaces = surfaces
             self.patterns = patterns
             forceKeepText = surfaces.demotion.forceKeep.joined(separator: ", ")
             forcePruneText = surfaces.demotion.forcePrune.joined(separator: ", ")
         } catch {
+            guard generation == detailGeneration, self.selectedCodexLabel == selectedCodexLabel else { return }
             surfaces = nil
             patterns = nil
             detailError = String(describing: error)
@@ -238,7 +251,7 @@ public final class AdvancedViewModel {
     }
 
     public func saveForceKeep() async {
-        guard let label = selectedCodexLabel else { return }
+        guard let label = selectedCodexLabel, label == loadedCodexLabel, !isLoadingDetails, !isMutating else { return }
         let surfaces = Self.parseSurfaceList(forceKeepText)
         guard !surfaces.isEmpty else {
             mutationError = "Choose at least one surface to force-keep, or clear overrides."
@@ -250,7 +263,7 @@ public final class AdvancedViewModel {
     }
 
     public func requestSaveForcePrune() {
-        guard let label = selectedCodexLabel else { return }
+        guard let label = selectedCodexLabel, label == loadedCodexLabel, !isLoadingDetails, !isMutating else { return }
         let surfaces = Self.parseSurfaceList(forcePruneText)
         guard !surfaces.isEmpty else {
             mutationError = "Choose at least one surface to force-prune, or clear overrides."

@@ -213,6 +213,7 @@ def record_pending_kick_failure(
     account: AccountConfig,
     error: str | None,
     now: datetime | None = None,
+    *, expected: PendingKick | None = None,
 ) -> PendingKick | None:
     current_time = now or utc_now()
     try:
@@ -220,7 +221,7 @@ def record_pending_kick_failure(
             data = _load_pending_kicks_unlocked(current_time)
             key = account_key_string(account)
             pending = data.get(key)
-            if pending is None:
+            if pending is None or (expected is not None and pending != expected):
                 return None
             attempt_count = pending.attempt_count + 1
             pending.attempt_count = attempt_count
@@ -721,13 +722,15 @@ def upsert_pending_kick(
         )
 
 
-def remove_pending_kick(account: AccountConfig) -> PendingKick | None:
+def remove_pending_kick(account: AccountConfig, *, expected: PendingKick | None = None) -> PendingKick | None:
     if not PENDING_KICKS_FILE.exists():
         return None
     try:
         with state_file_lock(PENDING_KICKS_FILE):
             data = _load_pending_kicks_unlocked()
             key = account_key_string(account)
+            if expected is not None and data.get(key) != expected:
+                return None
             removed = data.pop(key, None)
             if removed is not None:
                 _save_pending_kicks_unlocked(data)
@@ -851,3 +854,36 @@ def invalidate_pending_kicks(
     except (OSError, PendingKickStateError) as exc:
         _warn_pending_kick_state(f"Pending kicks were not invalidated ({exc}).")
         return []
+
+
+def rekey_pending_accounts(previous: list[AccountConfig], updated: list[AccountConfig]) -> None:
+    """Transfer a known migration's pending identity, refusing ambiguous collisions."""
+    from dataclasses import replace
+    by_label = {a.label: a for a in updated}
+    with state_file_lock(PENDING_KICKS_FILE):
+        pending = _load_pending_kicks_unlocked()
+        changed = False
+        for old in previous:
+            new = by_label.get(old.label)
+            if new is None or account_key_string(new) == account_key_string(old):
+                continue
+            key, new_key = account_key_string(old), account_key_string(new)
+            if key not in pending:
+                continue
+            if new_key in pending:
+                _warn_pending_kick_state(f"Pending migration conflict for {old.label}; cancel the obsolete pending action explicitly.")
+                continue
+            pending[new_key] = replace(pending.pop(key), account_key=new_key, account_label=new.label)
+            changed = True
+        if changed:
+            _save_pending_kicks_unlocked(pending)
+
+
+def pending_transaction(function):
+    """Serialize an entire compound edit, not just its individual reads/writes."""
+    from functools import wraps
+    @wraps(function)
+    def wrapped(*args, **kwargs):
+        with state_file_lock(PENDING_KICKS_FILE):
+            return function(*args, **kwargs)
+    return wrapped

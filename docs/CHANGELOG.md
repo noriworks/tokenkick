@@ -1,5 +1,25 @@
 # Changelog
 
+## v1.23.0
+
+- Add persistent daemon-owned Antigravity Gemini/Claude orchestration with a
+  2h30m target stagger, explicit enable/pause/resume/recovery controls, MCP
+  previews and clear terminal/macOS ownership and next-action status.
+- Detect Codex plan and quota-window capabilities from provider evidence, parse
+  weekly-only windows correctly, and offer a manual session-limit override.
+- Improve notification configuration, per-backend test results, existing-value
+  visibility and consistent multi-select menus. Explain Claude monitoring
+  failures accurately and back off rate-limited usage reads.
+- Harden account identity checks, approved-action binding, dispatch evidence,
+  uncertain-outcome protection, pending-action transactions and migrations.
+  Preserve configuration extensions while rejecting malformed safety controls.
+- Fix stale-source reconciliation, background refresh locks, frozen-runtime
+  refresh and process identity checks. Isolate recurring-controller failures.
+- Fix macOS account-selection and refresh races, immutable confirmation targets,
+  launch-agent ownership/rollback, notification decoding and warning visibility.
+- Harden fixture isolation, public exports, packaging cleanup and exact-artifact
+  release verification. Add systemd installation guidance.
+
 ## v1.21.10
 
 - Use Antigravity's catalog-selected Low model variant without a redundant

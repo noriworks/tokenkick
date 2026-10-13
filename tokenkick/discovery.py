@@ -76,13 +76,9 @@ def _load_account_status_pairs_cached(
     *,
     prepare_claude_setup: bool = False,
 ) -> tuple[list[AccountConfig], list[AccountStatus], bool, str, list[AccountConfig]]:
-    try:
-        discovered_accounts, discovered_statuses, summary = _cli()._discover_accounts_and_statuses(
-            config,
-            prepare_claude_setup=prepare_claude_setup,
-        )
-    except TypeError:
-        discovered_accounts, discovered_statuses, summary = _cli()._discover_accounts_and_statuses()
+    discovered_accounts, discovered_statuses, summary = _cli()._discover_accounts_and_statuses(
+        config, prepare_claude_setup=prepare_claude_setup,
+    )
     if not config.accounts:
         return discovered_accounts, discovered_statuses, True, summary, []
 
@@ -155,13 +151,9 @@ def _discover_accounts_and_statuses(
     codex_all_accounts_available = False
 
     _cli()._setup_progress("Discovering local account homes")
-    try:
-        direct_accounts, direct_statuses = _cli()._discover_direct_accounts(
-            config,
-            prepare_claude_setup=prepare_claude_setup,
-        )
-    except TypeError:
-        direct_accounts, direct_statuses = _cli()._discover_direct_accounts()
+    direct_accounts, direct_statuses = _cli()._discover_direct_accounts(
+        config, prepare_claude_setup=prepare_claude_setup,
+    )
     direct_providers = {account.provider for account in direct_accounts}
     if direct_accounts:
         discovered.extend(zip(direct_accounts, direct_statuses, strict=False))

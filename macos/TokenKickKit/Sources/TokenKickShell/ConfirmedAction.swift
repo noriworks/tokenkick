@@ -47,6 +47,10 @@ public struct ConfirmedAction: Identifiable, Equatable, Sendable {
         self.tkArguments = tkArguments
     }
 
+    public static func shellQuote(_ value: String) -> String {
+        "'" + value.replacingOccurrences(of: "'", with: "'\"'\"'") + "'"
+    }
+
     static func providerDisplayName(_ provider: String) -> String {
         switch provider {
         case "codex": return "Codex"

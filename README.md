@@ -183,3 +183,5 @@ each provider's terms. Use at your own risk.
 TokenKick is provided "as is", without warranty of any kind. The authors are
 not liable for any consequence arising from its use, including account
 restriction, suspension, or loss of access.
+
+Linux server installations: [resolve service paths and generate a systemd unit](docs/SYSTEMD_INSTALL.md).

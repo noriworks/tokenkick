@@ -16,6 +16,19 @@ public struct StatusScreen: View {
                     Task { await store.refresh() }
                 }
             }
+            if let group = store.snapshot?.stagger, group["mode"]?.stringValue != "disabled" {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Ongoing Antigravity stagger").font(.headline)
+                    Text("State: " + (group["state"]?.stringValue ?? "unknown") + " · target 2h30m")
+                    if let gap = group["observed_offset_seconds"]?.numberValue {
+                        Text("Observed gap: " + String(format: "%.1f minutes", gap / 60))
+                    }
+                    if let due = group["next_at"]?.numberValue {
+                        Text("Next: " + (group["next_family"]?.stringValue ?? "pending") + " at " + Date(timeIntervalSince1970: due).formatted())
+                    }
+                    if let reason = group["reason"]?.stringValue { Text(reason).foregroundStyle(.secondary) }
+                }.frame(maxWidth: .infinity, alignment: .leading).padding()
+            }
             content
             footnotes
         }

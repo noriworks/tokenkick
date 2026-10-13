@@ -1325,13 +1325,14 @@ def test_notify_json_disable_telegram_backend_keeps_remote_credentials():
     assert saved.telegram_chat_id == "chat456"
 
 
-def test_notify_json_usage_error_without_backend():
+def test_notify_json_overview_without_backend():
     runner = CliRunner()
     result = runner.invoke(cli, ["notify", "--json-output"])
     envelope = _parse_envelope(result.output)
-    assert envelope["ok"] is False
-    assert envelope["error_code"] == "usage_error"
-    assert result.exit_code == 2
+    assert envelope["ok"] is True
+    assert envelope["payload"]["enabled_backends"] == []
+    assert envelope["payload"]["telegram_token_saved"] is False
+    assert result.exit_code == 0
 
 
 def test_notify_json_unknown_action():
@@ -1349,7 +1350,10 @@ def test_notify_test_json_failure_when_disabled():
     envelope = _parse_envelope(result.output)
     assert envelope["ok"] is False
     assert envelope["error_code"] == "notification_test_failed"
-    assert envelope["payload"] == {"action": "test", "delivered": False}
+    assert envelope["payload"] == {"action": "test", "delivered": False, "results": [
+        {"backend": "ntfy", "status": "skipped", "reason": "push_disabled"},
+        {"backend": "telegram", "status": "skipped", "reason": "push_disabled"},
+    ]}
     assert result.exit_code == 1
 
 
@@ -1380,6 +1384,7 @@ def test_notify_test_json_selected_backend_only(monkeypatch):
         "action": "test",
         "backend": "telegram",
         "delivered": True,
+        "results": [{"backend": "telegram", "status": "sent", "reason": None}],
     }
     assert [call.backend for call in calls] == ["telegram"]
     assert calls[0].telegram_chat_id == "chat456"
@@ -1406,6 +1411,7 @@ def test_notify_test_json_selected_backend_reports_missing_credentials():
         "backend": "telegram",
         "delivered": False,
         "reason": "missing_telegram_credentials",
+        "results": [{"backend": "telegram", "status": "failed", "reason": "missing_telegram_credentials"}],
     }
     assert result.exit_code == 1
 
@@ -1420,10 +1426,12 @@ def test_notify_json_backend_option_requires_test_action():
 
 
 def test_notify_test_json_success(monkeypatch):
-    _seed_config([_codex_account("codex (dev)")])
+    config = _seed_config([_codex_account("codex (dev)")])
+    config.notifications = NotifyConfig(enabled=True, ntfy_topic="topic", enabled_backends=["ntfy"])
+    config.save()
     monkeypatch.setattr(
-        "tokenkick.cli._send_global_notifications",
-        lambda notifications, sender: True,
+        "tokenkick.cli.notify_test",
+        lambda notifications: True,
     )
     runner = CliRunner()
     result = runner.invoke(cli, ["notify", "test", "--json-output"])

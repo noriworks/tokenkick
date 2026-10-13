@@ -43,6 +43,40 @@ def tokenkick_auto_set(account: str, enabled: bool, preview_token: str, confirm:
 
 
 @mcp.tool()
+def tokenkick_stagger_status() -> dict:
+    """Read ongoing Antigravity orchestration: owner, alignment, next action, blocker.
+
+    This is persistent server-daemon automation, independent of a Mac/agent scheduler.
+    """
+    return _core.tokenkick_stagger_status()
+
+
+@mcp.tool()
+def tokenkick_stagger_preview(action: Literal["enable", "resume", "pause", "disable", "recover"],
+                               gemini: str | None = None, claude: str | None = None) -> dict:
+    """Preview recurring 2h30m Antigravity orchestration. Labels required for enable.
+
+    Review changes and provider disclosure with the user. Use this for ongoing
+    staggering; tokenkick_plan_preview only plans a finite work window.
+    """
+    return _core.tokenkick_stagger_preview(action=action, gemini=gemini, claude=claude)
+
+
+@mcp.tool()
+def tokenkick_stagger_apply(action: Literal["enable", "resume", "pause", "disable", "recover"],
+                             preview_token: str, confirm: bool,
+                             gemini: str | None = None, claude: str | None = None,
+                             quota_ack: bool = False, accept_risk: bool = False) -> dict:
+    """Apply exact one-use preview. Enable/resume requires acknowledged recurring
+    quota use and provider risk. The server daemon must run; never create an agent
+    cron job for recurrence. Pause/disable does not resume independent auto-kicks.
+    """
+    return _core.tokenkick_stagger_apply(action=action, gemini=gemini, claude=claude,
+                                        preview_token=preview_token, confirm=confirm,
+                                        quota_ack=quota_ack, accept_risk=accept_risk)
+
+
+@mcp.tool()
 def tokenkick_snapshot(include_paths: bool = False) -> dict:
     """Return a TokenKick app snapshot. Risk: diagnostic_read; paths redacted by default."""
     return _core.tokenkick_snapshot(include_paths=include_paths)
@@ -333,7 +367,7 @@ def tokenkick_run_apply(
 
 @mcp.tool()
 def tokenkick_kick_preview(label: str) -> dict:
-    """Preview one account kick and return token. Risk: cached_read."""
+    """Preview one account kick with live provider reads and return token. Risk: live_provider_read."""
     return _core.tokenkick_kick_preview(label=label)
 
 
@@ -406,7 +440,9 @@ def resource_calendar() -> str:
 @mcp.resource("tokenkick://pending-kicks")
 def resource_pending_kicks() -> str:
     snapshot = _core.tokenkick_snapshot()
-    payload = snapshot.get("payload") if isinstance(snapshot, dict) else {}
+    if not isinstance(snapshot, dict) or not snapshot.get("ok"):
+        return _json_text(snapshot)
+    payload = snapshot.get("payload")
     return _json_text((payload or {}).get("pending_kicks", []))
 
 

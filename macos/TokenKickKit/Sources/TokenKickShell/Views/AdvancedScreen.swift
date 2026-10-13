@@ -373,8 +373,8 @@ public struct AdvancedScreen: View {
         Section {
             commandRow("Strategy JSON", command: "tk codex-strategy status --json-output")
             if let label = advanced.selectedCodexLabel {
-                commandRow("Surface stats", command: "tk codex-surfaces \"\(label)\" --json-output")
-                commandRow("Surface patterns", command: "tk codex-surface-patterns \"\(label)\" --json-output")
+                commandRow("Surface stats", command: "tk codex-surfaces \(ConfirmedAction.shellQuote(label)) --json-output")
+                commandRow("Surface patterns", command: "tk codex-surface-patterns \(ConfirmedAction.shellQuote(label)) --json-output")
             }
         } header: {
             Text("Equivalent commands")

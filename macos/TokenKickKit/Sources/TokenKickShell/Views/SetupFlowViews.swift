@@ -149,7 +149,7 @@ struct FirstRunView: View {
     @ViewBuilder
     private var footer: some View {
         HStack {
-            Button("Not Now") { finish() }
+            Button("Not Now") { setup.cancelDiscovery(); finish() }
             Spacer()
             switch firstRun.step {
             case .welcome:

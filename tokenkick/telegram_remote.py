@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import json
 import time
 import random
@@ -319,9 +320,9 @@ def format_status_reply(
         "<b>TokenKick status</b>",
         f"{mode_icon} {mode_label} · <code>{html_escape(checked)}</code>",
     ]
-    _append_status_section(lines, "🟢", "Ready", ready)
-    _append_status_section(lines, "📊", "Accounts", current)
     _append_status_section(lines, "⚠️", "Warnings", warnings)
+    _append_status_section(lines, "🟢", "Ready", [r for r in ready if not _row_warning(r)])
+    _append_status_section(lines, "📊", "Accounts", current)
     omitted = max(0, len(rows) - TELEGRAM_STATUS_ACCOUNT_LIMIT)
     if omitted > 0:
         lines.extend(["", f"… {omitted} more {_plural(omitted, 'account')} omitted"])
@@ -384,7 +385,7 @@ def _usage_text(row: dict) -> str:
 
 
 def _percent_text(value: object) -> str:
-    if isinstance(value, (int, float)):
+    if isinstance(value, (int, float)) and math.isfinite(value):
         return f"{round(value)}%"
     return "?"
 
@@ -541,6 +542,7 @@ class TelegramRemoteListener:
         refresh_runner: Callable[[], StatusCommandResult] | None = None,
         logger: Callable[[str, dict], None] | None = None,
         bot_username: str | None = None,
+        authorization_current: Callable[[], bool] | None = None,
     ) -> None:
         self.client = client
         self.allowed_chat_id = allowed_chat_id
@@ -549,6 +551,7 @@ class TelegramRemoteListener:
         self.refresh_runner = refresh_runner or status_runner
         self.logger = logger or (lambda _event, _fields: None)
         self.bot_username = bot_username
+        self.authorization_current = authorization_current or (lambda: True)
 
     def check_webhook(self) -> None:
         try:
@@ -567,6 +570,9 @@ class TelegramRemoteListener:
         self.check_webhook()
         failures = 0
         while True:
+            if not self.authorization_current():
+                self._log("telegram_remote_credentials_changed")
+                return
             offset = self.next_offset()
             try:
                 updates = self.client.get_updates(
@@ -586,7 +592,14 @@ class TelegramRemoteListener:
                 update_id = update.get("update_id")
                 if not isinstance(update_id, int):
                     continue
-                self.handle_update(update)
+                if not self.authorization_current():
+                    self._log("telegram_remote_credentials_changed")
+                    return
+                try:
+                    self.handle_update(update)
+                except Exception as exc:
+                    # A valid update was attempted; do not replay a poison command forever.
+                    self._log("telegram_remote_update_failed", update_id=update_id, error=type(exc).__name__)
                 save_last_update_id(self.state_file, update_id)
 
     def next_offset(self) -> int | None:

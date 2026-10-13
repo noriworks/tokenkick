@@ -12,7 +12,7 @@ restrictions.
 
 | Provider/tool | Status source of truth | Kickable? | Windows | Caveats |
 |---|---|---:|---|---|
-| OpenAI Codex CLI / ChatGPT Codex | Codex app-server provider usage through the account's configured `CODEX_HOME`; local Codex session JSONL as fallback/override for ambiguous stale shapes | Yes | 5h session + weekly, first-use anchored | Each account needs its own Codex home. Interactive Codex model labels and provider quota bucket names are not always the same. Retired Spark entries are removed during config loading; historical quota records remain readable. |
+| OpenAI Codex CLI / ChatGPT Codex | Codex app-server provider usage through the account's configured `CODEX_HOME`; identity-scoped local JSONL as fallback; override only with provably newer, recent observations | Yes | Weekly; 5h session when reported by the provider | Each account needs its own Codex home. Interactive Codex model labels and provider quota bucket names are not always the same. Retired Spark entries are removed during config loading; historical quota records remain readable. |
 | Claude Code | Claude CLI `/usage` when direct usage is enabled; passive fallback/cache otherwise | Yes | 5h session + weekly, first-use anchored | `/usage` is useful but not purely passive. Daemon background refresh avoids silently running it; due session anchors are tracked as kick-history events. |
 | Antigravity | Antigravity CLI login state plus local backend named quota windows; CodexBar named quota windows as compatibility fallback | Native CLI Gemini and Claude family kicks | Gemini 5h + weekly, Claude/GPT 5h + weekly | Separate opt-in automation per quota family; complete fresh quota data and native identity required. |
 | Gemini CLI | Optional CodexBar monitoring data where configured | No | Daily RPD, fixed midnight PT reset | Monitor-only. Not first-use anchored, so a kick does not start a useful rolling window. |
@@ -21,6 +21,23 @@ restrictions.
 ## Codex
 
 Codex has the broadest direct-account support in this release.
+
+TokenKick detects the subscription from native `planType` metadata, separately
+from the user-owned planning tier. Window durations determine actual behavior:
+300 minutes is a session window and 10080 minutes is weekly, regardless of which
+slot contains them. A complete weekly-only native response establishes that no
+five-hour window is available. Unknown plans remain readable; plan names alone
+never decide whether session automation is allowed. Historical session logs
+cannot establish current absence, and malformed or stale data remains unknown.
+
+Use `tk accounts set-session-limit "<label>" auto|present|absent` (choose one
+mode) or the Accounts menu for a manual fallback. `absent` suppresses session
+kicks, phantom recovery and session planning while preserving weekly behavior.
+`present` cannot fabricate reset data or bypass fresh provider verification.
+Every automatic direct Codex request rechecks native quota after acquiring the
+account lock. Queued session actions cannot become weekly kicks after a plan
+change. Existing automation switches are preserved. See
+[detection design and verification](CODEX_LIMIT_DETECTION.md).
 
 Codex kicks query the account's live `model/list` catalog before each request.
 Automatic selection prefers `gpt-6-luna`, then the newest available numeric Luna
@@ -122,6 +139,13 @@ or refresh Claude's own view of a session, so TokenKick treats it carefully:
 - Explicit `tk status --refresh` may use `/usage`.
 - Repeated explicit refreshes within 5 minutes reuse a recent successful direct
   result.
+- Rate-limited `/usage` attempts wait 5, 10, 20, 40, then at most 60 minutes.
+  This per-account cooldown survives restarts and cannot be bypassed by forced
+  refresh or an optional generation probe. A successful real direct read resets
+  the sequence; other monitoring errors use the usual minimum interval.
+- Status output identifies direct versus CodexBar fallback data, distinguishes
+  authentication failures from monitoring errors, and shows the local retry time.
+  Cached readings keep their observation age and cannot confirm a new kick.
 - Background daemon refresh avoids silently running `/usage`.
 - When a due Claude session needs a kick, `/usage` is treated as the tracked
   session anchor and gets history, daemon logs, cache update, and notification
@@ -167,8 +191,16 @@ a dedicated workspace, a fixed no-tools prompt, a 45-second provider deadline
 and a 60-second process timeout. Sandbox terminal restrictions do not imply
 that every provider tool is disabled. Permission bypass is never enabled.
 
+A zero-use session with a deadline that tracks the current time plus five hours
+is an available, unanchored candidate. TokenKick requires two native observations
+from separate CLI processes before making it eligible; a fixed deadline remains
+active even at zero use. Relative reset estimates cannot establish this evidence.
+Independent processes matter because each CLI process can cache its quota response.
+
 A successful exit or usage increase alone does not confirm an anchor. TokenKick
-requires a fresh, advanced reset clock for the requested window. A persistent
+requires a new reset clock that stays fixed across independent native reads.
+Sliding deadlines cannot confirm an anchor. Normal kick previews report the
+specific eligibility blocker instead of a generic `not_fresh` result. A persistent
 family-scoped attempt record prevents retries after errors, timeouts, or missing
 confirmation, even if history rotates or an account is renamed. Inspect provider
 status and history before explicit `tk kick "<label>" --force` recovery. Confirmed
@@ -183,3 +215,12 @@ Standalone Gemini daily quotas remain monitor-only.
 The hidden `tk antigravity probe-kick --family gemini|claude-gpt --account "<label>"`
 diagnostic remains an explicit, quota-consuming investigation tool; automatic
 kicks use the guarded normal kick path described above.
+
+
+### Request evidence and triggers
+
+Weekly and session kicks send the same minimal provider request. The trigger determines
+which window is due and which anchor is verified; CLI success alone does not establish
+either reset. Accepted requests without a verified anchor remain unconfirmed. Ambiguous
+sends require explicit recovery, while a refusal before dispatch preserves pending work
+without consuming an attempt. A stale JSONL observation cannot replace a newer native read.

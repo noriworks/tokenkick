@@ -4,13 +4,15 @@ from __future__ import annotations
 
 import json
 import copy
+import math
 import sys
 import time
 from dataclasses import dataclass, field, fields, asdict, replace
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
-from typing import Any, Callable, Optional
+from types import UnionType
+from typing import Any, Callable, Optional, Union, get_args, get_origin, get_type_hints
 
 from .consent import AUTO_KICK_CONSENT_VERSION, normalize_auto_kick_consents
 from .state_io import atomic_write_text, state_file_lock, locked_update_text
@@ -192,7 +194,9 @@ class AccountConfig:
     kick_model: Optional[str] = None
     antigravity_family: Optional[str] = None
     plan_tier: Optional[str] = None
+    codex_session_limit_override: str = "auto"
     usable_session_minutes: Optional[int] = None
+    stagger_group_id: Optional[str] = None
     orchestration_role: str = DEFAULT_ORCHESTRATION_ROLE
     weekly_reserve_threshold_percent: Optional[int] = None
     codex_surface_auto_demote: bool = False
@@ -205,6 +209,8 @@ class AccountConfig:
     codex_surface_force_prune: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
+        if self.codex_session_limit_override not in {"auto", "present", "absent"}:
+            raise ValueError("codex_session_limit_override must be auto, present or absent")
         if self.antigravity_family not in {None, "gemini", "claude_gpt"}:
             raise ValueError("antigravity_family must be gemini or claude_gpt")
         if self.weekly_auto_kick is None:
@@ -233,6 +239,8 @@ class AccountConfig:
             d.pop("notifications_enabled", None)
         if d.get("notification_backends") is None:
             d.pop("notification_backends", None)
+        if d.get("stagger_group_id") is None:
+            d.pop("stagger_group_id", None)
         if d.get("orchestration_role") == DEFAULT_ORCHESTRATION_ROLE:
             d.pop("orchestration_role", None)
         if d.get("weekly_reserve_threshold_percent") is None:
@@ -378,6 +386,7 @@ ACCOUNT_LABEL_FIELDS = frozenset({"label", "label_origin"})
 # Settings the user controls; rediscovery must never reset them.
 ACCOUNT_USER_OWNED_FIELDS = frozenset(
     {
+        "codex_session_limit_override",
         "auto_kick",
         "weekly_auto_kick",
         "session_auto_kick",
@@ -387,6 +396,7 @@ ACCOUNT_USER_OWNED_FIELDS = frozenset(
         "status_probe_enabled",
         "direct_usage_enabled",
         "orchestration_role",
+        "stagger_group_id",
         "codex_surface_auto_demote",
         "codex_surface_demote_after_strong_clusters",
         "codex_surface_demote_min_active_surfaces",
@@ -455,6 +465,9 @@ class AccountStatus:
     codex_rate_limit_id: Optional[str] = None
     codex_rate_limit_name: Optional[str] = None
     window_anchor_state: Optional[str] = None
+    detected_plan_type: Optional[str] = None
+    codex_session_limit: Optional[str] = None
+    codex_limits_version: Optional[int] = None
     quota_windows: Optional[list[dict[str, Any]]] = None
     source_diagnostics: Optional[dict[str, Any]] = None
     stale: bool = False
@@ -584,6 +597,8 @@ class ClaudeProbeContext:
     """Cache metadata available to the Claude direct /usage source."""
 
     direct_usage_enabled: bool = True
+    direct_rate_limit_failures: int = 0
+    direct_probe_performed: bool = False
     last_direct_probe_at: Optional[str] = None
     last_direct_probe_error: Optional[ClaudeProbeError] = None
     last_direct_success_at: Optional[str] = None
@@ -657,6 +672,7 @@ class KickEvent:
     evidence_tokens: Optional[bool] = None
     evidence_provider_moved: Optional[bool] = None
     post_kick_status: Optional[str] = None
+    dispatch_state: str = "sent"
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -861,6 +877,7 @@ class Config:
     migrations: dict[str, bool] = field(default_factory=dict)
     loaded_from_file: bool = False
     _baseline: dict | None = field(default=None, repr=False, compare=False)
+    _raw_payload: dict = field(default_factory=dict, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         self.auto_kick_consents = normalize_auto_kick_consents(self.auto_kick_consents)
@@ -910,11 +927,12 @@ class Config:
             data["migrations"] = self.migrations
         if not self.schedule.is_default():
             data["schedule"] = self.schedule.to_dict()
-        return data
+        return _preserve_config_extras(self._raw_payload, data)
 
     def save(self) -> None:
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)
         proposed = self._data()
+        _validate_config_payload(proposed)
         with state_file_lock(CONFIG_FILE):
             data = proposed
             if self._baseline is not None:
@@ -1026,6 +1044,7 @@ class Config:
     @classmethod
     def _from_payload(cls, data: dict) -> Config:
         try:
+            _validate_config_payload(data)
             accounts = _load_account_configs(data.get("accounts", []))
             config = cls(
                 accounts=accounts,
@@ -1074,10 +1093,11 @@ class Config:
                     if isinstance(key, str)
                 },
                 loaded_from_file=True,
+                _raw_payload=copy.deepcopy(data),
             )
         except StateFileError:
             raise
-        except (TypeError, ValueError) as exc:
+        except (TypeError, ValueError, AttributeError) as exc:
             raise StateFileError(
                 CONFIG_FILE,
                 "TokenKick config has invalid values.",
@@ -1120,6 +1140,92 @@ class Config:
             **self.auto_kick_consents,
             provider: AUTO_KICK_CONSENT_VERSION,
         }
+
+
+def _validate_config_payload(data: dict) -> None:
+    if not isinstance(data, dict):
+        raise ValueError("Config must be an object")
+
+    def record(raw, schema, name):
+        if not isinstance(raw, dict):
+            raise ValueError(f"{name} must be an object")
+        hints = get_type_hints(schema)
+        for item in fields(schema):
+            if item.name not in raw or item.name.startswith("_"):
+                continue
+            value = raw[item.name]
+            hint = hints.get(item.name, item.type)
+            allowed = get_args(hint) if get_origin(hint) in (Union, UnionType) else (hint,)
+            if value is None and type(None) in allowed:
+                continue
+            if bool in allowed and not isinstance(value, bool):
+                raise ValueError(f"{name}.{item.name} must be a boolean")
+            if int in allowed and (isinstance(value, bool) or not isinstance(value, int)):
+                raise ValueError(f"{name}.{item.name} must be an integer")
+            if float in allowed and (isinstance(value, bool) or not isinstance(value, (float, int)) or not math.isfinite(value)):
+                raise ValueError(f"{name}.{item.name} must be finite numeric data")
+            if str in allowed and not isinstance(value, str):
+                raise ValueError(f"{name}.{item.name} must be text")
+
+    record(data, Config, "config")
+    if data.get("poll_interval_minutes", 5) <= 0:
+        raise ValueError("poll_interval_minutes must be positive")
+    for name in ("codexbar_staleness_threshold_seconds", "codexbar_rejection_threshold_seconds",
+                 "codex_surface_retry_backoff_seconds", "codex_burst_ladder_gap_seconds",
+                 "codex_fire_all_surface_gap_seconds"):
+        if name in data and data[name] < 0:
+            raise ValueError(f"{name} must be nonnegative")
+    for name, schema in (("notifications", NotifyConfig), ("claude", ClaudeConfig), ("schedule", ScheduleConfig)):
+        if name in data and data[name] is not None:
+            record(data[name], schema, name)
+    schedule = data.get("schedule") or {}
+    if schedule.get("scheduling_target", "auto") not in {"auto", "primary", "session"}:
+        raise ValueError("unknown scheduling_target")
+    if "default" in schedule:
+        record(schedule["default"], WorkSchedule, "schedule.default")
+    if not isinstance(schedule.get("accounts", {}), dict):
+        raise ValueError("schedule.accounts must be an object")
+    for label, item in schedule.get("accounts", {}).items():
+        record(item, WorkSchedule, "schedule." + label)
+    if "schema_version" in data and data["schema_version"] != 1:
+        raise ValueError("Unsupported configuration schema version; update TokenKick before editing")
+    notification = data.get("notifications") or {}
+    if notification.get("policy", "all") not in {"all", "errors"}:
+        raise ValueError("unknown notification policy")
+    accounts = data.get("accounts", [])
+    if not isinstance(accounts, list):
+        raise ValueError("accounts must be a list")
+    for raw in accounts:
+        record(raw, AccountConfig, "account")
+    if "migrations" in data:
+        if not isinstance(data["migrations"], dict) or any(not isinstance(v, bool) for v in data["migrations"].values()):
+            raise ValueError("migrations must map names to booleans")
+
+
+def _preserve_config_extras(raw: dict, data: dict) -> dict:
+    """Keep forward-compatible fields; known fields can still be explicitly cleared."""
+    def extras(original, proposed, schema):
+        known = {f.name for f in fields(schema)}
+        unknown = {k: copy.deepcopy(v) for k, v in original.items() if k not in known and not k.startswith("_")}
+        return {**unknown, **proposed}
+
+    result = extras(raw, data, Config)
+    for name, schema in (("notifications", NotifyConfig), ("claude", ClaudeConfig), ("schedule", ScheduleConfig)):
+        original = raw.get(name)
+        if isinstance(original, dict):
+            section = extras(original, result.get(name, {}), schema)
+            if section:
+                result[name] = section
+    schedule = raw.get("schedule") or {}
+    if isinstance(schedule, dict):
+        target = result.setdefault("schedule", {}) if schedule else result.get("schedule", {})
+        if isinstance(schedule.get("default"), dict):
+            target["default"] = extras(schedule["default"], target.get("default", {}), WorkSchedule)
+        for label, item in target.get("accounts", {}).items():
+            target["accounts"][label] = extras(schedule.get("accounts", {}).get(label, {}), item, WorkSchedule)
+    original_accounts = {a.get("label"): a for a in raw.get("accounts", []) if isinstance(a, dict)}
+    result["accounts"] = [extras(original_accounts.get(a["label"], {}), a, AccountConfig) for a in data["accounts"]]
+    return result
 
 
 _CONFIG_MISSING = object()

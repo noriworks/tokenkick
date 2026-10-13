@@ -64,6 +64,18 @@ final class DecodingTests: XCTestCase {
         XCTAssertFalse(gemini.kickable)
     }
 
+    func testSnapshotStaggerIsOptionalAndRetained() throws {
+        let original = try fixture("snapshot.json")
+        let legacy = try TKJSONDecoding.envelope(TKSnapshotPayload.self, from: original)
+        XCTAssertNil(legacy.payload?.stagger)
+        var envelope = try XCTUnwrap(JSONSerialization.jsonObject(with: original) as? [String: Any])
+        var payload = try XCTUnwrap(envelope["payload"] as? [String: Any])
+        payload["stagger"] = ["enabled": true, "recurring": true, "state": "aligned", "target_offset_minutes": 150]
+        envelope["payload"] = payload
+        let updated = try TKJSONDecoding.envelope(TKSnapshotPayload.self, from: JSONSerialization.data(withJSONObject: envelope))
+        XCTAssertNotNil(updated.payload?.stagger)
+    }
+
     func testSnapshotEnvelope() throws {
         let envelope = try TKJSONDecoding.envelope(
             TKSnapshotPayload.self,

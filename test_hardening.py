@@ -195,6 +195,8 @@ def test_due_kick_respects_common_guard_and_work_end(monkeypatch, expired):
 
 def _hold_action(directory, ready):
     with account_action(Path(directory), 'test'):
+        from tokenkick.action_state import mark_action_dispatched
+        mark_action_dispatched()
         ready.set()
         import time
         time.sleep(30)
@@ -423,8 +425,8 @@ def test_export_copies_tracked_files_into_new_destination(tmp_path):
     root.mkdir()
     subprocess.run(['git', 'init', '-q', str(root)], check=True)
     (root / 'tracked').write_text('hello')
-    (root / 'untracked').write_text('private')
     subprocess.run(['git', '-C', str(root), 'add', 'tracked'], check=True)
+    subprocess.run(['git', '-C', str(root), '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.test', 'commit', '-qm', 'fixture'], check=True)
     destination = tmp_path / 'export'
     exporter.export(root, destination)
     assert (destination / 'tracked').read_text() == 'hello'

@@ -136,13 +136,14 @@ public enum WarningDerivation {
             let autoKickConfigured = snapshot.status.accounts.contains {
                 $0["auto_kick"]?.boolValue == true
             }
-            if autoKickConfigured {
+            let scheduled = !snapshot.pendingKicks.isEmpty || snapshot.stagger?["enabled"]?.boolValue == true
+            if autoKickConfigured || scheduled {
                 items.append(
                     WarningItem(
                         id: "daemon-not-running",
                         tier: .warning,
                         title: "Background service isn't running",
-                        detail: "Auto-kick is enabled but nothing is watching for resets.",
+                        detail: "Automation is configured but the background service is stopped.",
                         destination: .daemon
                     )
                 )
@@ -202,7 +203,7 @@ public enum WarningDerivation {
 
     private static func resetObservationItems(_ snapshot: TKSnapshotPayload) -> [WarningItem] {
         let unacknowledged = snapshot.resetObservations.filter {
-            $0["acknowledged"]?.boolValue != true
+            $0["acknowledged"]?.boolValue != true && $0["acknowledged_at"]?.stringValue == nil && $0["acknowledged_at"]?.numberValue == nil
         }
         guard !unacknowledged.isEmpty else { return [] }
         let provider = unacknowledged.last?["provider"]?.stringValue

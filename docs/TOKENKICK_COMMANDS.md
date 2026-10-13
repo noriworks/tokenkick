@@ -108,6 +108,19 @@ machine.
 Bare `tk` opens the TUI; on first run with no saved accounts, it opens setup
 before the normal main menu.
 
+Terminal menus show their keyboard controls. For one choice, use arrows and
+Enter; Esc returns to the previous menu. Multi-account pickers use **Space to
+toggle**, **Enter to review**, and **Esc to cancel**, with square checkboxes and
+a live selection count. Back is never a checkbox, and Enter on an unmarked row
+does not select it. Empty selections make no changes.
+
+Bulk visibility, auto-kick, notification and orchestration cancellation actions
+list the named targets and proposed changes before a separate confirmation, with
+No selected by default. Auto-kick also offers **Enable one account** and
+**Disable one account** for Enter-only selection. Its review shows the master,
+weekly and session switches individually; choosing one window scope preserves
+the master switch. Existing provider consent requirements still apply.
+
 ## Common Workflows
 
 ### First Setup
@@ -148,7 +161,7 @@ tk daemon --status
 tk calendar
 tk schedule show
 tk plan --work-window 18:30-23:30 --json-output
-tk plan --work-window 18:30-23:30 --apply --yes --json-output
+tk plan --work-window 18:30-23:30 --expected-plan "<plan_fingerprint>" --preview-at "<built_at>" --apply --yes --json-output
 tk plan cancel
 tk run --dry-run
 ```
@@ -227,8 +240,8 @@ tk plan --work-window HH:MM-HH:MM
 tk plan --work-window HH:MM-HH:MM --date YYYY-MM-DD --timezone Europe/Berlin
 tk plan --work-window HH:MM-HH:MM --usage "codex (work)=3h" --usage "claude=90m"
 tk plan --work-window HH:MM-HH:MM --json-output
-tk plan --work-window HH:MM-HH:MM --apply
-TK_NO_INTERACTIVE=1 tk plan --work-window HH:MM-HH:MM --apply --yes --json-output
+tk plan --work-window HH:MM-HH:MM --expected-plan "<plan_fingerprint>" --preview-at "<built_at>" --apply
+TK_NO_INTERACTIVE=1 tk plan --work-window HH:MM-HH:MM --expected-plan "<plan_fingerprint>" --preview-at "<built_at>" --apply --yes --json-output
 tk plan cancel
 tk plan cancel --account "<label>"
 tk plan cancel --json-output --yes
@@ -304,8 +317,13 @@ Notes:
 Commands:
 
 ```
+tk notify                       # Show saved destinations and effective push state.
 tk notify --ntfy <topic>
 tk notify --telegram <token> <chat_id>
+tk notify --enable-backend telegram  # Reuse saved credentials.
+tk notify --disable-backend ntfy     # Keep saved topic.
+tk notify --save-ntfy <topic>         # Edit topic without changing push state.
+tk notify --save-telegram <token> <chat_id>
 tk notify --policy errors
 tk notify --policy all
 tk notify test
@@ -333,6 +351,29 @@ Notes:
   notification.
 - In the TUI, use `Configure -> Notifications -> Notification volume` to switch
   between the same two policies.
+- The notification overview shows saved ntfy/Telegram destinations, masked
+  Telegram token presence, effective push switches and the local Telegram
+  listener state. `tk notify --json-output` returns the same metadata without
+  the token. Use the menu's secret input to replace a token without entering
+  it as a shell argument.
+- Destination submenus let you edit saved settings, enable push with existing
+  credentials, disable while retaining credentials, or test the destination.
+  Saving credentials alone preserves push and remote-command settings. Telegram
+  push and remote commands share credentials; restart the listener after editing
+  the token or chat ID. Remote commands remain independent of push switches.
+- `tk notify test` sends to enabled push destinations only. The menu names those
+  destinations before confirmation. Individual tests can use a disabled
+  destination's saved credentials without enabling push. Explicit tests bypass
+  notification volume and account routes.
+- Tests report each backend as `sent`, `failed` or `skipped`, with a reason for
+  failure or skipping. Disabled push backends are skipped; missing credentials
+  on an enabled backend count as a failure. A partial delivery or no delivery
+  returns exit status 1. JSON includes a `results` array and `delivered` is true
+  only when every selected backend succeeds.
+- Account routes show inherited/custom/disabled settings and effective
+  destinations side by side. Custom routes do not enable a globally disabled
+  backend; blocked destinations are explained. Routes are visible on entry to
+  the Accounts notifications submenu, alongside the edit controls.
 
 ### Remote Status (Telegram)
 
@@ -369,6 +410,9 @@ Commands:
 ```
 tk accounts list
 tk accounts detail "<label>"
+tk accounts set-session-limit "<codex label>" auto
+tk accounts set-session-limit "<codex label>" present
+tk accounts set-session-limit "<codex label>" absent
 tk accounts hide "<label>"
 tk accounts show "<label>"
 tk accounts planning
@@ -392,6 +436,30 @@ tk accounts set-notifications "<label>" --none
 
 Notes:
 
+- `tk accounts list` shows saved settings, including separate master, weekly,
+  and session auto-kick switches. Weekly/session switches cannot run automation
+  while the master switch is off. Antigravity quota families are identified
+  alongside the provider without changing saved account labels.
+- Automatic kick model descriptions show the selection policy, not a resolved
+  live model. Antigravity prefers Gemini Flash Low or Claude Haiku Low, falling
+  back to Sonnet Low for Claude. Standalone Claude shows low effort and thinking
+  disabled. The live catalog is consulted when a request is prepared.
+- The Accounts menu separates **Show account settings** from **Show live usage
+  and resets**, which refreshes provider status for visible accounts.
+- Codex accounts show the provider's detected subscription and five-hour limit
+  capability. Detection uses window durations, not plan names or slot ordering;
+  a weekly window can occupy the provider's primary slot. Missing, stale, or
+  ambiguous data is shown as unknown, rather than interpreted as unlimited.
+  Account settings/detail use cached observations; `tk status --refresh` reads
+  current provider data. Detected subscription metadata does not overwrite
+  the user-owned planning tier.
+- `set-session-limit` is the manual fallback, also available under **Accounts →
+  Codex five-hour limit override**. `auto` follows provider evidence; `absent`
+  blocks session actions while retaining weekly tracking; `present` still
+  requires valid current five-hour reset data and cannot invent a window.
+  Overrides survive rediscovery and do not enable or disable the saved master,
+  weekly, or session automation switches. Conflicting evidence produces a
+  warning. Returning to `auto` uses the retained provider observations.
 - Hidden accounts are excluded from normal status and bulk kicking.
 - `tk accounts detail` is read-only.
 - Orchestration roles affect `tk plan`, not manual `tk kick` or daemon
@@ -941,3 +1009,44 @@ legacy process through its verified service manager, then start the new runtime.
 
 `scripts/create-public-export.sh DESTINATION` requires a new destination outside the
 repository. It refuses existing destinations, source aliases, and overlapping paths.
+
+## Persistent Antigravity orchestration
+
+`tk stagger` maintains a recurring 150-minute phase difference between Gemini and
+Claude/GPT through the TokenKick daemon. It is separate from `tk plan`, which
+plans a finite work window. Roles and expected-use minutes do not enable it.
+
+```sh
+tk stagger status --json-output
+tk stagger preview --action enable --gemini 'antigravity' --claude 'antigravity (Claude)' --json-output
+# Review the changes and disclosure, then use the returned fingerprint:
+tk stagger apply --action enable --gemini 'antigravity' --claude 'antigravity (Claude)' --expected FINGERPRINT --yes --accept-risk ENABLE --json-output
+```
+
+For an existing group, preview/apply `--action pause`, `resume`, or `disable`
+without account arguments. Every apply requires the exact preview fingerprint and
+`--yes`; enable/resume additionally requires `--accept-risk ENABLE`. The terminal
+menu exposes the same flow at Configure → Ongoing stagger. These controls do not
+start a stopped daemon: check `tk daemon --status` and start it explicitly.
+
+Enable/resume assigns persistent ownership and enables both members' master and
+session permissions. Weekly settings are preserved, but weekly kicks cannot
+start a group member ahead of its session slot. Pause/disable turns off master
+and session permissions; it never restores independent auto-kicks. Existing
+conflicting schedules must be cancelled before activation. Unrelated accounts
+are unchanged. Manual requests may alter the phase; the daemon observes the
+actual windows and realigns without forcing requests into active windows.
+
+Status shows controller ownership, target/observed offset, next action, daemon
+availability, last evaluation and blockers. Scheduling is best effort: outages,
+weekly exhaustion, reserve thresholds and manual activity can delay alignment.
+The daemon wakes for deadlines without refreshing unrelated providers each minute.
+A failed/unconfirmed generation does not automatically retry. After inspecting
+history, `--action recover` performs native read-only reconciliation after a full
+five-hour cooldown and leaves the group paused. Explicit resume is then required.
+Recovery never sends a replacement generation.
+
+MCP agents use `tokenkick_stagger_status`, `tokenkick_stagger_preview` and
+`tokenkick_stagger_apply`. Enable/resume requires `confirm`, `quota_ack` and
+`accept_risk` with the one-use preview token. The CLI, menu and MCP all change the
+same persisted policy. Do not create a Hermes/Codex cron job to maintain recurrence.

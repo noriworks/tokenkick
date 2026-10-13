@@ -406,6 +406,10 @@ def build_pending_kick_diff(
                 }
             )
             continue
+        if not _pending_window_overlaps(current, kick.work_start, kick.work_end):
+            conflicts.append({"reason": "conflict_other_work_window",
+                              "planned": planned_payload, "existing": current_payload})
+            continue
         if _pending_matches_planned(current, kick):
             unchanged.append(planned_payload)
         else:
@@ -695,6 +699,9 @@ def _skip_reason(
     *,
     has_usage_override: bool = False,
 ) -> str | None:
+    from .stagger import owns
+    if owns(account):
+        return "stagger_managed"
     if not account.visible:
         return "hidden"
     if not account_is_kickable(account):
@@ -716,6 +723,10 @@ def _skip_reason(
         return "stale_status"
     if status.state == AccountState.UNKNOWN:
         return "unknown_status"
+    if account.provider == "codex":
+        from .codex_limits import session_actions_allowed
+        if not session_actions_allowed(account, status):
+            return "no_session_window"
     if weekly_quota_exhausted(status):
         return "weekly_exhausted"
     if status.session_used_percent is not None and status.session_used_percent >= 100.0:

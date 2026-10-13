@@ -1,3 +1,5 @@
+# Legacy template: override HOME, PATH and ExecStart for your installation.
+# Prefer scripts/render-systemd-unit.py; see docs/SYSTEMD_INSTALL.md.
 [Unit]
 Description=TokenKick — AI quota window kicker
 After=network.target
@@ -8,6 +10,7 @@ User=%i
 ExecStart=/usr/local/bin/tk daemon
 Restart=on-failure
 RestartSec=30
+TimeoutStopSec=360
 Environment=HOME=/home/%i
 
 # Logging

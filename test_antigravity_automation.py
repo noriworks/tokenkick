@@ -50,6 +50,7 @@ def status(family="gemini", *, session=0, weekly=0, used=0):
                 "id": key,
                 **spec,
                 "used_percent": used if spec["family"] == family else 99,
+                "reset_evidence": "provider_timestamp",
                 "resets_at": now + seconds - (1 if seconds == 0 else 0),
                 "resets_in_seconds": seconds,
             }
@@ -270,10 +271,14 @@ def test_post_request_verification_requires_correct_family_reset_clock(
     if movement == "other_family":
         after = status("claude_gpt", session=18000)
 
+    clock = [time.time()]
+    monkeypatch.setattr(cli_mod.time, "time", lambda: clock[0])
+    monkeypatch.setattr(cli_mod.time, "sleep", lambda seconds: clock.__setitem__(0, clock[0] + seconds))
+
     def fetch(*args):
         if movement == "error":
             raise OSError("private error")
-        return after
+        return replace(after, observed_at=datetime.fromtimestamp(clock[0], timezone.utc).isoformat())
 
     monkeypatch.setattr(cli_mod, "_fetch_status", fetch)
     monkeypatch.setattr(
@@ -469,7 +474,7 @@ def test_discovery_keeps_families_distinct_and_preserves_configured_flags(monkey
     monkeypatch.setattr(discovery, "antigravity_cli_detected", lambda: True)
     monkeypatch.setattr(discovery, "read_antigravity_cli_identity", lambda: "test@example.test")
     reads = []
-    monkeypatch.setattr(cli_mod, "fetch_status", lambda a: reads.append(a) or status())
+    monkeypatch.setattr(cli_mod, "fetch_status", lambda a, **_options: reads.append(a) or status())
     accounts, statuses = [], []
     discovery._append_antigravity_cli_account(accounts, statuses)
     assert len(reads) == 1

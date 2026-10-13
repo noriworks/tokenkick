@@ -1,0 +1,102 @@
+{
+  "model_calls": [
+    {
+      "subsystem": "01-state-config",
+      "model": [
+        "claude-opus-5-5[1m]"
+      ],
+      "input_tokens": 2,
+      "cache_creation_input_tokens": 114352,
+      "cache_read_input_tokens": 0,
+      "output_tokens": 43339,
+      "thinking_tokens": 35849,
+      "api_price_equivalent_usd": 1.7816040000000002
+    },
+    {
+      "subsystem": "02-provider-monitoring",
+      "model": [
+        "claude-opus-5-5[1m]"
+      ],
+      "input_tokens": 2,
+      "cache_creation_input_tokens": 136943,
+      "cache_read_input_tokens": 0,
+      "output_tokens": 41874,
+      "thinking_tokens": 33144,
+      "api_price_equivalent_usd": 1.933032
+    },
+    {
+      "subsystem": "03-kick-execution",
+      "model": [
+        "claude-opus-5-5[1m]"
+      ],
+      "input_tokens": 2,
+      "cache_creation_input_tokens": 160798,
+      "cache_read_input_tokens": 0,
+      "output_tokens": 36926,
+      "thinking_tokens": 28472,
+      "api_price_equivalent_usd": 2.024912
+    },
+    {
+      "subsystem": "04-orchestration",
+      "model": [
+        "claude-opus-5-5[1m]"
+      ],
+      "input_tokens": 2,
+      "cache_creation_input_tokens": 134244,
+      "cache_read_input_tokens": 0,
+      "output_tokens": 48647,
+      "thinking_tokens": 40688,
+      "api_price_equivalent_usd": 2.0469
+    },
+    {
+      "subsystem": "05-terminal-ux",
+      "model": [
+        "claude-opus-5-5[1m]"
+      ],
+      "input_tokens": 2,
+      "cache_creation_input_tokens": 160702,
+      "cache_read_input_tokens": 0,
+      "output_tokens": 53687,
+      "thinking_tokens": 44525,
+      "api_price_equivalent_usd": 2.3593640000000002
+    },
+    {
+      "subsystem": "06-mcp-notifications",
+      "model": [
+        "claude-opus-5-5[1m]"
+      ],
+      "input_tokens": 2,
+      "cache_creation_input_tokens": 187896,
+      "cache_read_input_tokens": 0,
+      "output_tokens": 29695,
+      "thinking_tokens": 21846,
+      "api_price_equivalent_usd": 2.097076
+    },
+    {
+      "subsystem": "07-macos",
+      "model": [
+        "claude-opus-5-5[1m]"
+      ],
+      "input_tokens": 2,
+      "cache_creation_input_tokens": 256230,
+      "cache_read_input_tokens": 0,
+      "output_tokens": 33920,
+      "thinking_tokens": 25439,
+      "api_price_equivalent_usd": 2.7282480000000002
+    },
+    {
+      "subsystem": "08-build-docs-tests",
+      "model": [
+        "claude-opus-5-5[1m]"
+      ],
+      "input_tokens": 2,
+      "cache_creation_input_tokens": 218259,
+      "cache_read_input_tokens": 0,
+      "output_tokens": 45145,
+      "thinking_tokens": 36052,
+      "api_price_equivalent_usd": 2.64898
+    }
+  ],
+  "billing_note": "Subscription OAuth, no API key. Dollar amounts are CLI-reported API-price equivalents, not evidence of actual charges.",
+  "initial_full_prompt": "Rejected as too long; zero model tokens."
+}

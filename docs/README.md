@@ -255,16 +255,10 @@ local session evidence. If provider usage reports a clean unused window, such as
 the current provider truth instead of preserving an older local active-session
 artifact.
 
-Codex provider usage bucket IDs are backend quota names, not always the same as
-interactive model labels. In `tk codex-usage`, the generic `codex` bucket is the
-main/default Codex quota. If the provider exposes a separate Spark quota bucket,
-TokenKick discovers it as a sibling account such as `codex-spark (...)`, using
-the same `CODEX_HOME` but the Spark bucket/model. TokenKick does not infer Spark
-access from plan tier. If the bucket disappears, the saved Spark account becomes
-Unknown and is not kickable until it returns.
-Orchestration skips Spark until the account has an explicit
-`usable_session_minutes` value; the rough `spark` tier placeholder is not used
-to tip a plan.
+Codex provider usage bucket IDs are backend quota names, not interactive model
+labels. The generic `codex` bucket is the main quota. Spark is retired; loading
+configuration removes its entries and model pins while retaining homes and history.
+
 Do not treat `models_cache.json` as authoritative for the current default model
 label.
 
@@ -411,7 +405,7 @@ tk run --dry-run       Preview run decisions without kicking
 tk run --json-output   Machine-readable run summary
 tk run --codex         Limit run decisions to Codex accounts
 tk plan --work-window HH:MM-HH:MM Plan multi-account session coverage
-tk plan --work-window HH:MM-HH:MM --apply --yes --json-output Apply approved plan
+tk plan --work-window HH:MM-HH:MM --expected-plan "<plan_fingerprint>" --preview-at "<built_at>" --apply --yes --json-output Apply approved plan
 tk plan cancel       Cancel applied orchestration pending kicks
 tk plan cancel --account LABEL Cancel one account's orchestration pending kick
 tk accounts planning  Show planning defaults, orchestration roles, reserves
@@ -494,13 +488,11 @@ Gemini CLI accounts are monitor-only. Gemini uses daily RPD reset at midnight
 Pacific time, so kicking does not anchor a useful window and auto-kick is
 disabled automatically. See [PROVIDERS.md](PROVIDERS.md).
 
-Antigravity accounts are rich monitor-only. TokenKick can read the bundled
-Gemini and Claude/GPT 5-hour and weekly limits when named quota windows are
-available. Logged-in Antigravity CLI accounts are discovered directly; CodexBar
-is only a compatibility fallback for named quota-window data. Public manual
-kick, auto-kick, schedule, run, and orchestration paths still reject
-Antigravity. A hidden `tk antigravity probe-kick` diagnostic can send one
-explicitly confirmed `agy --print` request and stores sanitized evidence only.
+Native Antigravity CLI accounts expose separate Gemini and Claude/GPT quota
+families. TokenKick supports minimal manual and consented automatic requests for
+those verified family accounts. Aggregate/CodexBar Antigravity accounts remain
+monitor-only. Persistent stagger is a separate daemon-owned mode; one-shot plans
+remain separate. See [ANTIGRAVITY_WINDOW_STAGGER.md](ANTIGRAVITY_WINDOW_STAGGER.md).
 
 Codex provider usage reads are status reads only. They do not kick or anchor a
 window; only `tk kick`, `tk run`, or daemon auto-kick sends the tiny Codex model
@@ -569,9 +561,9 @@ Example notification:
 Smart schedule notification:
 > 🕐 TokenKick: "personal" is fresh. Scheduled kick at 11:00 CEST (optimal for your 14:00-21:00 workday).
 
-Auto-kick targets Codex and Claude accounts. Gemini and Antigravity are
-monitor-only and never kicked. Other providers are unsupported unless documented
-otherwise.
+Auto-kick supports Codex, standalone Claude, and native Antigravity family
+accounts. Standalone Gemini and aggregate Antigravity remain monitor-only.
+Other providers are unsupported unless documented otherwise.
 
 TokenKick treats a repeated tiny near-full Codex 5-hour session as a
 phantom/probe session only after evidence that the status is ambiguous, such as

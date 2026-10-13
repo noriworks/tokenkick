@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import os
 import sys
 from dataclasses import dataclass
 from importlib.metadata import PackageNotFoundError, version as package_version
@@ -13,6 +14,7 @@ import tokenkick
 from .state_io import atomic_write_text
 
 UNKNOWN_VERSION = "unknown"
+RUNTIME_CAPABILITIES = ("stagger-v1", "dispatch-lifecycle-v1")
 
 
 @dataclass(frozen=True)
@@ -21,6 +23,7 @@ class DaemonPidfileInfo:
     version: str
     executable: str | None = None
     process_identity: str | None = None
+    capabilities: tuple[str, ...] = ()
 
 
 def installed_version() -> str:
@@ -63,7 +66,10 @@ def read_daemon_pidfile(path: Path) -> DaemonPidfileInfo | None:
         if isinstance(decoded, str) and decoded:
             executable = decoded
         break
-    return DaemonPidfileInfo(pid=pid, version=version, executable=executable, process_identity=identity)
+    capabilities = next((line.removeprefix("capabilities=").split(",") for line in lines
+                         if line.startswith("capabilities=")), [])
+    return DaemonPidfileInfo(pid=pid, version=version, executable=executable, process_identity=identity,
+                             capabilities=tuple(capabilities))
 
 
 def write_daemon_pidfile(
@@ -80,6 +86,7 @@ def write_daemon_pidfile(
         text += f"process_identity={identity}\n"
     if executable:
         text += f"executable={json.dumps(executable)}\n"
+    text += "capabilities=" + ",".join(RUNTIME_CAPABILITIES) + "\n"
     atomic_write_text(path, text)
 
 
@@ -93,7 +100,8 @@ def process_identity(pid: int) -> str | None:
             boot = Path("/proc/sys/kernel/random/boot_id").read_text().strip()
             return f"{boot}:{stat[19]}"
         result = subprocess.run(["ps", "-p", str(pid), "-o", "lstart="],
-                                capture_output=True, text=True, timeout=2, check=True)
+                                capture_output=True, text=True, timeout=2, check=True,
+                                env={**os.environ, "LC_ALL": "C", "TZ": "UTC"})
         return result.stdout.strip() or None
     except (OSError, subprocess.SubprocessError, IndexError):
         return None

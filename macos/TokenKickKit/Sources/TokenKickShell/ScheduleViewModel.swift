@@ -123,6 +123,7 @@ public final class ScheduleViewModel {
     public var timezone: String = ""
     public var pendingConfirmation: ConfirmedAction?
     public private(set) var pendingAction: PendingAction?
+    private var pendingScope: String?
 
     private let service: any ScheduleServicing
     private let onMutation: @MainActor () async -> Void
@@ -223,6 +224,7 @@ public final class ScheduleViewModel {
 
     public func requestClear() {
         guard !isMutating else { return }
+        pendingScope = selectedScope
         pendingAction = .clear
         pendingConfirmation = ConfirmedAction(
             id: "schedule-clear:\(selectedScope)",
@@ -239,6 +241,7 @@ public final class ScheduleViewModel {
 
     public func requestDisable() {
         guard !isMutating else { return }
+        pendingScope = selectedScope
         pendingAction = .disable
         pendingConfirmation = ConfirmedAction(
             id: "schedule-disable:\(selectedScope)",
@@ -256,17 +259,19 @@ public final class ScheduleViewModel {
     public func cancelConfirmation() {
         pendingConfirmation = nil
         pendingAction = nil
+        pendingScope = nil
     }
 
     public func confirmPendingAction() async {
-        guard let action = pendingAction else { return }
+        guard let action = pendingAction, let scope = pendingScope else { return }
         pendingConfirmation = nil
         pendingAction = nil
+        pendingScope = nil
         switch action {
         case .clear:
-            await runMutation { try await self.service.clearSchedule(scope: self.selectedScope) }
+            await runMutation { try await self.service.clearSchedule(scope: scope) }
         case .disable:
-            await runMutation { try await self.service.disableSchedule(scope: self.selectedScope) }
+            await runMutation { try await self.service.disableSchedule(scope: scope) }
         }
     }
 

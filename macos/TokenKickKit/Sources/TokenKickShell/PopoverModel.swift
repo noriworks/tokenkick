@@ -32,6 +32,7 @@ public struct PopoverModel: Sendable {
         let allRows = SnapshotAccountRow.rows(from: snapshot)
         let visibleRows = allRows.filter(\.visible)
         let pending = PendingKickRow.rows(from: snapshot)
+        let future = pending.filter { !$0.gaveUp && $0.kickAt > now && ($0.workEnd.map { $0 > now } ?? true) }
 
         let actionable = warnings.filter { $0.tier <= .warning }
         let notices = warnings.filter { $0.tier <= .advisory }
@@ -42,7 +43,7 @@ public struct PopoverModel: Sendable {
         self.accountRows = Array(visibleRows.prefix(Self.maxAccountRows))
         self.overflowAccountCount = max(0, visibleRows.count - Self.maxAccountRows)
 
-        if let next = pending.first {
+        if let next = future.first {
             let timeText: String
             if Calendar.current.isDate(next.kickAt, inSameDayAs: now) {
                 timeText = RelativeTimeText.until(next.kickAt, now: now)
@@ -84,7 +85,7 @@ public struct PopoverModel: Sendable {
             self.headerStateLine = count == 1 ? "1 \(noun)" : "\(count) \(noun)s"
         } else if snapshot == nil {
             self.headerStateLine = "Waiting for first status…"
-        } else if let next = pending.first {
+        } else if let next = future.first {
             let formatter = DateFormatter()
             formatter.dateFormat = "EEE HH:mm"
             self.headerStateLine = "All quiet — next kick \(formatter.string(from: next.kickAt))"

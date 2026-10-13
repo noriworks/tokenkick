@@ -131,8 +131,14 @@ public final class KickViewModel {
         do {
             let envelope = try await performer.performKick(label: label)
             outcome = KickOutcome.from(envelope: envelope)
+        } catch TKProcessError.timedOut {
+            outcome = .unconfirmed(message: "Outcome unknown — the request may have been accepted. Inspect refreshed usage and history before retrying.")
+        } catch TKProcessError.cancelled {
+            outcome = .unconfirmed(message: "Interrupted — the request may have been accepted. Inspect history before retrying.")
+        } catch is CancellationError {
+            outcome = .unconfirmed(message: "Interrupted — inspect history before retrying.")
         } catch {
-            outcome = .failed(message: String(describing: error))
+            outcome = .unconfirmed(message: "Could not determine request outcome: " + String(describing: error))
         }
         actionStates[label] = .finished(outcome)
         lastOutcome = (label: label, outcome: outcome)

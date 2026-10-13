@@ -94,11 +94,11 @@ def _render_plan_demo() -> None:
     )
     table.add_row(
         "2",
-        "codex-spark (lab)",
+        "codex (reserve)",
         "[green]Fresh[/green]",
         "Kick at 20:55",
         "20:55-22:25",
-        "Short Spark window fills the middle gap after explicit tier config.",
+        "Reserve account fills the middle gap after explicit usage planning.",
     )
     table.add_row(
         "3",
@@ -170,7 +170,7 @@ def _render_macos_main() -> None:
   {_text(1012, 236, "Used", size=13, weight=700, fill="#6e6e73")}
   {_text(1130, 236, "Action", size=13, weight=700, fill="#6e6e73")}
   <line x1="308" y1="258" x2="1344" y2="258" stroke="#e1e1e6"/>
-  <circle cx="342" cy="307" r="8" fill="#34c759"/>{_text(364, 313, "codex-spark (lab)", size=16, weight=650)}
+  <circle cx="342" cy="307" r="8" fill="#34c759"/>{_text(364, 313, "codex (reserve)", size=16, weight=650)}
   {_text(604, 313, "Weekly ready", size=16, fill="#137333")}{_text(792, 301, "weekly in 6d 7h", size=14, fill="#6e6e73")}{_text(792, 325, "session ready", size=14, fill="#137333")}
   {_text(1012, 313, "8%", size=16, weight=650, fill="#137333")}{_text(1130, 313, "Kick now", size=16, weight=650, fill="#1d1d1f")}
   <line x1="334" y1="354" x2="1318" y2="354" stroke="#eeeeF2"/>
@@ -183,7 +183,7 @@ def _render_macos_main() -> None:
   {_text(1012, 509, "42%", size=16, weight=650, fill="#185abc")}{_text(1130, 509, "Use if needed", size=16, fill="#6e6e73")}
   <rect x="308" y="660" width="492" height="170" rx="12" fill="#ffffff" stroke="#d7d7dc"/>
   {_text(334, 699, "Next action", size=18, weight=750)}
-  {_text(334, 731, "Kick codex-spark (lab) now, or let the daemon schedule it.", size=15, fill="#3a3a3c")}
+  {_text(334, 731, "Kick codex (reserve) now, or let the daemon schedule it.", size=15, fill="#3a3a3c")}
   {_pill(334, 762, 132, "Kick now", fill="#1d1d1f", color="#ffffff")}
   {_pill(482, 762, 170, "Open planner", fill="#f2f2f4", stroke="#d1d1d6")}
   <rect x="832" y="660" width="512" height="170" rx="12" fill="#ffffff" stroke="#d7d7dc"/>
@@ -205,7 +205,7 @@ def _render_macos_popover() -> None:
   {_pill(552, 52, 132, "Ready", fill="#e7f6ec", color="#137333")}
   {_text(66, 112, "3 visible accounts · daemon polling every 5 minutes", size=14, fill="#6e6e73")}
   <line x1="66" y1="140" x2="694" y2="140" stroke="#ececf0"/>
-  <circle cx="82" cy="188" r="8" fill="#34c759"/>{_text(104, 194, "codex-spark (lab)", size=17, weight=650)}
+  <circle cx="82" cy="188" r="8" fill="#34c759"/>{_text(104, 194, "codex (reserve)", size=17, weight=650)}
   {_text(104, 220, "Weekly ready · session ready", size=14, fill="#137333")}
   {_text(548, 194, "Kick now", size=16, weight=700, fill="#1d1d1f")}
   <line x1="66" y1="250" x2="694" y2="250" stroke="#ececf0"/>
@@ -256,12 +256,12 @@ def main() -> int:
                 usable_session_minutes=180,
             ),
             AccountConfig(
-                label="codex-spark (lab)",
+                label="codex (reserve)",
                 provider="codex",
                 source=DataSource.CODEX_DIRECT,
                 provider_home="/tmp/tokenkick-demo/codex-work",
-                codex_rate_limit_id="codex_bengalfox",
-                codex_rate_limit_name="GPT-5.3-Codex-Spark",
+                codex_rate_limit_id="codex",
+                codex_rate_limit_name="Codex",
                 usable_session_minutes=90,
             ),
         ]
@@ -290,7 +290,7 @@ def main() -> int:
                 source_detail="claude-cli-usage",
             ),
             AccountStatus(
-                label="codex-spark (lab)",
+                label="codex (reserve)",
                 state=AccountState.FRESH,
                 used_percent=8.0,
                 resets_in_seconds=6 * 24 * 60 * 60 + 7 * 60 * 60,
@@ -299,8 +299,8 @@ def main() -> int:
                 session_resets_in_seconds=0,
                 session_window_minutes=300,
                 source_detail="codex-appserver-ratelimits",
-                codex_rate_limit_id="codex_bengalfox",
-                codex_rate_limit_name="GPT-5.3-Codex-Spark",
+                codex_rate_limit_id="codex",
+                codex_rate_limit_name="Codex",
             ),
         ]
 

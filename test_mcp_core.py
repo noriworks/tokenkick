@@ -196,7 +196,7 @@ def _fake_tk(
                 }}))
             elif argv and argv[0] == "run":
                 kicked = [] if {empty_run!r} else [{{"label": "codex (work)", "reason": "would kick"}}]
-                print(json.dumps({{"run": True, "dry_run": "--dry-run" in argv, "kicked": kicked}}))
+                print(json.dumps({{"run": True, "dry_run": "--dry-run" in argv, "kicked": kicked, "approval_targets": [{{"account_key": "fixture", "kick_type": "kick", "pending": None}}] if kicked else []}}))
             elif argv and argv[0] == "kick":
                 dry_run = "--dry-run" in argv
                 decision = "skipped" if "codex (skip)" in argv else "would_kick"
@@ -492,7 +492,9 @@ def test_run_apply_is_dangerous_and_requires_quota_ack(tmp_path):
 
     assert result["risk"] == "dangerous_quota_operational"
     assert result["provider_refresh"] is True
-    assert _calls(log_path)[-1]["argv"] == ["run", "--json-output", "--codex"]
+    argv = _calls(log_path)[-1]["argv"]
+    assert argv[:4] == ["run", "--json-output", "--codex", "--expected-targets"]
+    assert json.loads(argv[4]) == [{"account_key": "fixture", "kick_type": "kick", "pending": None}]
 
 
 def test_run_dry_run_without_kicks_does_not_create_preview_token(tmp_path):

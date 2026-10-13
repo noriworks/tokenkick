@@ -154,13 +154,47 @@ final class LaunchAgentTests: XCTestCase {
         let launchctl = MockLaunchctl()
         let manager = TKLaunchAgentManager(runtime: runtime, home: home, launchctl: launchctl)
 
-        _ = try await manager.start()
+        _ = try await manager.start(daemon: daemon(running: false))
 
         XCTAssertEqual(launchctl.calls, [
+            ["print", manager.serviceTarget],
             ["bootstrap", manager.launchDomain, manager.plistURL.path],
             ["kickstart", "-k", manager.serviceTarget],
             ["print", manager.serviceTarget],
         ])
+    }
+
+    func testMissingOwnershipDoesNotInstallFiles() async throws {
+        let home = try temporaryHome()
+        let manager = TKLaunchAgentManager(runtime: try makeRuntime(home), home: home, launchctl: MockLaunchctl())
+        do { _ = try await manager.start(); XCTFail("ownership must be known") } catch {}
+        XCTAssertFalse(FileManager.default.fileExists(atPath: manager.plistURL.path))
+    }
+
+    func testFailedBootstrapRollsBackInstallation() async throws {
+        let home = try temporaryHome()
+        let launchctl = MockLaunchctl()
+        launchctl.failNext["bootstrap"] = .failure(stderr: "fixture failure")
+        let manager = TKLaunchAgentManager(runtime: try makeRuntime(home), home: home, launchctl: launchctl)
+        do { _ = try await manager.start(daemon: daemon(running: false)); XCTFail("expected failure") } catch {}
+        XCTAssertFalse(FileManager.default.fileExists(atPath: manager.plistURL.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: manager.helperURL.path))
+        XCTAssertTrue(launchctl.calls.contains(["bootout", manager.serviceTarget]))
+    }
+
+    func testExtraPathsParticipateInRepairDetection() async throws {
+        let home = try temporaryHome()
+        let runtime = try makeRuntime(home)
+        let old = TKLaunchAgentManager(runtime: runtime, home: home, launchctl: MockLaunchctl())
+        _ = try old.install()
+        let new = TKLaunchAgentManager(runtime: runtime, home: home, launchctl: MockLaunchctl(), extraPathEntries: ["/opt/fixture/bin"])
+        let before = await new.status()
+        XCTAssertTrue(before.needsRepair)
+        _ = try new.repair()
+        let after = await new.status()
+        XCTAssertFalse(after.needsRepair)
+        let env = try readPlist(new.plistURL)["EnvironmentVariables"] as? [String: String]
+        XCTAssertTrue(env?["PATH"]?.contains("/opt/fixture/bin") == true)
     }
 
     func testStopBootsOutLoadedLaunchAgent() async throws {
@@ -283,7 +317,7 @@ final class LaunchAgentTests: XCTestCase {
         )
 
         XCTAssertEqual(daemonClient.stopCalls, 1)
-        XCTAssertEqual(launchctl.calls.first, ["bootstrap", manager.launchDomain, manager.plistURL.path])
+        XCTAssertEqual(launchctl.calls.prefix(2).map { $0.first! }, ["print", "bootstrap"])
     }
 
     func testRepairUpdatesRuntimePathAfterRelocation() throws {

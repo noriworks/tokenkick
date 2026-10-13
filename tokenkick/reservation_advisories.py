@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from .kicker import account_is_kickable
 from .models import (
@@ -52,6 +53,7 @@ class ReservationAdvisory:
     work_end: datetime
     suggestion_label: str | None = None
     suggestion_reason: str | None = None
+    display_timezone: str = "UTC"
 
     @property
     def notification_key(self) -> str:
@@ -81,6 +83,7 @@ def build_reservation_advisories(
     *,
     now: datetime,
     soon_seconds: int = QUIET_PERIOD_SOON_SECONDS,
+    display_timezone: str = "UTC",
 ) -> list[ReservationAdvisory]:
     current = now.astimezone(timezone.utc)
     advisories: list[ReservationAdvisory] = []
@@ -97,8 +100,10 @@ def build_reservation_advisories(
             pending=pending,
             now=current,
             soon_seconds=soon_seconds,
+            display_timezone=display_timezone,
         )
         if advisory is not None:
+            advisory = replace(advisory, display_timezone=display_timezone)
             advisories.append(advisory)
     return sorted(advisories, key=lambda item: (item.kick_at, item.account_label, item.risk_state))
 
@@ -113,6 +118,7 @@ def _reservation_advisory_for_account(
     pending: dict[str, PendingKick],
     now: datetime,
     soon_seconds: int,
+    display_timezone: str = "UTC",
 ) -> ReservationAdvisory | None:
     if status is None or status.stale or status.state == AccountState.UNKNOWN:
         return None
@@ -143,6 +149,7 @@ def _reservation_advisory_for_account(
         statuses_by_key=statuses_by_key,
         pending=pending,
         now=now,
+        display_timezone=display_timezone,
     )
     return ReservationAdvisory(
         account_key=account_key_string(account),
@@ -187,7 +194,7 @@ def _reservation_plan_may_be_compromised(
         return False
     observed_reset = datetime.fromtimestamp(status.session_resets_at, tz=timezone.utc)
     used = float(status.session_used_percent or 0.0)
-    return status.state == AccountState.ACTIVE and used > 0 and observed_reset > kick_at
+    return status.state == AccountState.ACTIVE and used > 0 and observed_reset > kick_at + timedelta(seconds=1)
 
 
 def _reservation_suggestion(
@@ -197,6 +204,7 @@ def _reservation_suggestion(
     statuses_by_key: dict[str, AccountStatus],
     pending: dict[str, PendingKick],
     now: datetime,
+    display_timezone: str = "UTC",
 ) -> tuple[str | None, str | None]:
     candidates: list[tuple[tuple, AccountConfig]] = []
     soon_cutoff = now + timedelta(seconds=QUIET_PERIOD_SOON_SECONDS)
@@ -239,7 +247,7 @@ def _reservation_suggestion(
     action_at = _future_orchestrated_pending_action_at(pending.get(account_key_string(selected)), now)
     if action_at is None:
         return selected.label, "not reserved for this plan"
-    return selected.label, f"not needed until {_format_clock(action_at)}"
+    return selected.label, f"not needed until {_format_clock(action_at, display_timezone)}"
 
 
 def _reservation_status_usability_rank(status: AccountStatus) -> int | None:
@@ -277,7 +285,7 @@ def format_reservation_advisory_message(advisory: ReservationAdvisory) -> str:
     if advisory.risk_state == RISK_SAFE:
         return (
             f'"{advisory.account_label}" is reserved for an orchestration kick at '
-            f"{_format_clock(advisory.kick_at)}, with no active quiet-period warning."
+            f"{_format_clock(advisory.kick_at, advisory.display_timezone)}, with no active quiet-period warning."
         )
     if advisory.risk_state == RISK_PLAN_MAY_BE_COMPROMISED:
         return (
@@ -288,14 +296,14 @@ def format_reservation_advisory_message(advisory: ReservationAdvisory) -> str:
     if advisory.risk_state == RISK_QUIET_PERIOD_ACTIVE:
         return (
             f'"{advisory.account_label}" is in its reserved quiet period until '
-            f"{_format_clock(advisory.kick_at)}. Avoid using it now, or cancel/replan "
+            f"{_format_clock(advisory.kick_at, advisory.display_timezone)}. Avoid using it now, or cancel/replan "
             f"the orchestration.{suggestion}"
         )
     return (
         f'"{advisory.account_label}" is reserved for an orchestration kick at '
-        f"{_format_clock(advisory.kick_at)}. Its current session should refresh at "
-        f"{_format_clock(advisory.quiet_start)}. Avoid using it from "
-        f"{_format_clock(advisory.quiet_start)} to {_format_clock(advisory.kick_at)}."
+        f"{_format_clock(advisory.kick_at, advisory.display_timezone)}. Its current session should refresh at "
+        f"{_format_clock(advisory.quiet_start, advisory.display_timezone)}. Avoid using it from "
+        f"{_format_clock(advisory.quiet_start, advisory.display_timezone)} to {_format_clock(advisory.kick_at, advisory.display_timezone)}."
         f"{suggestion}"
     )
 
@@ -307,8 +315,8 @@ def _format_suggestion(advisory: ReservationAdvisory) -> str:
     return f" Use {advisory.suggestion_label} instead{reason}."
 
 
-def _format_clock(value: datetime) -> str:
-    return value.astimezone().strftime("%H:%M")
+def _format_clock(value: datetime, zone: str = "UTC") -> str:
+    return value.astimezone(ZoneInfo(zone)).strftime("%H:%M %Z")
 
 
 def load_reservation_advisory_state() -> dict:

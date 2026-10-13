@@ -145,16 +145,11 @@ The easiest provider-truth check is to launch Codex with the same home and run
 CODEX_HOME=/path/to/account-home codex
 ```
 
-Codex backend quota bucket names are not always the same as interactive model
-labels. In `tk codex-usage`, `codex` means the main/default Codex quota. If the
-provider exposes a separate Spark quota bucket, TokenKick creates a sibling
-`codex-spark (...)` account. That sibling has its own session/weekly window and
-uses the same Codex home with the Spark model override. Main Codex still reads
-the `codex` bucket. Spark is used only when the provider exposes the bucket.
-`tk plan` will not schedule Spark from the rough tier default alone; set
-`usable_session_minutes` after measuring the account if you want orchestration
-to use it. `models_cache.json` is not authoritative for entitlement or the
-current default model label.
+Codex backend quota names differ from interactive model labels. The `codex`
+bucket is the main/default quota. Spark is retired; its configuration entries
+and model pins are removed without deleting credentials or history. Model
+selection consults the live supported catalog, preferring Luna at its lowest
+supported effort. `models_cache.json` is not proof of current entitlement.
 
 ## Account Status Lifecycle
 
@@ -483,10 +478,10 @@ Operational rule:
 - Background daemon status refresh avoids silently touching Claude.
 - Repeated explicit refreshes within 5 minutes reuse the recent successful
   direct `/usage` reading instead of running `/usage` again.
-- When the daemon needs to anchor a due Claude session, `/usage` is treated as
-  an explicit session kick: it must write kick history, update the cache, log
-  daemon events, dedupe like other session kicks, and send the normal
-  notification.
+- A due Claude weekly or session kick sends the same minimal completion,
+  followed by a direct `/usage` check of the relevant window. Acceptance alone
+  does not confirm an anchor. History distinguishes response evidence, verified
+  movement, refusal before dispatch and uncertain outcomes.
 - If passive Claude status is stale or unavailable, but the last successful
   direct `/usage` reading had a session reset time that has now elapsed, the
   daemon can promote that cached due status and run the tracked session kick on
@@ -511,7 +506,7 @@ There are three Claude-specific timing rules that are easy to confuse:
 
 | Rule | Current value | Meaning |
 |---|---:|---|
-| Direct `/usage` minimum interval | 5 minutes | Repeated explicit refreshes inside this window reuse the recent successful direct read instead of launching another `/usage`. |
+| Direct `/usage` minimum interval | 5 minutes, longer after rate limits | Repeated refreshes respect persisted progressive backoff; fresh reads do not bypass an unresolved-send guard. |
 | Recent direct success reuse window | 30 minutes | If a recent direct probe failed or was skipped, TokenKick may still use a recent successful direct result rather than worse fallback data. |
 | Reconciliation interval | 2 hours | If the daemon only has an old direct Claude reading, it may run a tracked `/usage` reconciliation probe. |
 

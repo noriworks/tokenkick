@@ -5,6 +5,8 @@ from __future__ import annotations
 import io
 import hashlib
 import json
+import math
+from contextvars import ContextVar
 import os
 import re
 import signal
@@ -30,6 +32,8 @@ from .antigravity import (
     has_complete_antigravity_quota_windows,
     read_antigravity_cli_identity,
 )
+from .antigravity_windows import OBSERVATION_DELAY_SECONDS, verified_unanchored
+from .claude_monitoring import cooling_down as claude_monitoring_cooling_down
 from .consent import (
     AUTO_KICK_CONSENT_ERROR,
     AUTO_KICK_CONSENT_TOKEN,
@@ -38,6 +42,7 @@ from .consent import (
     provider_display_name,
 )
 from .direct import (
+    CODEX_PROVIDER_USAGE_SOURCE_DETAIL,
     CodexProviderUsageError as CodexProviderUsageError,
     email_from_id_token as email_from_id_token,
     read_claude_identity as read_claude_identity,
@@ -75,12 +80,14 @@ from .models import (
     update_kick_history,
     weekly_quota_exhausted,
 )
+from .codex_limits import session_actions_allowed, session_limit_info
 from .model_selection import (
     ModelSelectionError,
     read_antigravity_models,
     select_antigravity_model,
 )
 from .sources import (
+    polling_pass_cache,
     _codex_appserver_bucket_display_name as _codex_appserver_bucket_display_name,
     _codex_appserver_rate_limit_issue as _codex_appserver_rate_limit_issue,
     _parse_codex_appserver_ratelimits as _parse_codex_appserver_ratelimits,
@@ -89,6 +96,8 @@ from .sources import (
     claude_cli_usage_refresh_allowed,
     fetch_status as fetch_status,
 )
+from .scheduling import pending_transaction
+from .request_scope import run_scope, approve_targets, target_allowed, consume_target
 from .action_state import account_action, UncertainActionError
 from . import antigravity_automation
 from .versioning import installed_version, read_daemon_pidfile, write_daemon_pidfile, pidfile_process_matches
@@ -101,6 +110,7 @@ from .telegram_remote import (
     telegram_remote_credentials,
 )
 from .doctor import build_doctor_report, render_doctor_report
+from . import stagger
 from .codex_surface_stats import (
     DEFAULT_CODEX_SURFACE_ORDER,
     apply_codex_surface_late_confirmation,
@@ -640,15 +650,33 @@ def _send_test_notification(
     config: NotifyConfig,
     backend: str,
     send: Callable[[NotifyConfig], bool | None],
-) -> tuple[bool, str | None]:
-    if backend == "all":
-        return _send_global_notifications(config, send), None
-
-    notification_config = replace(config, enabled=True, backend=backend)
-    delivered = send(notification_config)
-    if delivered:
-        return True, None
-    return False, _notification_skip_reason(notification_config) or "delivery_failed"
+) -> list[dict]:
+    """Test explicit destinations, reporting disabled routes without sending to them."""
+    selected = (
+        (_configured_notification_backends(config) if config.enabled else [])
+        if backend == "all"
+        else [backend]
+    )
+    results = []
+    for destination in NOTIFICATION_BACKENDS if backend == "all" else [backend]:
+        if destination not in selected:
+            results.append({"backend": destination, "status": "skipped", "reason": "push_disabled"})
+            continue
+        notification_config = replace(config, enabled=True, backend=destination)
+        reason = _notification_skip_reason(notification_config)
+        delivered = False
+        if reason is None:
+            try:
+                delivered = bool(send(notification_config))
+            except Exception:
+                # Transport exceptions may contain credential-bearing URLs.
+                delivered = False
+            if not delivered:
+                reason = "delivery_failed"
+        results.append(
+            {"backend": destination, "status": "sent" if delivered else "failed", "reason": reason}
+        )
+    return results
 
 
 def _send_account_notifications(
@@ -1035,7 +1063,7 @@ def _auto_kick_kickable_accounts(accounts: list[AccountConfig]) -> list[AccountC
     return [
         account
         for account in _kickable_accounts(accounts)
-        if account.auto_kick and account.visible
+        if account.auto_kick and account.visible and not stagger.owns(account, CONFIG_DIR)
     ]
 
 
@@ -1280,6 +1308,7 @@ def _set_weekly_reserve_threshold(
     return updated
 
 
+@pending_transaction
 def _invalidate_orchestrated_pending_for_account(account: AccountConfig) -> list[PendingKick]:
     pending = load_pending_kicks(datetime.now(timezone.utc))
     key = account_key_string(account)
@@ -1420,6 +1449,10 @@ def _set_session_auto_kick(
     _save_config_like(config, accounts=updated_accounts)
     state = "enabled" if enabled else "disabled"
     console.print(f'[green]Session auto-kick {state} for "{label}".[/green]')
+    if enabled and not updated.auto_kick:
+        console.print(Text("Saved preference; automation remains inactive because the master switch is off.", style="yellow"))
+    if updated.stagger_group_id:
+        console.print(Text("Timing is controlled by ongoing stagger; see tk stagger status."))
     return updated
 
 
@@ -1460,6 +1493,10 @@ def _set_weekly_auto_kick(
     _save_config_like(config, accounts=updated_accounts)
     state = "enabled" if enabled else "disabled"
     console.print(f'[green]Weekly auto-kick {state} for "{label}".[/green]')
+    if enabled and not updated.auto_kick:
+        console.print(Text("Saved preference; automation remains inactive because the master switch is off.", style="yellow"))
+    if updated.stagger_group_id:
+        console.print(Text("Timing is controlled by ongoing stagger; see tk stagger status."))
     return updated
 
 
@@ -1801,6 +1838,9 @@ def _kick_eligibility(
     resolved_provider = provider or (account.provider if account is not None else None)
     if is_synthetic_status(status):
         return KickEligibility(False, reason="predicted_status_requires_refresh")
+    if resolved_provider == "codex" and not session_actions_allowed(account, status):
+        status = replace(status, session_used_percent=None, session_resets_in_seconds=None,
+                         session_resets_at=None, session_window_minutes=None)
     if resolved_provider not in KICKABLE_PROVIDERS:
         return KickEligibility(False, reason="provider_not_kickable")
     if resolved_provider == "antigravity":
@@ -1818,7 +1858,8 @@ def _kick_eligibility(
             return KickEligibility(False, reason="session_exhausted")
         if status.resets_in_seconds <= 0:
             return KickEligibility(True, kick_type="kick")
-        if status.session_resets_in_seconds <= 0:
+        if (status.session_resets_in_seconds <= 0
+                or verified_unanchored(status, account.antigravity_family)):
             return KickEligibility(True, kick_type="session")
         return KickEligibility(False, reason="active")
     if status.state != AccountState.FRESH and _weekly_quota_exhausted(status):
@@ -2004,6 +2045,8 @@ def _session_kick_eligible(
     allow_stale: bool = False,
 ) -> bool:
     resolved_provider = provider or (account.provider if account is not None else None)
+    if resolved_provider == "codex" and not session_actions_allowed(account, status):
+        return False
     if resolved_provider == "antigravity":
         eligibility = _kick_eligibility(account, status, resolved_provider)
         return eligibility.kickable and eligibility.kick_type == "session"
@@ -2131,6 +2174,8 @@ def _codex_predicted_session_due_status(
     status = entry.get("status")
     if not isinstance(status, AccountStatus):
         return None
+    if not session_actions_allowed(account, status):
+        return None
     if status.stale or status.error:
         return None
     if _auto_kick_blocked_by_codexbar_fallback(account, status):
@@ -2208,6 +2253,8 @@ def _claude_reconciliation_due(
     if observed is None:
         return None
     now = now or _status_cache_now()
+    if claude_monitoring_cooling_down(entry, now):
+        return None
     age_seconds = int((now - observed).total_seconds())
     if age_seconds < CLAUDE_RECONCILIATION_INTERVAL_SECONDS:
         return None
@@ -2474,6 +2521,8 @@ def _is_phantom_session_observable(
     account: AccountConfig,
     status: AccountStatus,
 ) -> bool:
+    if not session_actions_allowed(account, status):
+        return False
     weekly_window = status.window_minutes or 0
     session_window = _effective_session_window_minutes(status) or 0
     session_resets = status.session_resets_in_seconds or 0
@@ -2651,6 +2700,8 @@ def _clear_phantom_recovery_state(account: AccountConfig) -> None:
 
 
 def _phantom_recovery_should_manage(account: AccountConfig, status: AccountStatus) -> bool:
+    if not session_actions_allowed(account, status):
+        return False
     if account.provider != "codex" or not account.auto_kick or not account.session_auto_kick:
         return False
     if _phantom_recovery_state_for(account) is not None:
@@ -2841,8 +2892,13 @@ def _was_pending_codex_fire_all_in_current_weekly_window(
 ) -> bool:
     if status.resets_at is None or status.window_minutes is None:
         return False
+    now = time.time()
     reset_at = status.resets_at
-    window_started_at = reset_at - (status.window_minutes * 60)
+    if reset_at <= now:
+        window_started_at = reset_at
+        reset_at = now + SESSION_KICK_WINDOW_START_GRACE_SECONDS
+    else:
+        window_started_at = reset_at - (status.window_minutes * 60)
     for event in reversed(history):
         if not _pending_codex_fire_all_event(account, event, kick_type="kick"):
             continue
@@ -2920,6 +2976,12 @@ def _session_reset_is_near_full(status: AccountStatus) -> bool:
 
 
 def _effective_session_window_minutes(status: AccountStatus) -> int | None:
+    if status.codex_session_limit in {"absent", "unknown"}:
+        return None
+    if status.session_window_minutes == 10080 and status.source_detail in {
+        CODEX_PROVIDER_USAGE_SOURCE_DETAIL, "codex-session-jsonl", "codex-session-file",
+    }:
+        return None
     if status.session_window_minutes is not None:
         return status.session_window_minutes
     session_resets = status.session_resets_in_seconds
@@ -3316,6 +3378,8 @@ def _run_evaluate_account(
         kick_type=kick_type,
         stagger_state=stagger_state,
     )
+    if event.dispatch_state == "not_sent":
+        return "skipped", _run_skip(account, event.error or "precondition changed"), False
     if pending_kick is not None:
         if event.success:
             remove_pending_kick(account)
@@ -3647,6 +3711,8 @@ def _execute_due_pending_kicks(
             invalidate_pending_kicks(account_label=pending.account_label, provider=pending.provider)
             continue
 
+        if stagger.owns(account, CONFIG_DIR):
+            continue
         status = statuses_by_key.get(key) if statuses_by_key is not None else None
         if status is None:
             status = _fetch_status(account, config)
@@ -3660,6 +3726,17 @@ def _execute_due_pending_kicks(
                 )
             continue
         session_pending = pending.window_basis == SchedulingWindowBasis.SESSION.value
+        if session_pending and account.provider == "codex":
+            limit = session_limit_info(account, status)
+            if limit["session_limit_effective"] == "absent":
+                remove_pending_kick(account)
+                if daemon_log:
+                    _daemon_log("scheduled_kick_cleared", account=account.label, reason="no_session_window")
+                continue
+            if not session_actions_allowed(account, status) or status.session_window_minutes != 300:
+                if daemon_log:
+                    _daemon_log("scheduled_kick_waiting", account=account.label, reason="session_limit_unknown")
+                continue
         pending_allowed = account.auto_kick and (
             account.session_auto_kick if session_pending else account.weekly_auto_kick
         )
@@ -3774,13 +3851,18 @@ def _execute_due_pending_kicks(
             config,
             status,
             automatic=True,
+            expected_pending=pending,
             daemon_log=False,
             send_notification=False,
             kick_type="session" if session_ready else "kick",
             allow_codex_fire_all=True,
         )
+        if event.dispatch_state == "not_sent":
+            if daemon_log:
+                _daemon_log("scheduled_kick_waiting", account=account.label, reason=event.error)
+            continue
         if event.success:
-            remove_pending_kick(account)
+            remove_pending_kick(account, expected=pending)
             if daemon_log:
                 event_name = "scheduled_kick_confirmed" if event.confirmed else "scheduled_kick_attempted"
                 _daemon_log(event_name, account=account.label, reason=event.error)
@@ -3792,7 +3874,7 @@ def _execute_due_pending_kicks(
                 context="scheduled_kick",
             )
         else:
-            updated_pending = record_pending_kick_failure(account, event.error, actual)
+            updated_pending = record_pending_kick_failure(account, event.error, actual, expected=pending)
             if daemon_log:
                 _daemon_log(
                     "scheduled_kick_failed",
@@ -3867,7 +3949,7 @@ def _execute_codex_surface_reintroductions(
                 account,
                 config,
                 status,
-                recovery_history=history,
+                recovery_history=load_kick_history(limit=300),
                 automatic=True,
                 daemon_log=daemon_log,
                 send_notification=True,
@@ -3968,7 +4050,7 @@ def _schedule_or_kick_target(
         if dry_run:
             console.print(f'[dim]Would kick:[/dim] {account.label}')
             return False
-        _kick_and_notify(
+        event = _kick_and_notify(
             account,
             config,
             status,
@@ -3978,7 +4060,10 @@ def _schedule_or_kick_target(
             kick_type=kick_type,
             stagger_state=stagger_state,
         )
-        remove_pending_kick(account)
+        if event.dispatch_state == "not_sent":
+            return False
+        if event.success:
+            remove_pending_kick(account)
         return True
 
     history = load_kick_history(limit=200)
@@ -4022,7 +4107,7 @@ def _schedule_or_kick_target(
         if dry_run:
             console.print(f'[dim]Would kick:[/dim] {account.label}')
             return False
-        _kick_and_notify(
+        event = _kick_and_notify(
             account,
             config,
             status,
@@ -4032,7 +4117,10 @@ def _schedule_or_kick_target(
             stagger_state=stagger_state,
             allow_codex_fire_all=True,
         )
-        remove_pending_kick(account)
+        if event.dispatch_state == "not_sent":
+            return False
+        if event.success:
+            remove_pending_kick(account)
         return True
 
     now = datetime.now(timezone.utc)
@@ -4056,7 +4144,7 @@ def _schedule_or_kick_target(
         if dry_run:
             console.print(f'[dim]Would kick:[/dim] {account.label}')
             return False
-        _kick_and_notify(
+        event = _kick_and_notify(
             account,
             config,
             status,
@@ -4066,7 +4154,10 @@ def _schedule_or_kick_target(
             stagger_state=stagger_state,
             allow_codex_fire_all=True,
         )
-        remove_pending_kick(account)
+        if event.dispatch_state == "not_sent":
+            return False
+        if event.success:
+            remove_pending_kick(account)
         return True
 
     if work_window[1] <= now:
@@ -4089,7 +4180,7 @@ def _schedule_or_kick_target(
         if dry_run:
             console.print(f'[dim]Would kick:[/dim] {account.label}')
             return False
-        _kick_and_notify(
+        event = _kick_and_notify(
             account,
             config,
             status,
@@ -4099,7 +4190,10 @@ def _schedule_or_kick_target(
             stagger_state=stagger_state,
             allow_codex_fire_all=True,
         )
-        remove_pending_kick(account)
+        if event.dispatch_state == "not_sent":
+            return False
+        if event.success:
+            remove_pending_kick(account)
         return True
 
     decision = recompute(account, status, config, now)
@@ -4107,7 +4201,7 @@ def _schedule_or_kick_target(
         if dry_run:
             console.print(f'[dim]Would kick:[/dim] {account.label}')
             return False
-        _kick_and_notify(
+        event = _kick_and_notify(
             account,
             config,
             status,
@@ -4117,7 +4211,10 @@ def _schedule_or_kick_target(
             stagger_state=stagger_state,
             allow_codex_fire_all=True,
         )
-        remove_pending_kick(account)
+        if event.dispatch_state == "not_sent":
+            return False
+        if event.success:
+            remove_pending_kick(account)
         return True
 
     if daemon_log:
@@ -4430,9 +4527,21 @@ def _execute_verified_phantom_recoveries(
             stagger_state=stagger_state,
             model_override=model_override,
         )
+        if event.dispatch_state == "not_sent":
+            continue
         executed += 1
+        _update_phantom_recovery_state(
+            account, status="pending", attempts=attempt_number, now=now,
+            error=event.error, cooldown_until=now + PHANTOM_RECOVERY_COOLDOWN_SECONDS,
+        )
         _mark_status_cache_entry_stale(account)
-        post_status = _fetch_status(account, config)
+        try:
+            post_status = _fetch_status(account, config)
+        except Exception as exc:
+            if daemon_log:
+                _daemon_log("phantom_recovery_observation_failed", account=account.label,
+                            error=type(exc).__name__)
+            continue
         statuses_by_key[account_key_string(account)] = post_status
         _save_status_cache(
             [account],
@@ -4518,48 +4627,97 @@ def _execute_verified_phantom_recoveries(
 def _kick_and_notify(
     account: AccountConfig, config: Config, pre_status: AccountStatus | None = None,
     *, force: bool = False, automatic: bool = False, allow_stale: bool = False,
-    recovery_history: list[KickEvent] | None = None, **kwargs,
+    recovery_history: list[KickEvent] | None = None, stagger_controller: bool = False,
+    expected_pending: PendingKick | None = None, **kwargs,
 ) -> KickEvent:
+    if _shutdown_requested:
+        raise KeyboardInterrupt
+
     try:
-        with account_action(CONFIG_DIR, account_key_string(account), recover=force) as prior_action:
+        with stagger.execution_lock(account, CONFIG_DIR), account_action(CONFIG_DIR, account_key_string(account), recover=force) as prior_action:
             if config.loaded_from_file:
                 latest = Config.load()
                 current = next((a for a in latest.accounts
                                 if account_key_string(a) == account_key_string(account)), None)
                 if current is None:
-                    return KickEvent(label=account.label, success=False, confirmed=False, error="Account was removed.")
+                    return KickEvent(label=account.label, success=False, confirmed=False, dispatch_state="not_sent", error="Account was removed.")
                 if automatic and (not current.auto_kick or not (
                     current.session_auto_kick if kwargs.get("kick_type") == "session"
                     else current.weekly_auto_kick
                 )):
-                    return KickEvent(label=account.label, success=False, confirmed=False, error="Auto-kick was disabled.")
+                    return KickEvent(label=account.label, success=False, confirmed=False, dispatch_state="not_sent", error="Auto-kick was disabled.")
                 account, config = current, latest
             # Recheck after waiting for ownership. Predictions alone never authorize
             # a request. Ordinary paths use the same policy as the displayed status.
             status = pre_status
-            if status is None or is_synthetic_status(status) or account.provider == "antigravity":
-                status = _fetch_status(account, config)
+            if (status is None or is_synthetic_status(status) or (account.provider == "antigravity" and not stagger_controller)
+                    or (automatic and account.provider == "codex" and account.source == DataSource.CODEX_DIRECT)):
+                # A send-time check must not reuse the polling pass's usage read.
+                with polling_pass_cache():
+                    status = _fetch_status(account, config)
+            if account.provider == "codex" and kwargs.get("kick_type") == "session":
+                if not session_actions_allowed(account, status) or status.session_window_minutes != 300:
+                    return KickEvent(label=account.label, success=False, confirmed=False, dispatch_state="not_sent",
+                                     error="No valid enabled five-hour Codex window; session kick blocked.")
+            if automatic and account.provider == "codex" and account.source == DataSource.CODEX_DIRECT:
+                if status.source_detail != CODEX_PROVIDER_USAGE_SOURCE_DETAIL or status.stale or status.error:
+                    return KickEvent(label=account.label, success=False, confirmed=False, dispatch_state="not_sent",
+                                     error="Fresh native Codex quota data is required for automatic kicks.")
             if account.provider == "antigravity" and not antigravity_automation.usable_status(account, status):
-                return KickEvent(label=account.label, success=False, confirmed=False,
+                return KickEvent(label=account.label, success=False, confirmed=False, dispatch_state="not_sent",
                                  error="Fresh complete Antigravity quota data is required.")
             if not force:
                 history = load_kick_history(limit=300)
                 if recovery_history is not None:
                     last_completion = _to_float(prior_action.get("completed_at"))
                     if last_completion is not None and time.time() - last_completion < 60:
-                        return KickEvent(label=account.label, success=False, confirmed=False,
+                        return KickEvent(label=account.label, success=False, confirmed=False, dispatch_state="not_sent",
                                          error="Recent action completed; refresh before recovery.")
                     if history != recovery_history:
-                        return KickEvent(label=account.label, success=False, confirmed=False,
+                        return KickEvent(label=account.label, success=False, confirmed=False, dispatch_state="not_sent",
                                          error="Recovery history changed; retry after refreshing.")
                     history = []
                 eligibility = _kick_eligibility(account, status, history=history,
                                                 allow_stale=allow_stale and not automatic)
                 if not eligibility.kickable:
-                    return KickEvent(label=account.label, success=False, confirmed=False, error=eligibility.reason)
-            return _kick_and_notify_owned(account, config, status, **kwargs)
+                    return KickEvent(label=account.label, success=False, confirmed=False, dispatch_state="not_sent", error=eligibility.reason)
+            with stagger.permission_lock(account):
+                # Config changes during slow native reads must take effect before dispatch.
+                if automatic and account.provider == "antigravity":
+                    current_config = Config.load() if config.loaded_from_file else config
+                    current = next((a for a in current_config.accounts
+                                    if account_key_string(a) == account_key_string(account)), None)
+                    if current is None or not current.auto_kick or not (
+                        current.session_auto_kick if kwargs.get("kick_type") == "session" else current.weekly_auto_kick
+                    ):
+                        return KickEvent(label=account.label, success=False, confirmed=False, dispatch_state="not_sent", error="Automation was disabled.")
+                blocker = stagger.send_guard(account, automatic=automatic,
+                                              controller=stagger_controller, directory=CONFIG_DIR, status=status)
+                if blocker:
+                    return KickEvent(label=account.label, success=False, confirmed=False, dispatch_state="not_sent", error=blocker)
+                from . import scheduling
+                with state_file_lock(CONFIG_FILE), state_file_lock(scheduling.PENDING_KICKS_FILE):
+                    if config.loaded_from_file:
+                        latest = Config.load()
+                        current = next((a for a in latest.accounts if account_key_string(a) == account_key_string(account)), None)
+                        if current is None or (automatic and (not current.auto_kick or not (
+                            current.session_auto_kick if kwargs.get("kick_type") == "session" else current.weekly_auto_kick
+                        ))):
+                            return KickEvent(label=account.label, success=False, confirmed=False,
+                                             dispatch_state="not_sent", error="Account or automation changed before dispatch.")
+                        account, config = current, latest
+                    pending = load_pending_kicks(datetime.now(timezone.utc)).get(account_key_string(account))
+                    pending_data = pending.to_dict() if pending else None
+                    if expected_pending is not None and pending_data != expected_pending.to_dict():
+                        return KickEvent(label=account.label, success=False, confirmed=False,
+                                         dispatch_state="not_sent", error="Pending action was cancelled or changed.")
+                    if not target_allowed(account_key_string(account), kwargs.get("kick_type", "kick"), pending_data):
+                        return KickEvent(label=account.label, success=False, confirmed=False,
+                                         dispatch_state="not_sent", error="Reviewed run target changed; preview again.")
+                    consume_target(account_key_string(account))
+                    return _kick_and_notify_owned(account, config, status, **kwargs)
     except (StateFileLockTimeout, UncertainActionError) as exc:
-        return KickEvent(label=account.label, success=False, confirmed=False, error=str(exc))
+        return KickEvent(label=account.label, success=False, confirmed=False, dispatch_state="not_sent", error=str(exc))
 
 
 def _kick_and_notify_owned(
@@ -4615,6 +4773,10 @@ def _kick_and_notify_owned(
             pre_status=pre_status,
         )
 
+    if event.dispatch_state == "not_sent":
+        if not daemon_log:
+            console.print("Request not sent: " + (event.error or "precondition changed"), markup=False)
+        return event
     if event.success:
         if kick_type == "kick":
             _mark_status_cache_entry_stale(account)
@@ -4693,6 +4855,8 @@ def _kick_codex_fire_all_surfaces(
         _mark_codex_fire_all_pending_attempt(event)
         events.append(event)
         final_event = event
+        if event.dispatch_state in {"not_sent", "uncertain"} or _shutdown_requested:
+            break
         if index < len(surfaces) and gap_seconds > 0:
             time.sleep(gap_seconds)
     if final_event is None:
@@ -4720,6 +4884,8 @@ def _record_codex_fire_all_cluster(
     daemon_log: bool,
 ) -> None:
     for event in events:
+        if event.dispatch_state == "not_sent":
+            continue
         if event.codex_confirmation_method is None:
             event.codex_confirmation_method = "none"
         append_kick_event(event)
@@ -4769,6 +4935,8 @@ def _kick_codex_with_surface_retries(
             final_event = winner
             break
         final_event = event
+        if event.dispatch_state in {"not_sent", "uncertain"} or _shutdown_requested:
+            break
         if not _codex_surface_retry_needed(account, event, kick_type=kick_type):
             break
         if index < len(surfaces) and not daemon_log:
@@ -4799,6 +4967,8 @@ def _finalize_codex_surface_cluster(
     daemon_log: bool,
 ) -> None:
     for event in events:
+        if event.dispatch_state == "not_sent":
+            continue
         if event.codex_confirmation_method is None:
             event.codex_confirmation_method = "none"
         append_kick_event(event)
@@ -4873,10 +5043,11 @@ def _run_kick_attempt(
         attempt=attempt,
         max_attempts=max_attempts,
     )
-    if account.provider == "claude" and kick_type == "session" and not phantom_recovery:
+    if account.provider == "claude" and not phantom_recovery:
         event = _kick_claude_usage_session(
             account,
             config,
+            kick_type=kick_type,
             pre_status=pre_status,
             daemon_log=daemon_log,
             model_override=model_override,
@@ -4892,7 +5063,7 @@ def _run_kick_attempt(
         if account.provider == "antigravity":
             if pre_status is None or not antigravity_automation.usable_status(account, pre_status):
                 return KickEvent(label=account.label, success=False, confirmed=False,
-                                 error="Fresh complete Antigravity quota data is required.")
+                                 error="Fresh complete Antigravity quota data is required.", dispatch_state="not_sent")
             kwargs["before_send"] = lambda: antigravity_automation.record_attempt(CONFIG_DIR, account, pre_status)
         attempt_started_at = time.time()
         event = kick_account(account, **kwargs)
@@ -4909,19 +5080,30 @@ def _run_kick_attempt(
         event.post_kick_status = "pending"
         try:
             after = _fetch_status(account, config)
-            if (event.evidence_response and antigravity_automation.usable_status(account, after)
-                    and antigravity_automation.anchor_confirmed(pre_status, after, session=kick_type == "session")):
-                antigravity_automation.record_confirmation(CONFIG_DIR, account, after)
-                event.confirmed = True
-                event.evidence_provider_moved = True
-                event.post_kick_status = "confirmed"
-                event.error = None
+            if event.evidence_response and antigravity_automation.usable_status(account, after):
+                time.sleep(OBSERVATION_DELAY_SECONDS)
+                verification = _fetch_status(account, config)
+                if (antigravity_automation.usable_status(account, verification)
+                        and antigravity_automation.anchor_confirmed(
+                            pre_status, after, session=kick_type == "session",
+                            verification=verification, family=account.antigravity_family)):
+                    antigravity_automation.record_confirmation(CONFIG_DIR, account, verification)
+                    _save_status_cache([account], {account_key_string(account): verification})
+                    event.confirmed = True
+                    event.evidence_provider_moved = True
+                    event.post_kick_status = "confirmed"
+                    event.error = None
         except Exception:
             pass  # Persist the attempt even when the post-request read fails.
         if not event.confirmed:
             event.error = "Antigravity request sent, but a new reset anchor was not observed; automatic retry suppressed."
     elif event.success and phantom_recovery:
-        event = _verify_phantom_kick(account, event, config, daemon_log=daemon_log)
+        try:
+            event = _verify_phantom_kick(account, event, config, daemon_log=daemon_log)
+        except Exception:
+            event.confirmed = False
+            event.post_kick_status = "unknown"
+            event.error = "Request sent; post-request provider verification unavailable."
     elif event.success and account.provider == "codex" and kick_type == "session" and verify_codex:
         event = _verify_codex_session_anchor(
             account,
@@ -4939,7 +5121,7 @@ def _run_kick_attempt(
     ):
         event = _verify_codex_kick_provider_movement(account, event, pre_status, config)
     _apply_kick_event_kind(event, phantom_recovery=phantom_recovery, kick_type=kick_type)
-    if record_event:
+    if record_event and event.dispatch_state != "not_sent":
         append_kick_event(event)
     if log_result:
         _log_kick_result(
@@ -5120,48 +5302,41 @@ def _kick_claude_usage_session(
     pre_status: AccountStatus | None = None,
     daemon_log: bool = False,
     model_override: str | None = None,
+    kick_type: str = "session",
 ) -> KickEvent:
-    """Send a tiny Claude completion, then verify the session through /usage."""
-    event = kick_account(
-        account,
-        record=False,
-        phantom_recovery=False,
-        model_override=model_override,
-    )
+    """Generation acceptance and a verified quota anchor are separate evidence."""
+    event = kick_account(account, record=False, phantom_recovery=False, model_override=model_override)
     if not event.success:
         return event
-
+    event.confirmed = False
     event.evidence_response = bool(event.response_text)
     event.evidence_tokens = _event_has_token_usage(event)
-    probe_event, status = _run_claude_usage_touch(
-        account,
-        config,
-        kind="session",
-        kick_type="status_probe",
-        success_response="Claude /usage post-kick verification completed.",
-        failure_prefix="Claude /usage post-kick verification failed",
-        daemon_log=daemon_log,
-        force=True,
-    )
-    if not probe_event.success:
+    try:
+        probe_event, status = _run_claude_usage_touch(
+            account, config, kind="probe", kick_type="status_probe",
+            success_response="Claude /usage post-kick verification completed.",
+            failure_prefix="Claude /usage post-kick verification failed",
+            daemon_log=daemon_log, force=True,
+        )
+        if probe_event.success and status is not None and not status.stale:
+            if kick_type == "session":
+                event = _verify_claude_session_anchor(event, pre_status, status)
+            elif (pre_status is not None and status.resets_at is not None
+                  and status.resets_at > time.time()
+                  and _reset_anchor_moved(pre_status.resets_at, status.resets_at)):
+                event.confirmed = True
+                event.evidence_provider_moved = True
+                event.post_kick_status = "moved"
+                event.error = None
+    except Exception:
+        # A failed read must never erase the accepted generation from history.
+        event.confirmed = False
+    if not event.confirmed:
+        from .action_state import mark_action_uncertain
+        mark_action_uncertain()
         event.evidence_provider_moved = False
-        if event.evidence_response or event.evidence_tokens:
-            event.confirmed = True
-            event.post_kick_status = "provider_accepted"
-            event.error = None
-        else:
-            event.confirmed = False
-            event.post_kick_status = "unknown"
-            event.error = probe_event.error
-        return event
-
-    event = _verify_claude_session_anchor(event, pre_status, status)
-    if not event.confirmed and (event.evidence_response or event.evidence_tokens):
-        # Claude returned model output, which is direct evidence that the
-        # quota-consuming request ran. The /usage reset clock can lag briefly.
-        event.confirmed = True
         event.post_kick_status = "provider_accepted"
-        event.error = None
+        event.error = "Claude request accepted; quota anchor unverified. Inspect usage before explicit recovery."
     return event
 
 
@@ -5214,7 +5389,16 @@ def _run_claude_usage_touch(
             prompt_text="/usage",
             error=status.error or f"{failure_prefix}: Claude /usage did not return usable status.",
         ), status
-    if status.source_detail != "claude-cli-usage":
+    context = getattr(status, "_claude_probe_context", None)
+    reused = not isinstance(context, ClaudeProbeContext) or not context.direct_probe_performed
+    if status.source_detail != "claude-cli-usage" or reused:
+        _save_status_cache(
+            [account], {account_key_string(account): status}, daemon_log=daemon_log,
+        )
+        reason = (
+            "Claude /usage was not performed; cached data cannot confirm a kick."
+            if reused else "Claude /usage fell back to non-direct status."
+        )
         return KickEvent(
             label=account.label,
             timestamp=event_timestamp,
@@ -5223,11 +5407,10 @@ def _run_claude_usage_touch(
             kind=kind,
             kick_type=kick_type,
             prompt_text="/usage",
-            error=f"{failure_prefix}: Claude /usage fell back to non-direct status.",
+            error=f"{failure_prefix}: {reason}",
         ), status
 
-    status = replace(status, label=account.label)
-    _attach_claude_usage_probe_context(status)
+    status.label = account.label
     _save_status_cache(
         [account],
         {account_key_string(account): status},
@@ -5244,19 +5427,6 @@ def _run_claude_usage_touch(
         prompt_text="/usage",
         response_text=success_response,
     ), status
-
-
-def _attach_claude_usage_probe_context(status: AccountStatus) -> None:
-    observed_at = status.observed_at or _status_cache_observed_at()
-    status.observed_at = observed_at
-    context = getattr(status, "_claude_probe_context", None)
-    if not isinstance(context, ClaudeProbeContext):
-        context = ClaudeProbeContext()
-    context.last_direct_probe_at = observed_at
-    context.last_direct_probe_error = None
-    context.last_direct_success_at = observed_at
-    context.last_direct_success_status = replace(status)
-    setattr(status, "_claude_probe_context", context)
 
 
 def _verify_claude_session_anchor(
@@ -5302,31 +5472,11 @@ def _claude_session_anchor_moved_by_kick(
     pre_status: AccountStatus | None,
     post_status: AccountStatus,
 ) -> bool:
-    if pre_status is None:
-        return False
-    if pre_status.state != AccountState.ACTIVE and post_status.state == AccountState.ACTIVE:
-        return True
-    if _reset_anchor_moved(pre_status.session_resets_at, post_status.session_resets_at):
-        return True
-    if _usage_percent_increased(pre_status.used_percent, post_status.used_percent):
-        return True
-    if _is_phantom_session_candidate(post_status):
-        return False
-    if _usage_percent_increased(pre_status.session_used_percent, post_status.session_used_percent):
-        return True
-    if (
-        pre_status.window_anchor_state == "available_unanchored"
-        and post_status.window_anchor_state not in {None, "available_unanchored"}
-        and not _is_phantom_session_candidate(post_status)
-    ):
-        return True
-    pre_resets = pre_status.session_resets_in_seconds
-    post_resets = post_status.session_resets_in_seconds
-    return (
-        pre_resets is not None
-        and post_resets is not None
-        and post_resets >= pre_resets + CLAUDE_RECONCILIATION_SESSION_JUMP_SECONDS
-        and not _is_phantom_session_candidate(post_status)
+    return bool(
+        pre_status is not None and not post_status.stale
+        and post_status.session_resets_at is not None
+        and post_status.session_resets_at > time.time()
+        and _reset_anchor_moved(pre_status.session_resets_at, post_status.session_resets_at)
     )
 
 
@@ -6188,14 +6338,24 @@ def _render_auto_status_table(accounts: list[AccountConfig]) -> None:
             state = "✅ enabled" if account.auto_kick else "❌ disabled"
             weekly_state = "✅ enabled" if account.weekly_auto_kick else "❌ disabled"
             session_state = "✅ enabled" if account.session_auto_kick else "❌ disabled"
+            if not account.auto_kick:
+                if account.weekly_auto_kick:
+                    weekly_state = "saved on; master off"
+                if account.session_auto_kick:
+                    session_state = "saved on; master off"
+        if stagger.owns(account, CONFIG_DIR):
+            state = stagger.ownership(account, CONFIG_DIR)
+            weekly_state += " (group slots)"
+            session_state = "group slots"
         visible = "visible" if account.visible else "hidden"
         table.add_row(account.label, account.provider, visible, state, weekly_state, session_state)
 
     console.print(table)
+    stagger.render(console, _stagger_status_payload())
 
 
 def _render_accounts_table(config: Config, accounts: list[AccountConfig]) -> None:
-    table = Table(title="TokenKick Accounts", show_header=True)
+    table = Table(title="TokenKick Account Settings", show_header=True)
     table.add_column("Account", style="bold")
     table.add_column("Provider")
     table.add_column("Visible")
@@ -6211,15 +6371,33 @@ def _render_accounts_table(config: Config, accounts: list[AccountConfig]) -> Non
             auto_kick = "❌ monitor-only"
         elif not account_is_kickable(account):
             auto_kick = "❌ disabled (not kickable)"
-        elif account.auto_kick:
-            auto_kick = "✅ enabled"
         else:
-            auto_kick = "❌ disabled"
+            auto_kick = "\n".join(
+                f"{name}: {'on' if enabled else 'off'}"
+                for name, enabled in (
+                    ("Master", account.auto_kick),
+                    ("Weekly", account.weekly_auto_kick),
+                    ("Session", account.session_auto_kick),
+                )
+            )
+        if stagger.owns(account, CONFIG_DIR):
+            auto_kick = stagger.ownership(account, CONFIG_DIR)
         kick_model = _kick_model_display(account)
         probe = "⚠ enabled" if account.status_probe_enabled else "—"
+        provider = account.provider
+        if account.provider == "antigravity":
+            provider += f"\n{_antigravity_family_display(account)}"
+        elif account.provider == "codex":
+            info = _codex_account_limit_metadata(account)
+            provider += f"\nPlan: {info['detected_plan_type'] or 'unknown'}"
+            if info["plan_stale"]:
+                provider += " (stale)"
+            provider += f"\n5h: {info['session_limit_effective']}"
+            if info["session_limit_override"] != "auto":
+                provider += " (manual)"
         table.add_row(
             account.label,
-            account.provider,
+            provider,
             visible,
             notifications,
             auto_kick,
@@ -6228,19 +6406,124 @@ def _render_accounts_table(config: Config, accounts: list[AccountConfig]) -> Non
         )
 
     console.print(table)
+    stagger.render(console, _stagger_status_payload())
+
+
+def _notification_route_details(account: AccountConfig, config: NotifyConfig) -> dict:
+    requested = account.notification_backends
+    mode = (
+        "disabled"
+        if not account.notifications_enabled or requested == []
+        else ("inherit" if requested is None else "custom")
+    )
+    effective = _notification_backends_for_account(account, config)
+    requested_backends = (
+        _configured_notification_backends(config) if requested is None else requested
+    )
+    blocked = (
+        [backend for backend in requested_backends if backend not in effective]
+        if mode != "disabled"
+        else []
+    )
+    description = (
+        "Disabled"
+        if mode == "disabled"
+        else (
+            ("Inherit global" if mode == "inherit" else "Custom")
+            + " → "
+            + (" + ".join(requested_backends) or "none")
+        )
+    )
+    if blocked:
+        description += " (push disabled: " + ", ".join(blocked) + ")"
+    return {
+        "route_mode": mode,
+        "route_description": description,
+        "effective_backends": effective,
+        "blocked_backends": blocked,
+    }
+
+
+def _notification_overview(config: Config) -> dict:
+    n = config.notifications
+    enabled = _configured_notification_backends(n) if n.enabled else []
+    remote = _telegram_remote_status_payload(config)
+    return {
+        "policy": n.policy,
+        "enabled_backends": enabled,
+        "ntfy_topic": n.ntfy_topic,
+        "telegram_chat_id": n.telegram_chat_id,
+        "telegram_token_saved": bool(n.telegram_bot_token),
+        "telegram_remote_running": bool(remote.get("running")),
+        "telegram_remote_enabled": bool(remote.get("enabled")),
+        "telegram_remote_configured": bool(remote.get("configured")),
+    }
+
+
+def _render_notification_overview(config: Config) -> None:
+    info = _notification_overview(config)
+    table = Table(title="Notification settings")
+    table.add_column("Destination")
+    table.add_column("Saved settings")
+    table.add_column("Push")
+    table.add_row(
+        "ntfy",
+        Text(info["ntfy_topic"] or "Topic not configured"),
+        "on" if "ntfy" in info["enabled_backends"] else "off",
+    )
+    telegram = "Chat: " + (info["telegram_chat_id"] or "not configured")
+    telegram += "\nToken: " + ("saved ••••••" if info["telegram_token_saved"] else "not configured")
+    table.add_row(
+        "Telegram", Text(telegram), "on" if "telegram" in info["enabled_backends"] else "off"
+    )
+    console.print(table)
+    remote = "running" if info["telegram_remote_running"] else "stopped"
+    console.print(
+        f"Telegram remote commands: {remote} (independent of push); startup {'enabled' if info['telegram_remote_enabled'] else 'disabled'}; credentials {'configured' if info['telegram_remote_configured'] else 'incomplete'}."
+    )
+    console.print(
+        "Volume: errors/checks only — routine events are suppressed."
+        if info["policy"] == "errors"
+        else "Volume: all events — routine events and errors/checks."
+    )
+    console.print(
+        "Explicit tests bypass volume and account routes. Individual tests can send with push off."
+    )
 
 
 def _render_account_notifications_table(config: Config, accounts: list[AccountConfig]) -> None:
     table = Table(title="TokenKick Account Notifications", show_header=True)
     table.add_column("Account", style="bold")
     table.add_column("Provider")
+    table.add_column("Saved route")
     table.add_column("Account notifications")
-    table.add_column("Destination")
+    table.add_column("Effective destination")
 
-    destination = _notification_destination_display(config.notifications)
+    console.print(
+        Text("Global default: " + _notification_destination_display(config.notifications))
+    )
     for account in accounts:
         account_state = _notification_route_display(account, config.notifications)
-        table.add_row(account.label, account.provider, account_state, destination)
+        details = _notification_route_details(account, config.notifications)
+        destinations = []
+        for backend in details["effective_backends"]:
+            destination = (
+                config.notifications.ntfy_topic
+                if backend == "ntfy"
+                else config.notifications.telegram_chat_id
+            )
+            credentials_ok = _notification_backend_has_credentials(config.notifications, backend)
+            destinations.append(
+                f"{backend}:{destination or 'missing destination'}"
+                + (" (credentials missing)" if not credentials_ok else "")
+            )
+        table.add_row(
+            Text(account.label),
+            account.provider,
+            Text(details["route_description"]),
+            account_state,
+            Text(", ".join(destinations) or "—"),
+        )
 
     console.print(table)
 
@@ -6250,7 +6533,7 @@ def _render_account_planning_table(config: Config, accounts: list[AccountConfig]
     table.add_column("Account", style="bold")
     table.add_column("Provider")
     table.add_column("Visible")
-    table.add_column("Auto/session")
+    table.add_column("Automation / session")
     table.add_column("Usage")
     table.add_column("Orchestration role")
     table.add_column("Effective role")
@@ -6291,14 +6574,17 @@ def _render_account_planning_table(config: Config, accounts: list[AccountConfig]
         )
 
     console.print(table)
+    stagger.render(console, _stagger_status_payload())
 
 
 def _account_auto_session_display(account: AccountConfig) -> str:
+    if stagger.owns(account, CONFIG_DIR):
+        return stagger.ownership(account, CONFIG_DIR)
     if not account_is_kickable(account):
         return "monitor-only"
-    auto = "✅" if account.auto_kick else "❌"
-    session = "✅" if account.session_auto_kick else "❌"
-    return f"auto {auto} / session {session}"
+    if not account.auto_kick:
+        return "Off"
+    return "Independent · session " + ("on" if account.session_auto_kick else "off")
 
 
 def _display_orchestration_role(role: str) -> str:
@@ -6338,10 +6624,13 @@ def _account_by_label_or_exit(label: str, accounts: list[AccountConfig]) -> Acco
 
 def _account_detail_payload(account: AccountConfig) -> dict:
     payload = account.to_dict()
+    payload["automation_owner"] = stagger.ownership(account, CONFIG_DIR)
     payload["notifications_enabled"] = account.notifications_enabled
     payload["kickable"] = account_is_kickable(account)
     payload["monitor_only"] = _is_monitor_only_account(account)
     payload["kick_model_effective"] = None if not payload["kickable"] else kick_model_for_account(account)
+    if account.provider == "codex":
+        payload.update(_codex_account_limit_metadata(account))
     return payload
 
 
@@ -6353,6 +6642,9 @@ def _render_account_detail(account: AccountConfig) -> None:
     fields = [
         ("Label", account.label),
         ("Provider", account.provider),
+        *([("Quota family", _antigravity_family_display(account))]
+          if account.provider == "antigravity" else []),
+        ("Automation owner", stagger.ownership(account, CONFIG_DIR)),
         ("Source", account.source.value),
         ("Visible", "yes" if account.visible else "no"),
         ("Kickable", "yes" if payload["kickable"] else "no"),
@@ -6382,7 +6674,28 @@ def _render_account_detail(account: AccountConfig) -> None:
     ]
     for field, value in fields:
         table.add_row(field, str(value))
+    if account.provider == "codex":
+        for field, key in (
+            ("Detected plan", "detected_plan_type"), ("Plan observed", "plan_observed_at"),
+            ("Plan stale", "plan_stale"), ("Detected 5h limit", "session_limit_detected"),
+            ("Effective 5h limit", "session_limit_effective"), ("5h override", "session_limit_override"),
+            ("Limit evidence", "session_limit_source"), ("Limit warning", "session_limit_warning"),
+        ):
+            table.add_row(field, str(payload.get(key) if payload.get(key) is not None else "unknown"))
     console.print(table)
+
+
+def _codex_account_limit_metadata(account: AccountConfig) -> dict:
+    cached = _load_status_cache(Config(accounts=[account]))
+    status = cached[1][0] if cached and cached[1] else None
+    return session_limit_info(account, status)
+
+
+def _antigravity_family_display(account: AccountConfig) -> str:
+    return {
+        "gemini": "Gemini family",
+        "claude_gpt": "Claude/GPT family",
+    }.get(account.antigravity_family, "Combined families")
 
 
 def _kick_model_display(account: AccountConfig) -> str:
@@ -6392,10 +6705,17 @@ def _kick_model_display(account: AccountConfig) -> str:
         return "—"
     model = kick_model_for_account(account)
     if not model:
-        return "auto (Luna, lowest effort)"
-    if account.kick_model:
-        return model
-    return f"{model} (default)"
+        if account.provider == "codex":
+            return "auto (Luna, lowest effort)"
+        if account.provider == "antigravity":
+            if account.antigravity_family == "gemini":
+                return "auto (Gemini Flash, Low)"
+            return "auto (Claude Haiku → Sonnet, Low)"
+        return "auto"
+    if account.provider == "claude":
+        default = "default; " if not account.kick_model else ""
+        return f"{model} ({default}low effort, thinking off)"
+    return model if account.kick_model else f"{model} (default)"
 
 
 def _app_json_requested(as_json: bool) -> bool:
@@ -6467,12 +6787,17 @@ def _accounts_list_payload(config: Config, accounts: list[AccountConfig]) -> lis
         {
             "label": account.label,
             "provider": account.provider,
+            "antigravity_family": account.antigravity_family,
+            **(_codex_account_limit_metadata(account) if account.provider == "codex" else {}),
             "visible": account.visible,
             "kickable": account_is_kickable(account),
             "monitor_only": _is_monitor_only_account(account),
             "auto_kick": account.auto_kick,
+            "automation_owner": stagger.ownership(account, CONFIG_DIR),
             "weekly_auto_kick": account.weekly_auto_kick,
             "session_auto_kick": account.session_auto_kick,
+            "weekly_effective": account.auto_kick and account.weekly_auto_kick,
+            "session_effective": account.auto_kick and account.session_auto_kick,
             "notifications_enabled": account.notifications_enabled,
             "notifications_route": _notification_route_display(account, config.notifications),
             "kick_model": _kick_model_display(account),
@@ -6496,6 +6821,7 @@ def _account_notifications_payload(config: Config, accounts: list[AccountConfig]
                 "notifications_enabled": account.notifications_enabled,
                 "backends": account.notification_backends,
                 "route": _notification_route_display(account, config.notifications),
+                **_notification_route_details(account, config.notifications),
             }
             for account in accounts
         ],
@@ -6517,6 +6843,7 @@ def _account_planning_payload(config: Config, accounts: list[AccountConfig]) -> 
             "provider": account.provider,
             "visible": account.visible,
             "auto_kick": account.auto_kick,
+            "automation_owner": stagger.ownership(account, CONFIG_DIR),
             "session_auto_kick": account.session_auto_kick,
             "usable_session_minutes": usable_session_minutes_for_account(account, config),
             "orchestration_role": account.orchestration_role,
@@ -6536,13 +6863,17 @@ def _auto_status_payload(accounts: list[AccountConfig]) -> list[dict]:
             "label": account.label,
             "provider": account.provider,
             "antigravity_family": account.antigravity_family,
+            "codex_session_limit_override": account.codex_session_limit_override,
             "account_fingerprint": hashlib.sha256(account_key_string(account).encode()).hexdigest(),
+            "automation_owner": stagger.ownership(account, CONFIG_DIR),
             "visible": account.visible,
             "kickable": account_is_kickable(account),
             "monitor_only": _is_monitor_only_account(account),
             "auto_kick": account.auto_kick,
             "weekly_auto_kick": account.weekly_auto_kick,
             "session_auto_kick": account.session_auto_kick,
+            "weekly_effective": account.auto_kick and account.weekly_auto_kick,
+            "session_effective": account.auto_kick and account.session_auto_kick,
         }
         for account in accounts
     ]
@@ -7637,7 +7968,19 @@ def _emit_plan(plan: OrchestrationPlan, *, as_json: bool) -> None:
     _render_plan(plan)
 
 
+_plan_display_zone = ContextVar("plan_display_zone", default=None)
+
+
 def _render_plan(plan: OrchestrationPlan) -> None:
+    token = _plan_display_zone.set(ZoneInfo(plan.timezone))
+    try:
+        _render_plan_contents(plan)
+    finally:
+        _plan_display_zone.reset(token)
+
+
+def _render_plan_contents(plan: OrchestrationPlan) -> None:
+    console.print(Text("Times: " + plan.timezone))
     console.print(_tokenkick_title(" — Orchestration Plan"))
     table = Table(show_header=True)
     table.add_column("Time", no_wrap=True)
@@ -7869,8 +8212,8 @@ def _format_plan_time_range(
     *,
     reference: datetime | None = None,
 ) -> str:
-    local_start = start.astimezone()
-    local_end = end.astimezone()
+    local_start = start.astimezone(_plan_display_zone.get())
+    local_end = end.astimezone(_plan_display_zone.get())
     if local_start.date() == local_end.date():
         suffix = _format_plan_day_offset(local_start, reference)
         return f"{local_start.strftime('%H:%M')}-{local_end.strftime('%H:%M')}{suffix}"
@@ -7886,7 +8229,7 @@ def _format_plan_time_range(
 def _format_plan_day_offset(value: datetime, reference: datetime | None) -> str:
     if reference is None:
         return ""
-    day_offset = (value.date() - reference.astimezone().date()).days
+    day_offset = (value.date() - reference.astimezone(_plan_display_zone.get()).date()).days
     if day_offset == 0:
         return ""
     if day_offset > 0:
@@ -7895,8 +8238,8 @@ def _format_plan_day_offset(value: datetime, reference: datetime | None) -> str:
 
 
 def _format_plan_timestamp(value: datetime, *, reference: datetime | None = None) -> str:
-    local_value = value.astimezone()
-    if reference is not None and local_value.date() != reference.astimezone().date():
+    local_value = value.astimezone(_plan_display_zone.get())
+    if reference is not None and local_value.date() != reference.astimezone(_plan_display_zone.get()).date():
         return local_value.strftime("%Y-%m-%d %H:%M")
     return local_value.strftime("%H:%M")
 
@@ -7915,6 +8258,7 @@ def _reservation_advisories_for_pairs(
         statuses_by_key,
         load_pending_kicks(current),
         now=current,
+        display_timezone=config.schedule.timezone or "UTC" if config else "UTC",
     )
 
 
@@ -7963,6 +8307,7 @@ def _send_reservation_advisory_notifications(
         statuses_by_key,
         load_pending_kicks(now),
         now=now,
+        display_timezone=config.schedule.timezone or "UTC",
     )
     state = load_reservation_advisory_state()
     accounts_by_key = {account_key_string(account): account for account in accounts}
@@ -8002,22 +8347,51 @@ def _send_reservation_advisory_notifications(
 @click.option("--dry-run", is_flag=True, help="Show what would be kicked without acting")
 @click.option("--json-output", "as_json", is_flag=True, help="Output as JSON")
 @click.option("--codex", "codex_only", is_flag=True, help="Run only Codex provider accounts")
-def run_cmd(dry_run: bool, as_json: bool, codex_only: bool):
+@click.option("--expected-targets", help="Exact approval_targets JSON from a reviewed dry run")
+@run_scope()
+def run_cmd(dry_run: bool, as_json: bool, codex_only: bool, expected_targets: str | None = None):
     """Refresh status, kick eligible windows, and summarize."""
     config, accounts, statuses, duration_ms, refresh_error = _run_refresh(codex_only=codex_only)
     kicked: list[dict] = []
     skipped: list[dict] = []
+    approval_targets: list[dict] = []
     reservation_advisories: list[ReservationAdvisory] = []
     failed = refresh_error is not None
 
     if not refresh_error:
         now = datetime.now(timezone.utc)
         statuses_by_key = _cache_statuses_by_key_from_pairs(accounts, statuses)
+        preview_history, preview_pending = load_kick_history(limit=200), load_pending_kicks(now)
+        approval_targets = []
+        for candidate, observed in zip(accounts, statuses, strict=False):
+            bucket, _, _ = _run_evaluate_account(candidate, observed, config, dry_run=True,
+                history=preview_history, pending=preview_pending, now=now)
+            if bucket == "kicked":
+                pending_item = preview_pending.get(account_key_string(candidate))
+                approval_targets.append({"account_key": account_key_string(candidate),
+                    "kick_type": _kick_type_for_status(observed),
+                    "pending": pending_item.to_dict() if pending_item else None})
+        if expected_targets is not None:
+            try:
+                approved = json.loads(expected_targets)
+            except ValueError as exc:
+                raise click.ClickException("Invalid expected-targets JSON.") from exc
+            if approved != approval_targets:
+                if as_json:
+                    click.echo(json.dumps({"ok": False, "error": "targets_changed",
+                                           "message": "Run targets changed; preview again."}))
+                    sys.exit(2)
+                raise click.ClickException("Run targets changed; preview again.")
+            approve_targets(approved)
+            keys = {item["account_key"] for item in approved}
+            pairs = [(a, st) for a, st in zip(accounts, statuses, strict=False) if account_key_string(a) in keys]
+            accounts, statuses = [a for a, _ in pairs], [st for _, st in pairs]
         reservation_advisories = build_reservation_advisories(
             accounts,
             statuses_by_key,
             load_pending_kicks(now),
             now=now,
+            display_timezone=config.schedule.timezone or "UTC",
         )
         if not dry_run:
             _send_reservation_advisory_notifications(
@@ -8077,6 +8451,7 @@ def run_cmd(dry_run: bool, as_json: bool, codex_only: bool):
         skipped=skipped,
         reservation_advisories=reservation_advisories,
     )
+    payload["approval_targets"] = approval_targets
     if as_json:
         click.echo(json.dumps(payload, indent=2))
     else:
@@ -8179,6 +8554,31 @@ def accounts_planning(as_json: bool):
         console.print("[red]No saved accounts. Run tk setup after logging in.[/red]")
         return
     _render_account_planning_table(config, loaded_accounts)
+
+
+@accounts.command("set-session-limit")
+@click.argument("label")
+@click.argument("mode", type=click.Choice(["auto", "present", "absent"]))
+@click.option("--json-output", "as_json", is_flag=True, help="Output result as JSON")
+def accounts_set_session_limit(label: str, mode: str, as_json: bool):
+    """Override Codex five-hour limit detection; never invents reset data or enables automation."""
+    config = Config.load()
+    loaded = _load_accounts(config)
+    account = _account_by_label_or_exit(label, loaded)
+    if account.provider != "codex":
+        if _app_json_requested(as_json):
+            emit_app_error(ERROR_USAGE, "Session-limit overrides are only supported for Codex.")
+        else:
+            console.print("[red]Session-limit overrides are only supported for Codex.[/red]")
+        raise click.exceptions.Exit(2)
+
+    def apply() -> AccountConfig:
+        updated = replace(account, codex_session_limit_override=mode)
+        _save_config_like(config, accounts=[updated if a.label == label else a for a in loaded])
+        console.print(f'Five-hour limit detection for "{label}": {mode}. Automation switches unchanged.')
+        return updated
+
+    _run_account_mutation(as_json, apply)
 
 
 @accounts.command("detail")
@@ -8509,7 +8909,7 @@ class _SingleKickStopped(Exception):
         self.message = message
         self.cli_markup = cli_markup if cli_markup is not None else message
         self.failure = failure
-        self.exit_code = exit_code
+        self.exit_code = exit_code or (1 if failure else 0)
 
 
 class _SingleKickConfirmationRequired(Exception):
@@ -8583,6 +8983,19 @@ def _resolve_single_kick_target(
             clear_pending = True
 
     status = _fetch_status(account, config)
+    if account.provider == "antigravity" and not force:
+        eligibility = _kick_eligibility(account, status)
+        if not eligibility.kickable:
+            explanations = {
+                "active": "no reset is ready and no unstarted session has been verified",
+                "antigravity_live_quota_required": "fresh native quota data for this family is required",
+                "antigravity_attempt_already_sent": "a previous attempt is still guarded; automatic retry is suppressed",
+                "weekly_exhausted": "the weekly quota is exhausted",
+                "session_exhausted": "the session quota is exhausted",
+            }
+            reason = eligibility.reason or "antigravity_not_eligible"
+            message = f'Skipping "{label}": {explanations.get(reason, reason)}.'
+            raise _SingleKickStopped(reason, message, cli_markup=f"[dim]{message}[/dim]")
     weekly_reset_ready = _weekly_reset_ready(status)
     long_kick = _long_kick_eligible(status)
     phantom_session = (
@@ -8848,6 +9261,10 @@ def kick(
     disable_label: str | None,
 ):
     """Kick a quota window to anchor it."""
+    if label and not as_json:
+        selected = next((a for a in Config.load().accounts if a.label == label), None)
+        if selected and stagger.owns(selected, CONFIG_DIR):
+            console.print("[yellow]Manual usage may change the ongoing stagger; the daemon will reconcile the actual window.[/yellow]")
     config = _repair_codex_home_identity_drift_if_needed(
         _migrate_codex_home_keys_if_needed(Config.load())
     )
@@ -8954,7 +9371,7 @@ def wake(label: str):
     account = next((candidate for candidate in accounts if candidate.label == label), None)
     if account is None:
         console.print(f'[red]Account "{label}" not found.[/red]')
-        return
+        raise click.exceptions.Exit(1)
     if _is_monitor_only_account(account):
         console.print(f"[red]{_monitor_only_message(account.provider)}[/red]")
         raise click.exceptions.Exit(1)
@@ -8992,7 +9409,7 @@ def auto_status(as_json: bool):
     accounts = _load_accounts(config)
     if _app_json_requested(as_json):
         emit_app_success(
-            {"accounts": _auto_status_payload(accounts)},
+            {"accounts": _auto_status_payload(accounts), "stagger": _stagger_status_payload()},
             message=None if accounts else "No saved accounts. Run tk setup after logging in.",
         )
         return
@@ -9007,9 +9424,13 @@ def auto_status(as_json: bool):
 @click.argument("label")
 @click.option("--json-output", "as_json", is_flag=True, help="Output result as JSON")
 @click.option("--accept-risk", "consent_token", metavar="ENABLE", hidden=True)
+@click.option("--consent-version", type=int, hidden=True)
 @click.option("--expected-auto-fingerprint", hidden=True)
-def auto_enable(label: str, as_json: bool, consent_token: str | None, expected_auto_fingerprint: str | None = None):
+def auto_enable(label: str, as_json: bool, consent_token: str | None, expected_auto_fingerprint: str | None = None, consent_version: int | None = None):
     """Enable auto-kick for an account."""
+    from .consent import AUTO_KICK_CONSENT_VERSION
+    if consent_version is not None and consent_version != AUTO_KICK_CONSENT_VERSION:
+        raise click.UsageError("Consent disclosure changed; review it again before enabling.")
     config = Config.load()
     accounts = _load_accounts(config)
     _require_auto_preview_fingerprint(accounts, label, expected_auto_fingerprint)
@@ -9050,9 +9471,13 @@ def auto_session():
 @click.argument("label")
 @click.option("--json-output", "as_json", is_flag=True, help="Output result as JSON")
 @click.option("--accept-risk", "consent_token", metavar="ENABLE", hidden=True)
+@click.option("--consent-version", type=int, hidden=True)
 @click.option("--expected-auto-fingerprint", hidden=True)
-def auto_session_enable(label: str, as_json: bool, consent_token: str | None, expected_auto_fingerprint: str | None = None):
+def auto_session_enable(label: str, as_json: bool, consent_token: str | None, expected_auto_fingerprint: str | None = None, consent_version: int | None = None):
     """Enable session auto-kick for an account."""
+    from .consent import AUTO_KICK_CONSENT_VERSION
+    if consent_version is not None and consent_version != AUTO_KICK_CONSENT_VERSION:
+        raise click.UsageError("Consent disclosure changed; review it again before enabling.")
     config = Config.load()
     accounts = _load_accounts(config)
     _require_auto_preview_fingerprint(accounts, label, expected_auto_fingerprint)
@@ -9093,9 +9518,13 @@ def auto_weekly():
 @click.argument("label")
 @click.option("--json-output", "as_json", is_flag=True, help="Output result as JSON")
 @click.option("--accept-risk", "consent_token", metavar="ENABLE", hidden=True)
+@click.option("--consent-version", type=int, hidden=True)
 @click.option("--expected-auto-fingerprint", hidden=True)
-def auto_weekly_enable(label: str, as_json: bool, consent_token: str | None, expected_auto_fingerprint: str | None = None):
+def auto_weekly_enable(label: str, as_json: bool, consent_token: str | None, expected_auto_fingerprint: str | None = None, consent_version: int | None = None):
     """Enable weekly auto-kick for an account."""
+    from .consent import AUTO_KICK_CONSENT_VERSION
+    if consent_version is not None and consent_version != AUTO_KICK_CONSENT_VERSION:
+        raise click.UsageError("Consent disclosure changed; review it again before enabling.")
     config = Config.load()
     accounts = _load_accounts(config)
     _require_auto_preview_fingerprint(accounts, label, expected_auto_fingerprint)
@@ -9243,11 +9672,11 @@ def codex_strategy_order(surfaces: tuple[str, ...], reset_order: bool, as_json: 
 @click.option("--json-output", "as_json", is_flag=True, help="Output result as JSON")
 def codex_strategy_gap(seconds: float, as_json: bool):
     """Set seconds to wait between serialized burst ladder surfaces."""
-    if seconds < 0:
+    if not math.isfinite(seconds) or seconds < 0 or seconds != int(seconds):
         if _app_json_requested(as_json):
-            emit_app_error(ERROR_USAGE, "Gap seconds must be >= 0.")
+            emit_app_error(ERROR_USAGE, "Gap must be a finite nonnegative whole number of seconds.")
             sys.exit(2)
-        raise click.ClickException("Gap seconds must be >= 0.")
+        raise click.ClickException("Gap must be a finite nonnegative whole number of seconds.")
     if _app_json_requested(as_json):
         _run_codex_strategy_mutation_json(
             "gap_set",
@@ -9583,8 +10012,8 @@ def codex_fire_all_order(surfaces: tuple[str, ...], reset_order: bool):
 @click.argument("seconds", type=float)
 def codex_fire_all_gap(seconds: float):
     """Deprecated alias: set burst ladder inter-surface gap."""
-    if seconds < 0:
-        raise click.ClickException("Gap seconds must be >= 0.")
+    if not math.isfinite(seconds) or seconds < 0 or seconds != int(seconds):
+        raise click.ClickException("Gap must be a finite nonnegative whole number of seconds.")
     config = Config.load()
     _save_config_like(config, codex_burst_ladder_gap_seconds=int(seconds))
     console.print("[yellow]Deprecated: use tk codex-strategy gap.[/yellow]")
@@ -9738,7 +10167,7 @@ def _validate_schedule_target(account: str | None, use_default: bool, *, as_json
             emit_app_error(ERROR_USAGE, "Choose exactly one: --account <label> or --default.")
             sys.exit(2)
         console.print("[red]Choose exactly one: --account <label> or --default.[/red]")
-        return False
+        raise click.exceptions.Exit(2)
     return True
 
 
@@ -9759,13 +10188,13 @@ def _validate_work_window(
             emit_app_error(ERROR_USAGE, f'Invalid work window "{value}". Unknown timezone "{timezone_name}".')
             sys.exit(2)
         console.print(f'[red]Invalid work window "{value}". Unknown timezone "{timezone_name}".[/red]')
-        return False
+        raise click.exceptions.Exit(2)
     except ValueError as exc:
         if _app_json_requested(as_json):
             emit_app_error(ERROR_USAGE, f'Invalid work window "{value}": {exc}.')
             sys.exit(2)
         console.print(f'[red]Invalid work window "{value}": {exc}.[/red]')
-        return False
+        raise click.exceptions.Exit(2)
 
 
 def _schedule_config_with_tz(
@@ -10146,9 +10575,9 @@ def history(
         result = _history_event_result(event)
         table.add_row(
             _history_event_compact_time(event),
-            event.label,
+            Text(event.label),
             result,
-            _history_event_compact_details(event)[:160],
+            Text(_history_event_compact_details(event)[:160]),
         )
 
     _history_console().print(table)
@@ -10220,13 +10649,13 @@ def _render_history_verbose(events: list[KickEvent]) -> None:
     for event in reversed(events):
         table.add_row(
             _history_event_display_time(event),
-            event.label,
+            Text(event.label),
             _history_event_result(event),
             _history_event_kind(event),
             event.codex_surface or "—",
             _kick_event_attempt_summary(event) or "—",
-            _kick_event_evidence_summary(event) or "—",
-            _history_event_base_details(event)[:180],
+            Text(_kick_event_evidence_summary(event) or "—"),
+            Text(_history_event_base_details(event)[:180]),
         )
 
     _history_console().print(table)
@@ -10455,15 +10884,15 @@ def reset_log(
     """Show detected provider global reset events."""
     if as_json and as_csv:
         console.print("[red]Use either --json-output or --csv, not both.[/red]")
-        return
+        raise click.exceptions.Exit(2)
     cutoff = parse_since(since) if since else None
     if since and cutoff is None:
         console.print("[red]Invalid --since value. Use forms like 7d, 24h, or an ISO timestamp.[/red]")
-        return
+        raise click.exceptions.Exit(2)
     if action:
         if action[0] != "ack":
             console.print(f'[red]Unknown reset-log action "{action[0]}".[/red]')
-            return
+            raise click.exceptions.Exit(2)
         _reset_log_ack(
             event_ids=action[1:],
             latest=ack_latest,
@@ -10481,7 +10910,7 @@ def reset_log(
         event = next((candidate for candidate in events if candidate.id == detail_id), None)
         if event is None:
             console.print(f'[red]Reset event "{detail_id}" not found.[/red]')
-            return
+            raise click.exceptions.Exit(2)
         if as_json:
             click.echo(json.dumps(event.to_dict(), indent=2))
             return
@@ -10535,9 +10964,9 @@ def _reset_log_ack(
     if sum(bool(value) for value in (event_ids, latest, all_events)) != 1:
         if _app_json_requested(as_json):
             emit_app_error("reset_log_ack_invalid", usage_message)
-            return
+            raise click.exceptions.Exit(2)
         console.print(f"[red]{usage_message}[/red]")
-        return
+        raise click.exceptions.Exit(2)
     updated = acknowledge_reset_events(
         event_ids=event_ids or None,
         latest=latest,
@@ -11048,6 +11477,8 @@ def _set_codex_surface_demotion_config(label: str, **overrides: object) -> None:
         raise click.ClickException(f'Account "{label}" is not a Codex account.')
     force_keep = set(overrides.get("codex_surface_force_keep", account.codex_surface_force_keep))
     force_prune = set(overrides.get("codex_surface_force_prune", account.codex_surface_force_prune))
+    if not set(CODEX_FIRE_ALL_DEFAULT_SURFACES) - force_prune:
+        raise click.ClickException("Cannot force-prune every surface; keep at least one available.")
     overlap = force_keep & force_prune
     if overlap:
         raise click.ClickException(
@@ -12702,6 +13133,20 @@ def claude_direct_usage_disable(as_json: bool):
     help="Disable one notification backend but keep its credentials",
 )
 @click.option(
+    "--enable-backend",
+    type=click.Choice(NOTIFICATION_BACKENDS),
+    help="Enable push using saved credentials",
+)
+@click.option(
+    "--save-ntfy", metavar="TOPIC", help="Edit saved topic without changing push settings"
+)
+@click.option(
+    "--save-telegram",
+    nargs=2,
+    metavar="TOKEN CHAT_ID",
+    help="Edit saved Telegram credentials without changing push or remote settings",
+)
+@click.option(
     "--policy",
     type=click.Choice(("all", "errors")),
     help="Notification volume: all events, or only errors/checks.",
@@ -12721,6 +13166,9 @@ def notify(
     telegram: tuple[str, str] | None,
     telegram_remote: tuple[str, str] | None,
     disable_backend: str | None,
+    enable_backend: str | None,
+    save_ntfy: str | None,
+    save_telegram: tuple[str, str] | None,
     policy: str | None,
     test_backend: str,
     as_json: bool,
@@ -12736,7 +13184,19 @@ def notify(
                 sys.exit(2)
             console.print(f"[red]{message}[/red]")
             return
-        if ntfy_topic or telegram or telegram_remote or disable_backend or policy:
+        if any(
+            value is not None
+            for value in (
+                ntfy_topic,
+                telegram,
+                telegram_remote,
+                disable_backend,
+                enable_backend,
+                save_ntfy,
+                save_telegram,
+                policy,
+            )
+        ):
             message = (
                 "Use either tk notify test [--backend all|ntfy|telegram] or "
                 "configure/change a backend, not both."
@@ -12747,39 +13207,34 @@ def notify(
             console.print(f"[red]{message}[/red]")
             return
         with _console_redirected_to_stderr() if as_json else nullcontext():
-            delivered, failure_reason = _send_test_notification(
-                Config.load().notifications,
-                test_backend,
-                notify_test,
+            results = _send_test_notification(
+                Config.load().notifications, test_backend, notify_test
             )
+        delivered = any(row["status"] == "sent" for row in results) and not any(
+            row["status"] == "failed" for row in results
+        )
         backend_label = "Telegram" if test_backend == "telegram" else test_backend
         target_message = (
             "Test notification" if test_backend == "all" else f"{backend_label} test notification"
         )
+        payload = {"action": "test", "delivered": delivered, "results": results}
+        if test_backend != "all":
+            payload["backend"] = test_backend
+            if not delivered:
+                payload["reason"] = results[0]["reason"]
+        message = f"{target_message} {'sent' if delivered else 'failed'}."
         if as_json:
             if delivered:
-                payload = {"action": "test", "delivered": True}
-                if test_backend != "all":
-                    payload["backend"] = test_backend
-                emit_app_success(
-                    payload,
-                    message=f"{target_message} sent.",
-                )
+                emit_app_success(payload, message=message)
             else:
-                payload = {"action": "test", "delivered": False}
-                if test_backend != "all":
-                    payload.update({"backend": test_backend, "reason": failure_reason})
-                emit_app_error(
-                    "notification_test_failed",
-                    f"{target_message} failed.",
-                    payload=payload,
-                )
-                sys.exit(1)
-            return
-        if delivered:
-            console.print(f"[green]{target_message} sent.[/green]")
+                emit_app_error("notification_test_failed", message, payload=payload)
         else:
-            console.print(f"[red]{target_message} failed.[/red]")
+            for row in results:
+                detail = f" ({row['reason']})" if row["reason"] else ""
+                console.print(f"{row['backend']}: {row['status']}{detail}", markup=False)
+            console.print(message)
+        if not delivered:
+            raise click.exceptions.Exit(1)
         return
 
     if test_backend != "all":
@@ -12790,8 +13245,24 @@ def notify(
         console.print(f"[red]{message}[/red]")
         return
 
-    action_count = sum(bool(value) for value in (ntfy_topic, telegram, telegram_remote, disable_backend))
-    if action_count > 1 or (action_count == 0 and policy is None):
+    actions = (
+        ntfy_topic,
+        telegram,
+        telegram_remote,
+        disable_backend,
+        enable_backend,
+        save_ntfy,
+        save_telegram,
+    )
+    action_count = sum(value is not None for value in actions)
+    if action_count == 0 and policy is None:
+        config = Config.load()
+        if as_json:
+            emit_app_success(_notification_overview(config))
+        else:
+            _render_notification_overview(config)
+        return
+    if action_count > 1:
         message = (
             "Choose one backend action, set --policy all|errors, or combine one "
             "backend action with --policy."
@@ -12804,7 +13275,47 @@ def notify(
 
     config = Config.load()
     success_messages: list[str] = []
-    if ntfy_topic:
+    values = [value for value in (ntfy_topic, save_ntfy) if value is not None]
+    for pair in (telegram, telegram_remote, save_telegram):
+        if pair is not None:
+            values.extend(pair)
+    if any(not value.strip() for value in values):
+        message = "Notification destinations and credentials cannot be blank."
+        if as_json:
+            emit_app_error(ERROR_USAGE, message)
+        else:
+            console.print(message)
+        raise click.exceptions.Exit(2)
+    if enable_backend is not None:
+        if not _notification_backend_has_credentials(config.notifications, enable_backend):
+            message = f"Save complete {enable_backend} credentials before enabling push."
+            if as_json:
+                emit_app_error(ERROR_USAGE, message)
+            else:
+                console.print(message)
+            raise click.exceptions.Exit(2)
+        config.notifications = replace(
+            config.notifications,
+            enabled=True,
+            backend=enable_backend,
+            enabled_backends=_with_enabled_notification_backend(
+                config.notifications, enable_backend
+            ),
+        )
+        success_messages.append(f"{enable_backend} notifications enabled using saved credentials.")
+    elif save_ntfy is not None:
+        config.notifications = replace(config.notifications, ntfy_topic=save_ntfy)
+        success_messages.append("ntfy topic saved; push settings unchanged.")
+    elif save_telegram is not None:
+        config.notifications = replace(
+            config.notifications,
+            telegram_bot_token=save_telegram[0],
+            telegram_chat_id=save_telegram[1],
+        )
+        success_messages.append(
+            "Telegram credentials saved; push and remote settings unchanged. Restart the remote listener to use changed credentials."
+        )
+    elif ntfy_topic:
         config.notifications = replace(
             config.notifications,
             enabled=True,
@@ -12835,7 +13346,9 @@ def notify(
             telegram_chat_id=chat_id,
             enabled_backends=backends,
         )
-        success_messages.append("Telegram remote credentials saved; Telegram notifications disabled.")
+        success_messages.append(
+            "Telegram remote credentials saved; Telegram notifications disabled."
+        )
     elif disable_backend is not None:
         backends = _without_enabled_notification_backend(config.notifications, disable_backend)
         config.notifications = replace(
@@ -13303,6 +13816,14 @@ def _telegram_remote_restart_json() -> None:
     )
 
 
+def _telegram_authorization_current(credentials) -> bool:
+    try:
+        current = Config.load()
+        return current.telegram_remote_enabled and telegram_remote_credentials(current) == credentials
+    except (TelegramRemoteConfigError, StateFileError):
+        return False
+
+
 @_process_lock(lambda: TELEGRAM_REMOTE_PID_FILE.with_suffix(".owner"))
 def _run_telegram_remote_foreground() -> None:
     try:
@@ -13327,6 +13848,7 @@ def _run_telegram_remote_foreground() -> None:
         )
         listener = TelegramRemoteListener(
             client=TelegramRemoteClient(credentials.token),
+            authorization_current=lambda: _telegram_authorization_current(credentials),
             allowed_chat_id=credentials.chat_id,
             state_file=TELEGRAM_REMOTE_STATE_FILE,
             status_runner=lambda: run_status_cached_command(_telegram_remote_executable_path()),
@@ -14377,8 +14899,21 @@ def daemon(background: bool, stop_daemon: bool, daemon_status: bool, restart_dae
     _run_daemon_foreground()
 
 
+_shutdown_requested = False
+
+
+def _daemon_shutdown(_signum, _frame):
+    global _shutdown_requested
+    from .action_state import action_in_progress
+    _shutdown_requested = True
+    if not action_in_progress():
+        raise KeyboardInterrupt
+
+
 @_process_lock(lambda: DAEMON_PID_FILE.with_suffix(".owner"))
 def _run_daemon_foreground():
+    global _shutdown_requested
+    _shutdown_requested = False
     current_pid = os.getpid()
     existing_pid = _prepare_daemon_pidfile_for_start()
     if existing_pid is not None and existing_pid != current_pid:
@@ -14399,7 +14934,7 @@ def _run_daemon_foreground():
     try:
         signal.signal(
             signal.SIGTERM,
-            lambda _signum, _frame: (_ for _ in ()).throw(KeyboardInterrupt()),
+            _daemon_shutdown,
         )
 
         _daemon_log("daemon_start", poll_interval=f"{config.poll_interval_minutes}m")
@@ -14428,7 +14963,9 @@ def _run_daemon_foreground():
                         retry_in_seconds=fallback_sleep_seconds,
                     )
                     sleep_seconds = fallback_sleep_seconds
-                time.sleep(sleep_seconds)
+                if _shutdown_requested:
+                    raise KeyboardInterrupt
+                stagger.wait_between_polls(sleep_seconds, CONFIG_DIR)
 
         except KeyboardInterrupt:
             _daemon_log("daemon_stop")
@@ -14496,8 +15033,14 @@ def _daemon_poll_once(
     interval = loop_config.poll_interval_minutes * 60
     accounts = _load_accounts(loop_config)
     previous_entries_for_reset = previous_reset_entries
+    try:
+        stagger.daemon_step(loop_config, directory=CONFIG_DIR)
+    except Exception as exc:
+        _daemon_log("stagger_error", error=_daemon_poll_error_text(exc))
     refresh_accounts, refresh_statuses = _refresh_status_cache(loop_config, daemon_log=True)
     statuses_by_key = _cache_statuses_by_key_from_pairs(refresh_accounts, refresh_statuses)
+    from .status_rendering import notify_dormant_accounts
+    notify_dormant_accounts(refresh_statuses, {a.label: a for a in accounts}, loop_config)
     cache_entries_after_refresh = _load_status_cache_entries()
     late_attributions = _apply_codex_late_attribution(
         refresh_accounts,
@@ -14635,3 +15178,12 @@ def _daemon_poll_once(
 from .app_commands import app_group as _app_group  # noqa: E402 — needs the CLI group defined first
 
 cli.add_command(_app_group)
+
+
+def _stagger_status_payload():
+    pid = _read_daemon_pid()
+    return stagger.status(directory=CONFIG_DIR, daemon_running=bool(pid and _pid_is_running(pid)))
+
+
+from .stagger_commands import stagger_group as _stagger_group  # noqa: E402
+cli.add_command(_stagger_group)

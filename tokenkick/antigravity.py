@@ -452,6 +452,7 @@ def antigravity_family_status(status: AccountStatus, family: str | None) -> Acco
         session_used_percent=session["used_percent"], session_resets_at=session["resets_at"],
         session_resets_in_seconds=session["resets_in_seconds"],
         session_window_minutes=session["window_minutes"],
+        window_anchor_state=session.get("anchor_state"),
     )
 
 
@@ -498,6 +499,7 @@ def _antigravity_quota_windows_from_extra(
             "resets_in_seconds": _seconds_until_reset(resets_at=resets_at_raw),
             "window_minutes": window_minutes,
             "source": window_source,
+            "reset_evidence": "provider_timestamp",
         }
 
     if set(windows_by_id) != set(ANTIGRAVITY_QUOTA_WINDOW_IDS):
@@ -600,7 +602,7 @@ def _antigravity_summary_bucket_window(
     reset = _antigravity_summary_reset(bucket)
     if reset is None:
         return None
-    resets_at, resets_in_seconds = reset
+    resets_at, resets_in_seconds, reset_evidence = reset
     title = _antigravity_summary_title(family, window_kind)
     return {
         "id": window_id,
@@ -612,6 +614,7 @@ def _antigravity_summary_bucket_window(
         "resets_in_seconds": resets_in_seconds,
         "window_minutes": spec["window_minutes"],
         "source": window_source,
+        "reset_evidence": reset_evidence,
     }
 
 
@@ -654,7 +657,7 @@ def _antigravity_summary_title(family: str, window_kind: str) -> str:
     return f"{prefix} {suffix}"
 
 
-def _antigravity_summary_reset(bucket: dict) -> tuple[float, int] | None:
+def _antigravity_summary_reset(bucket: dict) -> tuple[float, int, str] | None:
     timestamp_candidates: list[Any] = [
         bucket.get("resetsAt", bucket.get("resets_at")),
         bucket.get("resetAt", bucket.get("reset_at")),
@@ -674,7 +677,7 @@ def _antigravity_summary_reset(bucket: dict) -> tuple[float, int] | None:
     for raw in timestamp_candidates:
         resets_at = _parse_antigravity_reset_timestamp(raw)
         if resets_at is not None:
-            return resets_at, max(0, int(resets_at - time.time()))
+            return resets_at, max(0, int(resets_at - time.time())), "provider_timestamp"
 
     text_candidates = [
         bucket.get("description"),
@@ -694,7 +697,7 @@ def _antigravity_summary_reset(bucket: dict) -> tuple[float, int] | None:
             continue
         resets_in = _parse_antigravity_reset_prose_seconds(raw)
         if resets_in is not None:
-            return time.time() + resets_in, resets_in
+            return time.time() + resets_in, resets_in, "relative_estimate"
     return None
 
 
@@ -720,7 +723,7 @@ def _parse_antigravity_reset_prose_seconds(text: str) -> int | None:
     lowered = text.lower()
     if "reset" not in lowered:
         return None
-    if "ready" in lowered or "now" in lowered:
+    if re.fullmatch(r"\s*resets?\s+(?:ready|now)[.!]?\s*", lowered):
         return 0
     match = re.search(r"resets?\s+in\s+(.+)", lowered)
     if match is None:

@@ -268,7 +268,7 @@ Apply an approved orchestration plan. Show this exact command to the user and
 wait for approval before running it:
 
 ```bash
-TK_NO_INTERACTIVE=1 tk plan --work-window 18:30-23:30 --apply --yes --json-output
+TK_NO_INTERACTIVE=1 tk plan --work-window 18:30-23:30 --expected-plan "<plan_fingerprint>" --preview-at "<built_at>" --apply --yes --json-output
 ```
 
 Change Codex surface strategy only after an explicit user request. These are
@@ -308,7 +308,7 @@ Safe agent flow:
 4. Run `tk plan --work-window ... --json-output`.
 5. Explain the timeline, planned pending kicks, coverage gaps, skipped accounts,
    and pending-kick diff.
-6. Show the exact `tk plan --work-window ... --apply --yes --json-output`
+6. Show the exact `tk plan --work-window ... --expected-plan "<plan_fingerprint>" --preview-at "<built_at>" --apply --yes --json-output`
    command. Run it only after the user approves.
 7. If the cached status is stale or conflicts with the user's app view, do one
    `status --refresh --json-output` before deciding.
@@ -322,7 +322,7 @@ usable coverage is nearly spent. It reports one uncovered gap after 23:45
 because the currently eligible accounts do not fully cover six hours.
 
 I will not change anything unless you approve this exact command:
-TK_NO_INTERACTIVE=1 tk plan --work-window 18:30-00:30 --apply --yes --json-output
+TK_NO_INTERACTIVE=1 tk plan --work-window 18:30-00:30 --expected-plan "<plan_fingerprint>" --preview-at "<built_at>" --apply --yes --json-output
 ```
 
 ## Worked Example: Already Covered
@@ -360,3 +360,24 @@ TK_NO_INTERACTIVE=1 tk status --json-output
   schedules pending kicks only.
 - Manual app usage can change the plan. Due-pending execution rechecks status
   before kicking.
+
+## Ongoing Antigravity stagger
+
+For requests to keep Gemini and Claude/GPT 2½ hours apart over successive windows,
+use the persistent stagger tools, not a work-window plan or an agent scheduler:
+
+1. Read `tokenkick_stagger_status`, `tokenkick_auto_status` and daemon status.
+2. Preview `tokenkick_stagger_preview(action="enable", gemini=<saved Gemini label>,
+   claude=<saved Claude/GPT label>)`. Explain the exact changes and disclosure.
+3. Apply the matching one-use token with explicit user confirmation and recurring
+   quota-use/risk acknowledgement. The server daemon owns every later cycle;
+   the agent can disconnect. No recurring agent job is necessary.
+4. Read status again. Distinguish enabled policy from a running daemon and from
+   confirmed alignment. Do not claim alignment from planned times or sliding
+   reset clocks. Resolve conflicting schedules rather than bypassing them.
+
+Pause/resume/disable use the same preview/apply tools without labels. Recovery is
+an explicit action after inspecting an uncertain attempt; it waits a full native
+window, only reads provider state, and leaves automation paused. Do not force a
+request or recreate the group to bypass an attempt guard. `tokenkick_plan_*`
+continues to mean finite work-window coverage, not ongoing stagger orchestration.

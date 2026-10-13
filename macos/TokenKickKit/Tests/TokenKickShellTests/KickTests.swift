@@ -345,7 +345,7 @@ final class KickViewModelTests: XCTestCase {
         XCTAssertEqual(refreshCount, 1, "refresh even after failure — state may have changed")
     }
 
-    func testThrownErrorBecomesFailedOutcome() async throws {
+    func testThrownErrorBecomesUnconfirmedOutcome() async throws {
         let performer = StubKickPerformer([
             .failure(StubError(description: "tk did not finish within 300s"))
         ])
@@ -356,8 +356,8 @@ final class KickViewModelTests: XCTestCase {
         viewModel.requestKick(for: row, snapshot: snapshot)
         await viewModel.confirmPendingAction()
 
-        guard case .finished(.failed(let message)) = viewModel.state(for: "codex (a)") else {
-            return XCTFail("expected failed outcome")
+        guard case .finished(.unconfirmed(let message)) = viewModel.state(for: "codex (a)") else {
+            return XCTFail("expected unconfirmed outcome")
         }
         XCTAssertTrue(message.contains("300s"))
         XCTAssertEqual(refreshCount, 1)

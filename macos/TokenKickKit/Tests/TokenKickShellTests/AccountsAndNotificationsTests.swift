@@ -185,12 +185,12 @@ final class AccountMutationArgumentTests: XCTestCase {
     }
 
     func testNotificationRouteFromDisplay() {
-        XCTAssertEqual(NotificationRoute.from(routeDisplay: "global default", enabled: true), .globalDefault)
-        XCTAssertEqual(NotificationRoute.from(routeDisplay: "ntfy", enabled: true), .ntfy)
-        XCTAssertEqual(NotificationRoute.from(routeDisplay: "ntfy+telegram", enabled: true), .both)
-        XCTAssertEqual(NotificationRoute.from(routeDisplay: "telegram", enabled: true), .telegram)
-        XCTAssertEqual(NotificationRoute.from(routeDisplay: "anything", enabled: false), .none)
-        XCTAssertEqual(NotificationRoute.from(routeDisplay: "disabled", enabled: true), .none)
+        XCTAssertEqual(NotificationRoute.from(backends: nil, enabled: true), .globalDefault)
+        XCTAssertEqual(NotificationRoute.from(backends: ["ntfy"], enabled: true), .ntfy)
+        XCTAssertEqual(NotificationRoute.from(backends: ["ntfy", "telegram"], enabled: true), .both)
+        XCTAssertEqual(NotificationRoute.from(backends: ["telegram"], enabled: true), .telegram)
+        XCTAssertEqual(NotificationRoute.from(backends: nil, enabled: false), .none)
+        XCTAssertEqual(NotificationRoute.from(backends: [], enabled: true), .none)
     }
 }
 
@@ -304,7 +304,7 @@ final class AccountsViewModelTests: XCTestCase {
         XCTAssertNil(model.pendingAutoKickConsent)
         XCTAssertEqual(
             service.mutationArguments.last,
-            ["auto", "enable", "codex (a)", "--accept-risk", "ENABLE", "--json-output"]
+            ["auto", "enable", "codex (a)", "--accept-risk", "ENABLE", "--consent-version", "1", "--json-output"]
         )
         XCTAssertEqual(refreshCount, 2)
     }
@@ -332,7 +332,7 @@ final class AccountsViewModelTests: XCTestCase {
             )
             await model.confirmAutoKickConsent()
             XCTAssertEqual(service.mutationArguments.last,
-                           ["auto", "enable", label, "--accept-risk", "ENABLE", "--json-output"])
+                           ["auto", "enable", label, "--accept-risk", "ENABLE", "--consent-version", "1", "--json-output"])
             XCTAssertNil(model.pendingAutoKickConsent)
         }
     }

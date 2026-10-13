@@ -20,7 +20,7 @@ from typing import Any, Iterator, Sequence
 import click
 
 from .kicker import account_is_kickable
-from .models import AccountConfig, AccountState, AccountStatus, Config, DataSource, account_key_string
+from .models import AccountConfig, AccountState, AccountStatus, Config, account_key_string
 from .orchestration import effective_orchestration_role, usable_session_minutes_for_account
 from .scheduling import cancel_orchestrated_pending_kicks, local_timezone, parse_work_window
 
@@ -102,6 +102,7 @@ def _dispatch_action(ctx: click.Context, action: str) -> None:
         "configure": _configure_menu,
         "setup": _setup_menu,
         "accounts": _accounts_menu,
+        "stagger": _stagger_menu,
         "auto": _auto_menu,
         "codex_settings": _codex_settings_menu,
         "notifications": _notifications_menu,
@@ -180,6 +181,7 @@ def _select(
         choices=normalized,
         default=default,
         pointer=">",
+        instruction="↑↓ Move · Enter Choose · Esc Back",
         **_inquirer_style_kwargs(),
         **_back_keybinding_kwargs(),
     ))
@@ -188,19 +190,68 @@ def _select(
 
 def _checkbox(message: str, choices: list[MenuChoice | dict[str, Any] | str]) -> list[str]:
     from InquirerPy import inquirer
+    from prompt_toolkit.filters import IsDone
+    from prompt_toolkit.layout import ConditionalContainer, HSplit, Window
+    from prompt_toolkit.layout.controls import FormattedTextControl
 
     normalized = [
-        choice.to_inquirer() if isinstance(choice, MenuChoice) else choice
-        for choice in choices
+        choice.to_inquirer() if isinstance(choice, MenuChoice) else choice for choice in choices
     ]
-    result = _execute_inquirer_prompt(inquirer.checkbox(
+    # Navigation is never a selectable item, including for future callers.
+    normalized = [
+        choice
+        for choice in normalized
+        if (choice.get("value", choice.get("name")) if isinstance(choice, dict) else choice)
+        != MENU_EXIT
+    ]
+    if not normalized:
+        click.echo("No matching accounts available.")
+        return []
+    prompt = inquirer.checkbox(
         message=message,
         choices=normalized,
         pointer=">",
+        enabled_symbol="☑",
+        disabled_symbol="☐",
+        instruction="↑↓ Move · Space Toggle · Enter Review selection · Esc Cancel",
+        transformer=lambda result: _selection_count_label(len(result)),
         **_inquirer_style_kwargs(),
         **_back_keybinding_kwargs(),
-    ))
+    )
+    # Compose a dynamic footer using the prompt library's public layout API.
+    # It is recalculated on every redraw, including after a Space toggle.
+    prompt.application.layout.container = HSplit(
+        [
+            prompt.application.layout.container,
+            ConditionalContainer(
+                Window(
+                    FormattedTextControl(
+                        lambda: [
+                            (
+                                "class:instruction",
+                                _selection_count_label(len(prompt.selected_choices)),
+                            ),
+                        ]
+                    ),
+                    height=1,
+                ),
+                filter=~IsDone(),
+            ),
+        ]
+    )
+    result = _execute_inquirer_prompt(prompt)
     return [MENU_EXIT] if result is None else list(result)
+
+
+def _selection_count_label(count: int) -> str:
+    return f"{count} account{'s' if count != 1 else ''} selected"
+
+
+def _confirm_selection(message: str, changes: list[str]) -> bool:
+    click.echo("Review changes:")
+    for change in changes:
+        click.echo(f"  • {change}")
+    return _confirm(message, default=False)
 
 
 def _execute_inquirer_prompt(prompt: Any) -> Any:
@@ -336,6 +387,8 @@ def _secret_action(message: str, *, action_label: str | None = None) -> str | No
 def _invoke(ctx: click.Context, command: Any, **kwargs: Any) -> None:
     try:
         ctx.invoke(command, **kwargs)
+    except click.ClickException as exc:
+        click.echo(click.style(exc.format_message(), fg="red"))
     except (SystemExit, click.exceptions.Exit) as exc:
         code = getattr(exc, "code", None)
         if code not in (None, 0):
@@ -533,6 +586,7 @@ def _configure_menu(ctx: click.Context) -> None:
                 MenuChoice("Setup / rediscover accounts", "setup"),
                 MenuChoice("Accounts", "accounts"),
                 MenuChoice("Auto-kick", "auto"),
+                MenuChoice("Ongoing stagger", "stagger"),
                 MenuChoice("Codex surface strategy", "codex_settings"),
                 MenuChoice("Notifications", "notifications"),
                 MenuChoice("Remote status (Telegram)", "remote_telegram"),
@@ -869,10 +923,12 @@ def _accounts_menu(ctx: click.Context) -> None:
         action = _select(
             "Accounts",
             [
-                MenuChoice("Show account status", "status"),
+                MenuChoice("Show account settings", "settings"),
+                MenuChoice("Show live usage and resets", "status"),
+                MenuChoice("Codex five-hour limit override", "session_limit"),
                 MenuChoice("Show account notification routes", "notifications"),
                 MenuChoice("Planning defaults", "planning_defaults"),
-                MenuChoice("Orchestration roles", "orchestration_roles"),
+                MenuChoice("Work-window planning roles", "orchestration_roles"),
                 MenuChoice("Hide selected accounts", "hide_selected"),
                 MenuChoice("Show selected accounts", "show_selected"),
                 MenuChoice("Back", MENU_EXIT),
@@ -880,11 +936,46 @@ def _accounts_menu(ctx: click.Context) -> None:
         )
         if action == MENU_EXIT:
             return
-        if action == "status":
+        if action == "settings":
             _invoke(ctx, cli_module.accounts_list)
+            continue
+        if action == "status":
+            _invoke(
+                ctx,
+                cli_module.status,
+                as_json=False,
+                codex_only=False,
+                show_all=False,
+                account_label=None,
+                refresh=True,
+                verbose=False,
+            )
             continue
         if action == "notifications":
             _invoke(ctx, cli_module.accounts_notifications)
+            continue
+        if action == "session_limit":
+            codex_accounts = [a for a in accounts if a.provider == "codex"]
+            if not codex_accounts:
+                click.echo("No saved Codex accounts.")
+                continue
+            label = _select("Codex account", [
+                *[MenuChoice(a.label, a.label) for a in codex_accounts], MenuChoice("Back", MENU_EXIT),
+            ])
+            if label == MENU_EXIT:
+                continue
+            _invoke(ctx, cli_module.accounts_detail, label=label, as_json=False)
+            mode = _select("Five-hour limit detection", [
+                MenuChoice("Automatic (recommended)", "auto"),
+                MenuChoice("Present (still requires valid reset data)", "present"),
+                MenuChoice("Absent (block session kicks; keep weekly tracking)", "absent"),
+                MenuChoice("Back", MENU_EXIT),
+            ])
+            if mode != MENU_EXIT and _confirm(
+                f'Set five-hour limit detection for "{label}" to {mode}? Automation switches stay unchanged.',
+                default=False,
+            ):
+                _invoke(ctx, cli_module.accounts_set_session_limit, label=label, mode=mode, as_json=False)
             continue
         if action == "planning_defaults":
             _account_planning_defaults_menu(ctx)
@@ -894,10 +985,9 @@ def _accounts_menu(ctx: click.Context) -> None:
             continue
         if action == "hide_selected":
             selected = _checkbox(
-                "Choose account(s) with Space, then Enter",
+                "Choose accounts",
                 [
                     *_account_menu_choices([account for account in accounts if account.visible], only_kickable=False),
-                    MenuChoice("Back", MENU_EXIT),
                 ],
             )
             if MENU_EXIT in selected:
@@ -911,16 +1001,16 @@ def _accounts_menu(ctx: click.Context) -> None:
                 )
                 continue
             selected_names = ", ".join(selected)
-            if _confirm(f"Hide {len(selected)} account(s): {selected_names}?", default=False):
+            if _confirm_selection(f"Hide {len(selected)} account(s): {selected_names}?",
+                                  [f"{label}: visible → hidden" for label in selected]):
                 for label in selected:
                     _invoke(ctx, cli_module.accounts_hide, label=label)
             continue
         if action == "show_selected":
             selected = _checkbox(
-                "Choose account(s) with Space, then Enter",
+                "Choose accounts",
                 [
                     *_account_menu_choices([account for account in accounts if not account.visible], only_kickable=False),
-                    MenuChoice("Back", MENU_EXIT),
                 ],
             )
             if MENU_EXIT in selected:
@@ -934,7 +1024,8 @@ def _accounts_menu(ctx: click.Context) -> None:
                 )
                 continue
             selected_names = ", ".join(selected)
-            if _confirm(f"Show {len(selected)} account(s): {selected_names}?", default=True):
+            if _confirm_selection(f"Show {len(selected)} account(s): {selected_names}?",
+                                  [f"{label}: hidden → visible" for label in selected]):
                 for label in selected:
                     _invoke(ctx, cli_module.accounts_show, label=label)
 
@@ -1044,7 +1135,7 @@ def _account_orchestration_roles_menu(ctx: click.Context) -> None:
             return
         _print_account_orchestration_roles(config, accounts, cli_module)
         action = _select(
-            "Orchestration roles",
+            "Work-window planning roles",
             [
                 MenuChoice("Edit account role", "role"),
                 MenuChoice("Edit weekly reserve threshold", "threshold"),
@@ -1086,11 +1177,11 @@ def _print_account_orchestration_roles(
             for account, status in zip(cached_accounts, statuses, strict=False)
         }
 
-    table = Table(title="TokenKick Account Orchestration Roles", show_header=True)
+    table = Table(title="TokenKick Work-window Planning Roles", show_header=True)
     table.add_column("Account", style="bold")
     table.add_column("Provider")
     table.add_column("Visible")
-    table.add_column("Auto/session")
+    table.add_column("Automation / session")
     table.add_column("Expected usage")
     table.add_column("Role")
     table.add_column("Effective")
@@ -1116,6 +1207,9 @@ def _print_account_orchestration_roles(
         )
 
     Console(width=120).print(table)
+    click.echo("Roles are planning preferences; they do not enable ongoing orchestration.")
+    from . import stagger
+    stagger.render(Console(), cli_module._stagger_status_payload())
 
 
 def _edit_account_orchestration_role(
@@ -1224,11 +1318,14 @@ def _edit_account_weekly_reserve_threshold(
 
 
 def _account_auto_session_label(account: AccountConfig) -> str:
+    from . import stagger
+    if stagger.owns(account):
+        return stagger.ownership(account)
     if not account_is_kickable(account):
         return "monitor-only"
-    auto = "yes" if account.auto_kick else "no"
-    session = "yes" if account.session_auto_kick else "no"
-    return f"{auto}/{session}"
+    if not account.auto_kick:
+        return "Off"
+    return "Independent · session " + ("on" if account.session_auto_kick else "off")
 
 
 def _display_role(role: str) -> str:
@@ -1257,6 +1354,8 @@ def _auto_menu(ctx: click.Context) -> None:
             "Auto-kick",
             [
                 MenuChoice("Show auto-kick status", "status"),
+                MenuChoice("Enable one account", "enable_one"),
+                MenuChoice("Disable one account", "disable_one"),
                 MenuChoice("Enable all usable accounts", "enable_all"),
                 MenuChoice("Disable all kickable accounts", "disable_all"),
                 MenuChoice("Enable selected accounts", "enable_selected"),
@@ -1275,17 +1374,27 @@ def _auto_menu(ctx: click.Context) -> None:
                 click.echo("No visible kickable accounts found.")
                 continue
             selected = _checkbox(
-                "Choose account(s)",
+                "Choose accounts",
                 [
                     *_auto_account_menu_choices(selectable_accounts),
-                    MenuChoice("Back", MENU_EXIT),
                 ],
             )
             if not selected:
+                click.echo("No accounts selected; press Space to select account(s), then Enter.")
                 continue
             if MENU_EXIT in selected:
                 continue
             skipped: list[tuple[AccountConfig, str]] = []
+        elif action.endswith("_one"):
+            selectable_accounts = visible_accounts if action.startswith("enable") else accounts
+            if not selectable_accounts:
+                click.echo("No visible kickable accounts found.")
+                continue
+            label = _select("Choose account", [*_auto_account_menu_choices(selectable_accounts), MenuChoice("Back", MENU_EXIT)])
+            if label == MENU_EXIT:
+                continue
+            selected = [label]
+            skipped = []
         elif action == "enable_all":
             usable_accounts, skipped = _usable_auto_enable_accounts(
                 visible_accounts,
@@ -1313,7 +1422,7 @@ def _auto_menu(ctx: click.Context) -> None:
             continue
         operation = "enable" if enabled else "disable"
         summary = f"{operation} {scope} auto-kick for {len(selected)} account(s)?"
-        if not _confirm(summary, default=enabled):
+        if not _confirm_selection(summary, _auto_selection_changes(accounts, selected, scope, enabled)):
             continue
         for label in selected:
             if scope == "all":
@@ -1336,17 +1445,40 @@ def _auto_menu(ctx: click.Context) -> None:
 
 
 def _auto_account_menu_choices(accounts: list[AccountConfig]) -> list[MenuChoice]:
-    choices = _account_menu_choices(accounts, only_kickable=True)
-    account_by_label = {account.label: account for account in accounts}
     return [
         MenuChoice(
-            f"{choice.name} "
-            f"[{'visible' if account_by_label[choice.value].visible else 'hidden'}]",
-            choice.value,
-            choice.enabled,
+            f"{_account_choice_label(account)} · Auto-kick {'on' if account.auto_kick else 'off'}"
+            f" · Weekly {'on' if account.weekly_auto_kick else 'off'}"
+            f" · Session {'on' if account.session_auto_kick else 'off'}"
+            + (" [hidden]" if not account.visible else ""),
+            account.label,
         )
-        for choice in choices
+        for account in accounts
+        if account_is_kickable(account)
     ]
+
+
+def _auto_selection_changes(
+    accounts: list[AccountConfig], selected: list[str], scope: str, enabled: bool
+) -> list[str]:
+    by_label = {account.label: account for account in accounts}
+    changes = []
+    for label in selected:
+        account = by_label[label]
+        switches = []
+        for title, field, window in (
+            ("Master", "auto_kick", "master"),
+            ("Weekly", "weekly_auto_kick", "weekly"),
+            ("Session", "session_auto_kick", "session"),
+        ):
+            before = bool(getattr(account, field))
+            after = enabled if scope == "all" or scope == window else before
+            switches.append(f"{title} {'on' if before else 'off'} → {'on' if after else 'off'}")
+        change = f"{_account_choice_label(account)}: " + ", ".join(switches)
+        if scope != "all" and enabled and not account.auto_kick:
+            change += "; master remains off, so automation stays blocked"
+        changes.append(change)
+    return changes
 
 
 def _auto_menu_status_by_label(config: Config, cli_module: Any) -> dict[str, AccountStatus]:
@@ -1464,9 +1596,11 @@ def _codex_settings_menu(ctx: click.Context) -> None:
         if raw_gap is None:
             continue
         try:
-            seconds = float(raw_gap)
+            seconds = int(raw_gap)
+            if seconds < 0:
+                raise ValueError("negative gap")
         except ValueError:
-            click.echo(click.style("Gap must be a number.", fg="red"))
+            click.echo(click.style("Gap must be a nonnegative whole number of seconds.", fg="red"))
             continue
         if _confirm(f"Set burst ladder gap to {seconds:.0f}s?", default=True):
             _invoke(ctx, cli_module.codex_strategy_gap, seconds=seconds)
@@ -1532,7 +1666,7 @@ def _codex_surface_demotion_menu(ctx: click.Context) -> None:
                 click.echo(click.style(f'Codex surface auto-demotion disabled for "{label}".', fg="green"))
         elif action == "force_keep":
             surfaces = pick_codex_surface_order(
-                tuple(account.codex_surface_force_keep or cli_module.CODEX_FIRE_ALL_DEFAULT_SURFACES),
+                tuple(account.codex_surface_force_keep or ()),
                 cli_module.CODEX_FIRE_ALL_DEFAULT_SURFACES,
             )
             if surfaces and surfaces != CODEX_SURFACE_ORDER_RESET:
@@ -1721,7 +1855,8 @@ def _orchestration_cancel_menu() -> None:
         if action == MENU_EXIT:
             return
         if action == "all":
-            if not _confirm(f"Cancel {len(pending)} orchestration pending kick(s)?", default=False):
+            if not _confirm_selection(f"Cancel {len(pending)} orchestration pending kick(s)?",
+                                      [f"{item.account_label}: cancel pending kick at {item.kick_at}" for item in pending]):
                 continue
             result = cancel_orchestrated_pending_kicks(now=datetime.now(timezone.utc))
             click.echo(click.style(f"Cancelled {len(result.removed)} orchestration pending kick(s).", fg="green"))
@@ -1729,7 +1864,7 @@ def _orchestration_cancel_menu() -> None:
 
         account_labels = sorted({item.account_label for item in pending})
         selected = _checkbox(
-            "Choose account(s)",
+            "Choose accounts",
             [MenuChoice(label, label) for label in account_labels],
         )
         if selected == [MENU_EXIT]:
@@ -1738,9 +1873,10 @@ def _orchestration_cancel_menu() -> None:
             click.echo(click.style("No accounts selected.", fg="yellow"))
             continue
         selected_pending_count = sum(1 for item in pending if item.account_label in set(selected))
-        if not _confirm(
+        if not _confirm_selection(
             f"Cancel {selected_pending_count} orchestration pending kick(s)?",
-            default=False,
+            [f"{item.account_label}: cancel pending kick at {item.kick_at}"
+             for item in pending if item.account_label in selected],
         ):
             continue
         result = cancel_orchestrated_pending_kicks(
@@ -2558,92 +2694,185 @@ def _surface_order_candidates(
     return rows
 
 
+def _notify_action(ctx: click.Context, **changes: Any) -> None:
+    from . import cli as cli_module
+
+    values = dict(
+        ntfy_topic=None,
+        telegram=None,
+        telegram_remote=None,
+        disable_backend=None,
+        enable_backend=None,
+        save_ntfy=None,
+        save_telegram=None,
+        policy=None,
+        test_backend="all",
+        action=None,
+    )
+    values.update(changes)
+    _invoke(ctx, cli_module.notify, **values)
+
+
+def _notification_test_flow(ctx: click.Context, backend: str) -> None:
+    from . import cli as cli_module
+
+    config = Config.load()
+    enabled = (
+        cli_module._configured_notification_backends(config.notifications)
+        if config.notifications.enabled
+        else []
+    )
+    if backend == "all":
+        if not enabled:
+            click.echo(
+                "No push destinations enabled. Enable a saved destination or choose an individual test."
+            )
+            return
+        target = ", ".join(enabled)
+    else:
+        target = backend
+        if backend not in enabled:
+            click.echo(
+                f"{backend} push is off. This test uses saved credentials without enabling push."
+            )
+    if _confirm(
+        f"Send a test notification to {target}? Explicit tests bypass notification volume and account routes.",
+        default=False,
+    ):
+        _notify_action(ctx, action="test", test_backend=backend)
+
+
+def _notification_backend_menu(ctx: click.Context, backend: str) -> None:
+    from . import cli as cli_module
+
+    while True:
+        config = Config.load()
+        n = config.notifications
+        cli_module._render_notification_overview(config)
+        enabled = n.enabled and backend in cli_module._configured_notification_backends(n)
+        complete = cli_module._notification_backend_has_credentials(n, backend)
+        choices = []
+        if backend == "ntfy":
+            choices.append(MenuChoice("Change topic" if n.ntfy_topic else "Set topic", "topic"))
+        else:
+            choices.extend(
+                [
+                    MenuChoice(
+                        "Replace saved bot token" if n.telegram_bot_token else "Set bot token",
+                        "token",
+                    ),
+                    MenuChoice("Change chat ID" if n.telegram_chat_id else "Set chat ID", "chat"),
+                    MenuChoice("Configure token and chat ID", "configure"),
+                ]
+            )
+        choices.extend(
+            [
+                MenuChoice(
+                    "Disable push (keep saved credentials)"
+                    if enabled
+                    else "Enable push using saved credentials",
+                    "disable" if enabled else "enable",
+                    enabled=bool(enabled or complete),
+                ),
+                MenuChoice(
+                    f"Test {backend}" + (" (push off; test only)" if not enabled else ""),
+                    "test",
+                    enabled=complete,
+                ),
+                MenuChoice("Back", MENU_EXIT),
+            ]
+        )
+        action = _select(f"{backend} settings — push {'on' if enabled else 'off'}", choices)
+        if action == MENU_EXIT:
+            return
+        if action == "test":
+            _notification_test_flow(ctx, backend)
+        elif action in {"enable", "disable"}:
+            if _confirm(
+                f"{action.capitalize()} {backend} push notifications? Saved credentials and remote-command settings are retained.",
+                default=False,
+            ):
+                _notify_action(ctx, **{f"{action}_backend": backend})
+        elif action == "topic":
+            topic = _text_action(
+                "ntfy topic name", default=n.ntfy_topic or "", action_label="Edit topic"
+            )
+            if topic and _confirm(
+                f'Save ntfy topic "{topic}"? Push settings stay unchanged.', default=False
+            ):
+                _notify_action(ctx, save_ntfy=topic)
+        elif action in {"token", "chat", "configure"}:
+            token = n.telegram_bot_token
+            chat_id = n.telegram_chat_id
+            if action in {"token", "configure"} or not token:
+                token = _secret_action(
+                    "Telegram bot token",
+                    action_label="Enter replacement token" if token else "Enter token",
+                )
+                if not token:
+                    continue
+            if action in {"chat", "configure"} or not chat_id:
+                chat_id = _text_action(
+                    "Telegram chat ID", default=chat_id or "", action_label="Edit chat ID"
+                )
+                if not chat_id:
+                    continue
+            if _confirm(
+                f'Save Telegram credentials for chat "{chat_id}"? Push settings stay unchanged. Remote commands share these credentials; restart the listener after saving.',
+                default=False,
+            ):
+                _notify_action(ctx, save_telegram=(token, chat_id))
+
+
 def _notifications_menu(ctx: click.Context) -> None:
     from . import cli as cli_module
 
     while True:
         config = Config.load()
+        n = config.notifications
+        cli_module._render_notification_overview(config)
+        enabled = cli_module._configured_notification_backends(n) if n.enabled else []
         action = _select(
             "Notifications",
             [
-                MenuChoice("Configure ntfy", "ntfy"),
-                MenuChoice("Configure Telegram", "telegram"),
-                MenuChoice("Disable Telegram notifications", "disable_telegram"),
+                MenuChoice(f"ntfy settings (push {'on' if 'ntfy' in enabled else 'off'})", "ntfy"),
                 MenuChoice(
-                    f"Notification volume ({_notification_policy_label(config.notifications.policy)})",
-                    "policy",
+                    f"Telegram settings (push {'on' if 'telegram' in enabled else 'off'})",
+                    "telegram",
                 ),
-                MenuChoice("Account notification toggles", "accounts"),
-                MenuChoice("Send test notification (all enabled)", "test"),
+                MenuChoice(
+                    f"Notification volume ({_notification_policy_label(n.policy)})", "policy"
+                ),
+                MenuChoice("Account routes — view and edit", "accounts"),
+                MenuChoice("Test enabled destinations: " + (", ".join(enabled) or "none"), "test"),
+                MenuChoice(
+                    "Test ntfy" + (" (push off; test only)" if "ntfy" not in enabled else ""),
+                    "test_ntfy",
+                    enabled=bool(n.ntfy_topic),
+                ),
+                MenuChoice(
+                    "Test Telegram"
+                    + (" (push off; test only)" if "telegram" not in enabled else ""),
+                    "test_telegram",
+                    enabled=bool(n.telegram_bot_token and n.telegram_chat_id),
+                ),
+                MenuChoice("Telegram remote commands", "remote"),
                 MenuChoice("Back", MENU_EXIT),
             ],
         )
         if action == MENU_EXIT:
             return
-        if action == "accounts":
+        if action in {"ntfy", "telegram"}:
+            _notification_backend_menu(ctx, action)
+        elif action == "accounts":
             _notification_accounts_menu(ctx)
-            continue
-        if action == "policy":
+        elif action == "policy":
             _notification_policy_menu(ctx)
-            continue
-        if action == "test":
-            if _confirm("Send a test notification?", default=True):
-                _invoke(
-                    ctx,
-                    cli_module.notify,
-                    ntfy_topic=None,
-                    telegram=None,
-                    telegram_remote=None,
-                    disable_backend=None,
-                    policy=None,
-                    test_backend="all",
-                    action="test",
-                )
-            continue
-        if action == "disable_telegram":
-            if _confirm("Disable Telegram push notifications? Remote commands will still work.", default=True):
-                _invoke(
-                    ctx,
-                    cli_module.notify,
-                    ntfy_topic=None,
-                    telegram=None,
-                    telegram_remote=None,
-                    disable_backend="telegram",
-                    policy=None,
-                    test_backend="all",
-                    action=None,
-                )
-            continue
-        if action == "ntfy":
-            topic = _text_action("ntfy topic name", action_label="Enter ntfy topic name")
-            if topic and _confirm(f'Enable ntfy topic name "{topic}"?', default=True):
-                _invoke(
-                    ctx,
-                    cli_module.notify,
-                    ntfy_topic=topic,
-                    telegram=None,
-                    telegram_remote=None,
-                    disable_backend=None,
-                    policy=None,
-                    test_backend="all",
-                    action=None,
-                )
-            continue
-        token = _secret_action("Telegram bot token", action_label="Enter Telegram bot token")
-        if not token:
-            continue
-        chat_id = _text_action("Telegram chat ID", action_label="Enter Telegram chat ID")
-        if token and chat_id and _confirm("Enable Telegram notifications?", default=True):
-            _invoke(
-                ctx,
-                cli_module.notify,
-                ntfy_topic=None,
-                telegram=(token, chat_id),
-                telegram_remote=None,
-                disable_backend=None,
-                policy=None,
-                test_backend="all",
-                action=None,
+        elif action == "remote":
+            _remote_telegram_menu(ctx)
+        elif action == "test" or action.startswith("test_"):
+            _notification_test_flow(
+                ctx, "all" if action == "test" else action.removeprefix("test_")
             )
 
 
@@ -2651,6 +2880,7 @@ def _notification_policy_menu(ctx: click.Context) -> None:
     from . import cli as cli_module
 
     current = Config.load().notifications.policy
+    click.echo("Errors/checks only suppresses routine events. Explicit tests always bypass this setting. Telegram remote replies are independent of notification volume.")
     policy = _select(
         "Notification volume",
         [
@@ -2690,7 +2920,7 @@ def _remote_telegram_menu(ctx: click.Context) -> None:
                 MenuChoice("Enable background listener", "start"),
                 MenuChoice("Disable background listener", "stop"),
                 MenuChoice("Restart background listener", "restart"),
-                MenuChoice("Configure remote credentials", "configure"),
+                MenuChoice("Telegram settings (shared credentials)", "configure"),
                 MenuChoice("Use remote only (disable notifications)", "remote_only"),
                 MenuChoice("Send Telegram test notification", "test"),
                 MenuChoice("Back", MENU_EXIT),
@@ -2735,22 +2965,7 @@ def _remote_telegram_menu(ctx: click.Context) -> None:
                 restart_remote=True,
             )
         elif action == "configure":
-            token = _secret_action("Telegram bot token", action_label="Enter Telegram bot token")
-            if not token:
-                continue
-            chat_id = _text_action("Telegram chat ID", action_label="Enter Telegram chat ID")
-            if token and chat_id and _confirm("Save Telegram remote credentials?", default=True):
-                _invoke(
-                    ctx,
-                    cli_module.notify,
-                    ntfy_topic=None,
-                    telegram=None,
-                    telegram_remote=(token, chat_id),
-                    disable_backend=None,
-                    policy=None,
-                    test_backend="all",
-                    action=None,
-                )
+            _notification_backend_menu(ctx, "telegram")
         elif action == "remote_only" and _confirm(
             "Disable Telegram push notifications? Remote commands will still work.",
             default=True,
@@ -2766,18 +2981,8 @@ def _remote_telegram_menu(ctx: click.Context) -> None:
                 test_backend="all",
                 action=None,
             )
-        elif action == "test" and _confirm("Send a test notification?", default=True):
-            _invoke(
-                ctx,
-                cli_module.notify,
-                ntfy_topic=None,
-                telegram=None,
-                telegram_remote=None,
-                disable_backend=None,
-                policy=None,
-                test_backend="telegram",
-                action="test",
-            )
+        elif action == "test":
+            _notification_test_flow(ctx, "telegram")
 
 
 def _notification_accounts_menu(ctx: click.Context) -> None:
@@ -2789,6 +2994,7 @@ def _notification_accounts_menu(ctx: click.Context) -> None:
         if not accounts:
             click.echo("No saved accounts found.")
             return
+        cli_module._render_account_notifications_table(config, accounts)
         action = _select(
             "Account notifications",
             [
@@ -2825,8 +3031,8 @@ def _notification_accounts_menu(ctx: click.Context) -> None:
             _invoke(ctx, command, label=label)
             continue
         selected = _checkbox(
-            "Choose account(s) with Space, then Enter",
-            [*_notification_account_menu_choices(accounts), MenuChoice("Back", MENU_EXIT)],
+            "Choose accounts",
+            _notification_account_menu_choices(accounts),
         )
         if MENU_EXIT in selected:
             continue
@@ -2840,9 +3046,11 @@ def _notification_accounts_menu(ctx: click.Context) -> None:
             continue
         enabled = action == "enable_selected"
         operation = "enable" if enabled else "disable"
-        if not _confirm(
+        by_label = {account.label: account for account in accounts}
+        if not _confirm_selection(
             f"{operation.capitalize()} notifications for {len(selected)} account(s)?",
-            default=True,
+            [f"{label}: notifications {'on' if by_label[label].notifications_enabled else 'off'} → {'on' if enabled else 'off'}"
+             for label in selected],
         ):
             continue
         command = cli_module.accounts_enable_notifications if enabled else cli_module.accounts_disable_notifications
@@ -2861,6 +3069,10 @@ def _notification_account_route_flow(
     )
     if label == MENU_EXIT:
         return
+    config = Config.load()
+    selected = next(account for account in accounts if account.label == label)
+    click.echo(cli_module._notification_route_details(selected, config.notifications)["route_description"])
+    click.echo("Custom routes use only globally enabled push destinations; they do not enable a backend.")
     route = _select(
         "Notification route",
         [
@@ -2886,21 +3098,16 @@ def _notification_account_route_flow(
 
 
 def _notification_account_menu_choices(accounts: list[AccountConfig]) -> list[MenuChoice]:
+    from . import cli as cli_module
+
+    config = Config.load()
     result = []
     for account in accounts:
-        marker = _notification_account_route_marker(account)
-        result.append(MenuChoice(f"{account.label} ({account.provider}, {marker})", account.label))
+        marker = cli_module._notification_route_details(account, config.notifications)[
+            "route_description"
+        ]
+        result.append(MenuChoice(f"{_account_choice_label(account)} · {marker}", account.label))
     return result
-
-
-def _notification_account_route_marker(account: AccountConfig) -> str:
-    if not account.notifications_enabled:
-        return "❌ disabled"
-    if account.notification_backends is None:
-        return "✅ global default"
-    if not account.notification_backends:
-        return "❌ disabled"
-    return "✅ " + "+".join(account.notification_backends)
 
 
 def _history_menu(ctx: click.Context) -> None:
@@ -3210,21 +3417,32 @@ def _select_account(
     return None if selected == MENU_EXIT else selected
 
 
-def _account_menu_choices(accounts: list[AccountConfig], *, only_kickable: bool) -> list[MenuChoice]:
+def _account_choice_label(account: AccountConfig) -> str:
+    label = account.label
+    if account.provider == "antigravity":
+        family = {"gemini": "Gemini", "claude_gpt": "Claude/GPT"}.get(
+            account.antigravity_family, "combined families"
+        )
+        return f"{label} — {family}"
+    if account.provider.lower() not in label.lower():
+        label += f" — {account.provider.capitalize()}"
+    return label
+
+
+def _account_menu_choices(
+    accounts: list[AccountConfig], *, only_kickable: bool
+) -> list[MenuChoice]:
     result = []
     for account in accounts:
         if only_kickable and not account_is_kickable(account):
             continue
-        marker = "kickable" if account_is_kickable(account) else "monitor-only"
-        source = _account_source_label(account)
-        result.append(MenuChoice(f"{account.label} ({account.provider}, {marker}, {source})", account.label))
+        name = _account_choice_label(account)
+        if not account_is_kickable(account):
+            name += " · monitor-only"
+        if not account.visible:
+            name += " [hidden]"
+        result.append(MenuChoice(name, account.label))
     return result
-
-
-def _account_source_label(account: AccountConfig) -> str:
-    if account.source == DataSource.CODEX_DIRECT and account.provider_home:
-        return "direct home"
-    return account.source.value
 
 
 __all__ = [
@@ -3233,3 +3451,45 @@ __all__ = [
     "pick_work_window",
     "run_command_center",
 ]
+
+
+def _stagger_menu(ctx: click.Context) -> None:
+    from . import cli as cli_module, stagger
+    from .consent import auto_kick_consent_text
+    while True:
+        stagger.render(cli_module.console, cli_module._stagger_status_payload())
+        action = _select("Ongoing Antigravity stagger", [
+            MenuChoice("Enable / configure recurring 2h30m stagger", "enable"),
+            MenuChoice("Resume", "resume"), MenuChoice("Pause", "pause"),
+            MenuChoice("Disable", "disable"),
+            MenuChoice("Recover an uncertain attempt (read-only, after cooldown)", "recover"),
+            MenuChoice("Back", MENU_EXIT),
+        ])
+        if action == MENU_EXIT:
+            return
+        labels = []
+        if action == "enable":
+            config = Config.load()
+            for family in stagger.FAMILIES:
+                candidates = [a for a in config.accounts if a.provider == "antigravity"
+                              and a.antigravity_family == family]
+                label = _select(f"Select {family} account", [
+                    *[MenuChoice(a.label, a.label) for a in candidates], MenuChoice("Back", MENU_EXIT)])
+                if label == MENU_EXIT:
+                    break
+                labels.append(label)
+            if len(labels) != 2:
+                continue
+        try:
+            plan = stagger.preview(action, *labels, directory=cli_module.CONFIG_DIR)
+            click.echo(plan["note"])
+            for change in plan["changes"]:
+                click.echo(f"{change['label']}: master {change['master_before']} → {change['master_after']}; session {change['session_before']} → {change['session_after']}")
+            if action in {"enable", "resume"}:
+                click.echo(auto_kick_consent_text("antigravity"))
+            if not _confirm("Apply these persistent automation changes?", default=False):
+                continue
+            stagger.apply(action, *labels, expected=plan["fingerprint"],
+                          accept_risk=action in {"enable", "resume"}, directory=cli_module.CONFIG_DIR)
+        except stagger.StaggerError as exc:
+            click.echo(str(exc))

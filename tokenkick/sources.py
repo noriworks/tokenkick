@@ -27,6 +27,8 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from pathlib import Path
 from typing import Any, Optional
 
+from .codex_limits import LIMITS_VERSION as CODEX_LIMITS_VERSION, plan_type as codex_plan_type
+
 from .antigravity import (
     antigravity_family_status,
     ANTIGRAVITY_CLI_SOURCE_DETAIL,
@@ -51,6 +53,7 @@ from .codexbar_source import (
     codexbar_json_cache,
     codexbar_json_cache_active,
 )
+from .identity_validation import identity_matches
 from .claude_setup import ensure_claude_probe_ready
 from .model_selection import claude_economical_args, claude_economical_env
 from .direct import (
@@ -65,6 +68,10 @@ from .direct import (
     read_claude_identity,
     read_codex_identity,
 )
+from .antigravity_windows import (
+    OBSERVATION_DELAY_SECONDS, classify_session_clocks, needs_idle_observation,
+)
+from .claude_monitoring import cooling_down, failure_count
 from .models import (
     CONFIG_DIR,
     CODEX_DEFAULT_RATE_LIMIT_ID,
@@ -176,11 +183,15 @@ def _claude_cli_usage_cache() -> AccountStatus | None:
     return cached if isinstance(cached, AccountStatus) else None
 
 
-def _set_claude_cli_usage_cache(status: AccountStatus | None) -> None:
+def _set_claude_cli_usage_cache(
+    status: AccountStatus | None, context: ClaudeProbeContext | None = None,
+) -> None:
     if status is None:
         if hasattr(_CLAUDE_CLI_USAGE_CACHE_STATE, "status"):
             delattr(_CLAUDE_CLI_USAGE_CACHE_STATE, "status")
         return
+    if context is not None:
+        status._claude_cached_probe_context = replace(context)
     _CLAUDE_CLI_USAGE_CACHE_STATE.status = status
 
 
@@ -321,10 +332,7 @@ def _fetch_codex_direct(
     fallback_errors: list[AccountStatus] = []
     identity_mismatch = _codex_direct_identity_mismatch_status(account)
     if identity_mismatch is not None:
-        if account.codexbar_account and _codex_auth_identity_unavailable(identity_mismatch):
-            fallback_errors.append(identity_mismatch)
-        else:
-            return identity_mismatch
+        return identity_mismatch
 
     appserver_status = _fetch_codex_appserver_ratelimits(account)
     try:
@@ -352,7 +360,7 @@ def _fetch_codex_direct(
     if appserver_status is not None:
         if appserver_status.state != AccountState.UNKNOWN:
             if _codex_session_status_should_override_appserver(appserver_status, session_status):
-                return session_status
+                return replace(session_status, detected_plan_type=appserver_status.detected_plan_type)
             return appserver_status
         fallback_errors.append(appserver_status)
 
@@ -415,6 +423,23 @@ def _codex_session_status_should_override_appserver(
     session_status: AccountStatus | None,
 ) -> bool:
     if session_status is None or session_status.state == AccountState.UNKNOWN:
+        return False
+    # Archived observations cannot overrule a new native read by percentage alone.
+    try:
+        observed = datetime.fromisoformat(session_status.observed_at.replace("Z", "+00:00")).timestamp()
+    except (AttributeError, TypeError, ValueError):
+        return False
+    try:
+        native_observed = datetime.fromisoformat(appserver_status.observed_at.replace("Z", "+00:00")).timestamp()
+    except (AttributeError, TypeError, ValueError):
+        return False
+    if observed <= native_observed:
+        return False
+    if session_status.stale or time.time() - observed > 120 or observed > time.time() + 30:
+        return False
+    if session_status.session_resets_at is None or session_status.session_resets_at <= time.time():
+        return False
+    if appserver_status.codex_session_limit in {"absent", "unknown"}:
         return False
     if _codex_appserver_status_is_clean_unanchored_reset(appserver_status):
         return False
@@ -544,9 +569,7 @@ def _combine_codex_direct_failures(
 
 
 def _codex_direct_identity_mismatch_status(account: AccountConfig) -> AccountStatus | None:
-    codex_home = _codex_home_for_direct_account(account)
-    if codex_home is None:
-        return None
+    codex_home = _codex_home_for_direct_account(account) or Path.home() / ".codex"
     identity = read_codex_identity(codex_home)
     if identity is None:
         return AccountStatus(
@@ -559,14 +582,7 @@ def _codex_direct_identity_mismatch_status(account: AccountConfig) -> AccountSta
             source_detail="codex-auth-json",
         )
 
-    expected_id = account.identity_provider_id
-    actual_id = identity.provider_account_id
-    if expected_id and actual_id and expected_id != actual_id:
-        return _codex_identity_mismatch_status(account, identity, codex_home)
-
-    expected_email = account.identity_email.lower() if account.identity_email else None
-    actual_email = identity.email.lower() if identity.email else None
-    if expected_email and actual_email and expected_email != actual_email:
+    if not identity_matches(account, identity):
         return _codex_identity_mismatch_status(account, identity, codex_home)
 
     return None
@@ -680,13 +696,15 @@ def _read_codex_appserver_ratelimits(
             error=f"Codex provider usage read failed: {message}",
             source_detail=CODEX_PROVIDER_USAGE_SOURCE_DETAIL,
         )
-    return _parse_codex_appserver_ratelimits(
+    status = _parse_codex_appserver_ratelimits(
         label,
         response,
         elapsed_ms=usage.elapsed_ms,
         rate_limit_id=rate_limit_id,
         rate_limit_name=rate_limit_name,
     )
+    status.observed_at = _status_observed_at()
+    return status
 
 
 def _parse_codex_appserver_ratelimits(
@@ -730,8 +748,7 @@ def _parse_codex_appserver_ratelimits(
         if isinstance(rate_limits.get("limitName"), str)
         else rate_limit_name
     )
-    weekly = _valid_codex_window(rate_limits.get("secondary"))
-    session = _valid_codex_window(rate_limits.get("primary"))
+    weekly, session, capability, diagnostics = _classify_codex_windows(rate_limits)
     now = time.time()
     resets_at = _parse_reset_timestamp(weekly.get("resetsAt"))
     session_resets_at = _parse_reset_timestamp(session.get("resetsAt"))
@@ -768,11 +785,10 @@ def _parse_codex_appserver_ratelimits(
         codex_rate_limit_id=selected_rate_limit_id,
         codex_rate_limit_name=selected_rate_limit_name,
         window_anchor_state=anchor_state,
-        error=(
-            f"Codex provider usage read completed in {elapsed_ms}ms."
-            if elapsed_ms is not None and elapsed_ms > CODEX_PROVIDER_USAGE_TIMEOUT_SECONDS * 1000
-            else None
-        ),
+        detected_plan_type=codex_plan_type(rate_limits.get("planType")),
+        codex_session_limit=capability,
+        codex_limits_version=CODEX_LIMITS_VERSION,
+        source_diagnostics={"codex_windows": diagnostics, "elapsed_ms": elapsed_ms},
     )
 
 
@@ -920,6 +936,40 @@ def _codex_appserver_schema_issue(
     return _codex_appserver_rate_limit_issue(rate_limits)
 
 
+def _classify_codex_windows(rate_limits: dict, *, native: bool = True) -> tuple[dict, dict, str, list[dict]]:
+    duration = "windowDurationMins" if native else "window_minutes"
+    by_duration: dict[int, list[dict]] = {}
+    diagnostics = []
+    complete = True
+    for slot in ("primary", "secondary"):
+        raw = rate_limits.get(slot)
+        valid = _valid_codex_window(raw, native=native)
+        if slot not in rate_limits:
+            kind = "missing"
+        elif raw is None:
+            kind = "null"
+        elif not valid:
+            kind = "malformed"
+        else:
+            minutes = valid[duration]
+            # Older session logs rounded a weekly window down by one minute.
+            if not native and minutes == 10079:
+                minutes = 10080
+            kind = "recognized" if minutes in {300, 10080} else "unsupported_duration"
+            by_duration.setdefault(minutes, []).append(valid)
+        complete = complete and kind in {"null", "recognized"}
+        diagnostics.append({"slot": slot, "classification": kind,
+                            "window_minutes": valid.get(duration)})
+    weekly_candidates = by_duration.get(10080, [])
+    session_candidates = by_duration.get(300, [])
+    weekly = weekly_candidates[0] if len(weekly_candidates) == 1 else {}
+    session = session_candidates[0] if len(session_candidates) == 1 else {}
+    capability = "present" if session else (
+        "absent" if complete and weekly and not session_candidates else "unknown"
+    )
+    return weekly, session, capability, diagnostics
+
+
 def _valid_codex_window(value: Any, *, native: bool = True) -> dict:
     """Optional windows are independent; malformed windows cannot authorize actions."""
     if not isinstance(value, dict):
@@ -992,6 +1042,12 @@ def _fetch_claude_direct(
 ) -> AccountStatus:
     """Read Claude identity directly and quota via guarded Claude CLI /usage."""
     claude_probe_context = claude_probe_context or ClaudeProbeContext()
+    claude_probe_context.direct_probe_performed = False
+    identity_error = _claude_identity_probe_error(account)
+    if identity_error is not None:
+        claude_probe_context.last_direct_probe_error = identity_error
+        return AccountStatus(label=account.label, state=AccountState.UNKNOWN,
+                             error=identity_error.message, source_detail=CLAUDE_CLI_USAGE_SOURCE_DETAIL)
     usage_failure: AccountStatus | None = None
     if _claude_cli_usage_refresh_allowed():
         gate_status = _claude_cli_usage_gate_status(account, claude_probe_context)
@@ -1010,8 +1066,11 @@ def _fetch_claude_direct(
         provider="claude",
         source=DataSource.CODEXBAR_CLI,
         codexbar_provider="claude",
+        codexbar_account=account.identity_email or account.codexbar_account,
     )
     try:
+        if not fallback_account.codexbar_account:
+            raise ValueError("No verified email binding for scoped Claude CodexBar fallback")
         fallback = _fetch_codexbar_cli(
             fallback_account,
             codexbar_staleness_threshold_seconds=codexbar_staleness_threshold_seconds,
@@ -1028,7 +1087,9 @@ def _fetch_claude_direct(
         fallback.source_detail = "claude-codexbar-fallback"
         return fallback
 
-    if account.status_probe_enabled:
+    if account.status_probe_enabled and not cooling_down(
+        vars(claude_probe_context), datetime.now(timezone.utc)
+    ):
         return _fetch_claude_probe(account)
 
     if usage_failure is not None:
@@ -1080,6 +1141,16 @@ def _claude_cli_usage_gate_status(
             source_detail=CLAUDE_CLI_USAGE_SOURCE_DETAIL,
         )
 
+    if cooling_down(vars(context), datetime.now(timezone.utc)):
+        if _claude_recent_success_available(context):
+            return replace(context.last_direct_success_status, label=account.label, stale=True)
+        return AccountStatus(
+            label=account.label,
+            state=AccountState.UNKNOWN,
+            error="Claude usage refresh rate-limited; waiting for the local retry cooldown.",
+            source_detail=CLAUDE_CLI_USAGE_SOURCE_DETAIL,
+        )
+
     if _claude_cli_usage_force_refresh():
         return None
 
@@ -1087,7 +1158,7 @@ def _claude_cli_usage_gate_status(
     if last_probe is None:
         return None
     age = datetime.now(timezone.utc) - last_probe
-    if age >= CLAUDE_DIRECT_MIN_INTERVAL:
+    if age < timedelta(0) or age >= CLAUDE_DIRECT_MIN_INTERVAL:
         return None
 
     if context.last_direct_probe_error is None and _claude_cached_direct_status_usable(
@@ -1119,36 +1190,11 @@ def _claude_identity_probe_error(account: AccountConfig) -> ClaudeProbeError | N
             "Claude CLI identity is not readable from ~/.claude.json.",
         )
 
-    has_saved_id = bool(account.identity_provider_id)
-    has_active_id = bool(active.provider_account_id)
-    if has_saved_id and has_active_id:
-        if account.identity_provider_id != active.provider_account_id:
-            return ClaudeProbeError(
-                ClaudeProbeErrorCategory.IDENTITY_MISMATCH,
-                "Active Claude CLI account differs from this TokenKick account.",
-            )
-        if (
-            account.identity_org_id
-            and active.organization_id
-            and account.identity_org_id != active.organization_id
-        ):
-            return ClaudeProbeError(
-                ClaudeProbeErrorCategory.IDENTITY_MISMATCH,
-                "Active Claude CLI organization differs from this TokenKick account.",
-            )
+    if identity_matches(account, active):
         return None
-
-    if account.identity_email and active.email:
-        if account.identity_email.lower() != active.email.lower():
-            return ClaudeProbeError(
-                ClaudeProbeErrorCategory.IDENTITY_MISMATCH,
-                "Active Claude CLI email differs from this TokenKick account.",
-            )
-        return None
-
     return ClaudeProbeError(
-        ClaudeProbeErrorCategory.IDENTITY_UNREADABLE,
-        "Not enough Claude identity metadata to validate direct /usage.",
+        ClaudeProbeErrorCategory.IDENTITY_MISMATCH,
+        "Active Claude CLI identity is missing or differs from this TokenKick account.",
     )
 
 
@@ -1196,6 +1242,8 @@ def _record_claude_probe_success(context: ClaudeProbeContext, status: AccountSta
     observed_at = _status_observed_at()
     status.observed_at = status.observed_at or observed_at
     status.source_detail = CLAUDE_CLI_USAGE_SOURCE_DETAIL
+    context.direct_probe_performed = True
+    context.direct_rate_limit_failures = 0
     context.last_direct_probe_at = observed_at
     context.last_direct_probe_error = None
     context.last_direct_success_at = observed_at
@@ -1209,6 +1257,15 @@ def _record_claude_probe_error(
     *,
     raw: str | None = None,
 ) -> None:
+    context.direct_probe_performed = True
+    previous_count = failure_count(context.direct_rate_limit_failures)
+    if (context.last_direct_probe_error is not None
+            and context.last_direct_probe_error.category == ClaudeProbeErrorCategory.RATE_LIMITED):
+        previous_count = max(1, previous_count)
+    context.direct_rate_limit_failures = (
+        min(5, previous_count + 1)
+        if category == ClaudeProbeErrorCategory.RATE_LIMITED else 0
+    )
     context.last_direct_probe_at = _status_observed_at()
     context.last_direct_probe_error = ClaudeProbeError(
         category=category,
@@ -1222,10 +1279,11 @@ def _claude_probe_error_category_from_message(message: str) -> ClaudeProbeErrorC
     compact = "".join(lower.split())
     if "not found" in lower or "no such file" in lower:
         return ClaudeProbeErrorCategory.BINARY_MISSING
+    if ("rate_limit" in lower or "rate limited" in lower or "ratelimited" in compact
+            or re.search(r"\b429\b", lower) or "too many requests" in lower):
+        return ClaudeProbeErrorCategory.RATE_LIMITED
     if "token_expired" in lower or "token has expired" in lower or "auth" in lower or "login" in lower:
         return ClaudeProbeErrorCategory.NOT_AUTHENTICATED
-    if "rate_limit" in lower or "rate limited" in lower or "ratelimited" in compact:
-        return ClaudeProbeErrorCategory.RATE_LIMITED
     if "parse" in lower or "missing current session" in lower or "current session" in lower:
         return ClaudeProbeErrorCategory.PARSE_FAILED
     if "timed out" in lower or "timeout" in lower:
@@ -1258,14 +1316,14 @@ def _fetch_claude_cli_usage(
     cached_status = _claude_cli_usage_cache()
     if use_cache and cached_status is not None:
         cached = replace(cached_status, label=account.label)
-        if cached.state == AccountState.UNKNOWN:
-            _record_claude_probe_error(
-                claude_probe_context,
-                _claude_probe_error_category_from_message(cached.error or ""),
-                cached.error or "Claude CLI /usage failed.",
-            )
-        else:
-            _record_claude_probe_success(claude_probe_context, cached)
+        snapshot = getattr(cached_status, "_claude_cached_probe_context", None)
+        if isinstance(snapshot, ClaudeProbeContext):
+            for name in (
+                "last_direct_probe_at", "last_direct_probe_error", "last_direct_success_at",
+                "last_direct_success_status", "direct_rate_limit_failures",
+            ):
+                setattr(claude_probe_context, name, getattr(snapshot, name))
+        claude_probe_context.direct_probe_performed = False
         return cached
 
     binary = shutil.which("claude")
@@ -1282,7 +1340,7 @@ def _fetch_claude_cli_usage(
             source_detail=CLAUDE_CLI_USAGE_SOURCE_DETAIL,
         )
         if use_cache:
-            _set_claude_cli_usage_cache(status)
+            _set_claude_cli_usage_cache(status, claude_probe_context)
         return status
 
     auth_status = claude_auth_status(binary)
@@ -1303,7 +1361,7 @@ def _fetch_claude_cli_usage(
             source_detail=CLAUDE_CLI_USAGE_SOURCE_DETAIL,
         )
         if use_cache:
-            _set_claude_cli_usage_cache(status)
+            _set_claude_cli_usage_cache(status, claude_probe_context)
         return status
 
     try:
@@ -1346,7 +1404,7 @@ def _fetch_claude_cli_usage(
         else:
             _record_claude_probe_success(claude_probe_context, status)
     if use_cache:
-        _set_claude_cli_usage_cache(status)
+        _set_claude_cli_usage_cache(status, claude_probe_context)
     return status
 
 
@@ -1923,7 +1981,8 @@ def _extract_claude_usage_error(text: str) -> str | None:
         return "Claude CLI token expired. Run `claude auth login --claudeai` to refresh."
     if "authentication_error" in lower or "not authenticated" in lower:
         return "Claude CLI authentication error. Run `claude auth login --claudeai`."
-    if "rate_limit_error" in lower or "rate limited" in lower or "ratelimited" in compact:
+    if ("rate_limit_error" in lower or "rate limited" in lower or "ratelimited" in compact
+            or re.search(r"(?:http|status(?: code)?|error)[\s:=(]*429\b", lower) or "too many requests" in lower):
         return "Claude CLI usage endpoint is rate limited right now. Please try again later."
     if "failed to load usage data" in lower or "failedtoloadusagedata" in compact:
         return "Claude CLI could not load usage data. Open the CLI and retry `/usage`."
@@ -2056,11 +2115,26 @@ def _fetch_antigravity_cli_https(account: AccountConfig) -> AccountStatus:
         )
     try:
         with _antigravity_cli_refresh_lock():
-            session = _open_antigravity_cli_session(binary)
+            session = _start_antigravity_cli_session(binary)
             try:
-                status = _fetch_antigravity_cli_https_status(account, session)
+                status = _ensure_status_metadata(
+                    _fetch_antigravity_cli_https_status(account, session), ANTIGRAVITY_CLI_SOURCE_DETAIL)
             finally:
                 _stop_antigravity_cli_session(session)
+            if needs_idle_observation(status):
+                time.sleep(OBSERVATION_DELAY_SECONDS)
+                # Each CLI process caches quota responses. A second call to the
+                # same process cannot establish whether the native clock moves.
+                session = _start_antigravity_cli_session(binary)
+                try:
+                    second = _ensure_status_metadata(
+                        _fetch_antigravity_cli_https_status(account, session), ANTIGRAVITY_CLI_SOURCE_DETAIL)
+                    classified = classify_session_clocks(status, second)
+                    second.quota_windows = classified.quota_windows
+                    second.window_anchor_state = None
+                    status = second
+                finally:
+                    _stop_antigravity_cli_session(session)
     except _AntigravityQuotaSummaryParseError as exc:
         status = AccountStatus(
             label=account.label,
@@ -2096,50 +2170,13 @@ def _fetch_antigravity_cli_https(account: AccountConfig) -> AccountStatus:
 
 @contextmanager
 def _antigravity_cli_refresh_lock() -> Iterator[None]:
-    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    deadline = time.monotonic() + ANTIGRAVITY_CLI_LOCK_WAIT_SECONDS
-    while True:
-        try:
-            fd = os.open(
-                ANTIGRAVITY_CLI_REFRESH_LOCK_FILE,
-                os.O_CREAT | os.O_EXCL | os.O_WRONLY,
-                0o600,
-            )
-        except FileExistsError:
-            if _antigravity_cli_lock_stale():
-                try:
-                    ANTIGRAVITY_CLI_REFRESH_LOCK_FILE.unlink()
-                except OSError:
-                    pass
-                continue
-            if time.monotonic() >= deadline:
-                raise _AntigravityProbeError(
-                    "Another Antigravity CLI quota refresh is already running."
-                )
-            time.sleep(0.2)
-            continue
-        try:
-            os.write(fd, json.dumps({"pid": os.getpid(), "created_at": time.time()}).encode())
-        finally:
-            os.close(fd)
-        break
+    from .state_io import state_file_lock, StateFileLockTimeout
     try:
-        yield
-    finally:
-        try:
-            ANTIGRAVITY_CLI_REFRESH_LOCK_FILE.unlink()
-        except FileNotFoundError:
-            pass
-        except OSError:
-            pass
-
-
-def _antigravity_cli_lock_stale() -> bool:
-    try:
-        created_at = ANTIGRAVITY_CLI_REFRESH_LOCK_FILE.stat().st_mtime
-    except OSError:
-        return True
-    return (time.time() - created_at) > ANTIGRAVITY_CLI_LOCK_STALE_SECONDS
+        with state_file_lock(ANTIGRAVITY_CLI_REFRESH_LOCK_FILE,
+                             timeout=ANTIGRAVITY_CLI_LOCK_WAIT_SECONDS):
+            yield
+    except StateFileLockTimeout as exc:
+        raise _AntigravityProbeError("Another Antigravity CLI quota refresh is already running.") from exc
 
 
 def _open_antigravity_cli_session(binary: str) -> _AntigravityCliSession:
@@ -2313,7 +2350,8 @@ def _fetch_antigravity_cli_quota_from_port(
             last_error = str(exc)
             continue
         setattr(status, "_antigravity_cli_endpoint", endpoint_name)
-        updated = replace(status, source_detail=ANTIGRAVITY_CLI_SOURCE_DETAIL)
+        updated = replace(status, source_detail=ANTIGRAVITY_CLI_SOURCE_DETAIL,
+                          observed_at=_status_observed_at())
         setattr(updated, "_antigravity_cli_endpoint", endpoint_name)
         identity_email = getattr(status, "_antigravity_identity_email", None)
         if identity_email is None:
@@ -2925,7 +2963,7 @@ def _find_latest_rate_limit(sessions_dir: Path) -> Optional[dict]:
                 ts = event.get("timestamp", "")
                 if ts > latest_ts:
                     latest_ts = ts
-                    latest = payload
+                    latest = {**payload, "observed_at": ts}
             except json.JSONDecodeError:
                 continue
 
@@ -2951,8 +2989,7 @@ def _parse_session_rate_limit(label: str, payload: dict) -> AccountStatus:
     """Parse a token_count payload from a Codex session file."""
     rate_limits = payload.get("rate_limits")
     rate_limits = rate_limits if isinstance(rate_limits, dict) else {}
-    weekly = _valid_codex_window(rate_limits.get("secondary"), native=False)
-    session = _valid_codex_window(rate_limits.get("primary"), native=False)
+    weekly, session, capability, diagnostics = _classify_codex_windows(rate_limits, native=False)
     used_pct = _to_float(weekly.get("used_percent"))
     resets_in = _seconds_until_reset(
         resets_at=weekly.get("resets_at"),
@@ -2982,11 +3019,18 @@ def _parse_session_rate_limit(label: str, payload: dict) -> AccountStatus:
         state=state,
         used_percent=used_pct,
         resets_in_seconds=resets_in,
+        resets_at=weekly.get("resets_at"),
         window_minutes=window_min,
         session_used_percent=session_used_pct,
         session_resets_in_seconds=session_resets_in,
+        session_resets_at=session.get("resets_at"),
         session_window_minutes=session.get("window_minutes"),
         window_anchor_state=anchor_state,
+        detected_plan_type=codex_plan_type(rate_limits.get("plan_type")),
+        codex_session_limit=capability,
+        codex_limits_version=CODEX_LIMITS_VERSION,
+        source_diagnostics={"codex_windows": diagnostics},
+        observed_at=payload.get("observed_at"),
     )
 
 

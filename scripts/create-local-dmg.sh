@@ -8,7 +8,7 @@ set -eu
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PYTHON="${PYTHON:-$REPO_ROOT/.venv/bin/python}"
 APP_DIR="${1:-$REPO_ROOT/dist/macos/TokenKick.app}"
-DMG_ROOT="${DMG_ROOT:-$REPO_ROOT/build/dmg-root}"
+
 OUTPUT_DIR="${OUTPUT_DIR:-$REPO_ROOT/dist/macos}"
 
 if [ ! -x "$PYTHON" ]; then
@@ -22,11 +22,29 @@ fi
 
 VERSION="$("$PYTHON" -c 'from tokenkick.versioning import installed_version; print(installed_version())')"
 DMG_PATH="$OUTPUT_DIR/TokenKick-$VERSION-local.dmg"
-RW_DMG_PATH="$OUTPUT_DIR/TokenKick-$VERSION-layout.dmg"
+WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/tokenkick-dmg.XXXXXX")"
+DMG_ROOT="$WORK_DIR/staging"
+RW_DMG_PATH="$WORK_DIR/layout.dmg"
 VOLUME_NAME="TokenKick $VERSION"
-MOUNT_DIR="${TMPDIR:-/tmp}/tokenkick-dmg-$VERSION"
+MOUNT_DIR="$WORK_DIR/mount"
+MOUNTED=0
+cleanup() {
+    if [ "$MOUNTED" -eq 1 ]; then
+        if ! hdiutil detach "$MOUNT_DIR" >&2; then
+            echo "error: detach failed; retained owned workspace $WORK_DIR" >&2
+            return
+        fi
+    fi
+    # Never recursively remove a possibly mounted path.
+    rmdir "$MOUNT_DIR" 2>/dev/null || true
+    rm -rf "$DMG_ROOT"
+    rm -f "$RW_DMG_PATH"
+    rmdir "$WORK_DIR" 2>/dev/null || true
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM HUP
 
-rm -rf "$DMG_ROOT" "$MOUNT_DIR" "$RW_DMG_PATH" "$DMG_PATH"
 mkdir -p "$DMG_ROOT" "$OUTPUT_DIR"
 cp -R "$APP_DIR" "$DMG_ROOT/TokenKick.app"
 ln -s /Applications "$DMG_ROOT/Applications"
@@ -40,11 +58,13 @@ hdiutil create \
     "$RW_DMG_PATH" >&2
 
 mkdir -p "$MOUNT_DIR"
+MOUNTED=1
 hdiutil attach "$RW_DMG_PATH" \
     -mountpoint "$MOUNT_DIR" \
     -nobrowse \
     -noverify >&2
 
+if [ "${DMG_FINDER_LAYOUT:-0}" = 1 ]; then
 osascript >/dev/null <<OSA
 tell application "Finder"
     set dmgFolder to POSIX file "$MOUNT_DIR" as alias
@@ -61,14 +81,17 @@ tell application "Finder"
     close dmgWindow
 end tell
 OSA
+fi
 
 sync
 hdiutil detach "$MOUNT_DIR" >&2
+MOUNTED=0
 rmdir "$MOUNT_DIR" 2>/dev/null || true
 
 hdiutil convert "$RW_DMG_PATH" \
     -format UDZO \
     -imagekey zlib-level=9 \
+    -ov \
     -o "$DMG_PATH" >&2
 rm -f "$RW_DMG_PATH"
 

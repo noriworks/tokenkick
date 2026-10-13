@@ -12,7 +12,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
-from .direct import CodexProviderUsageError, read_codex_model_catalog
+from .direct import CodexProviderUsageError, read_codex_model_catalog, read_claude_identity, read_codex_identity
+from .identity_validation import identity_matches
+from .action_state import mark_action_dispatched, mark_action_uncertain
 from .model_selection import (
     ModelSelectionError, claude_economical_args, claude_economical_env, select_codex_model,
     read_antigravity_models, select_antigravity_model,
@@ -221,11 +223,9 @@ def kick_account(
         event = KickEvent(
             label=account.label,
             timestamp=time.time(),
-            success=False,
+            success=False, confirmed=False, dispatch_state="not_sent",
             error=error,
         )
-        if record:
-            append_kick_event(event)
         return event
 
     try:
@@ -238,22 +238,30 @@ def kick_account(
     except (ModelSelectionError, CodexProviderUsageError, OSError) as exc:
         event = KickEvent(
             label=account.label, timestamp=time.time(), success=False,
-            confirmed=False,
+            confirmed=False, dispatch_state="not_sent",
             error=str(exc) if isinstance(exc, (ModelSelectionError, CodexProviderUsageError))
             else "Provider model catalog unavailable; no kick was sent.",
         )
-        if record:
-            append_kick_event(event)
         return event
+    if account.provider in {"claude", "codex"}:
+        actual = (read_claude_identity() if account.provider == "claude"
+                  else read_codex_identity(codex_home_for_account(account)))
+        if not identity_matches(account, actual):
+            return KickEvent(label=account.label, success=False, confirmed=False,
+                             dispatch_state="not_sent",
+                             error="Provider identity is missing or changed; no kick was sent.")
     command = invocation.command
     env = invocation.env
     cli_name = command[0]
     prompt_text = _kick_prompt_text(account, command)
     requested_model = invocation.model
 
+    dispatched = False
     try:
         if before_send is not None:
             before_send()
+        mark_action_dispatched()
+        dispatched = True
         result = subprocess.run(
             command,
             stdin=subprocess.DEVNULL,
@@ -292,7 +300,8 @@ def kick_account(
             label=account.label,
             timestamp=time.time(),
             success=success,
-            confirmed=success and account.provider != "antigravity" and not (account.provider == "codex" and error),
+            confirmed=False,
+            dispatch_state="sent",
             error=error,
             kick_model=requested_model,
             prompt_text=prompt_text,
@@ -304,30 +313,34 @@ def kick_account(
             label=account.label,
             timestamp=time.time(),
             success=False,
-            error=f"{cli_name} CLI not found",
+            error=f"{cli_name} CLI not found", confirmed=False, dispatch_state="not_sent",
             kick_model=requested_model,
             prompt_text=prompt_text,
         )
     except subprocess.TimeoutExpired:
+        mark_action_uncertain()
         event = KickEvent(
             label=account.label,
             timestamp=time.time(),
             success=False,
-            error=f"{cli_name} kick timed out after 60s",
+            error=f"{cli_name} kick timed out after 60s", confirmed=False, dispatch_state="uncertain",
             kick_model=requested_model,
             prompt_text=prompt_text,
         )
     except Exception as e:
+        if dispatched:
+            mark_action_uncertain()
         event = KickEvent(
             label=account.label,
             timestamp=time.time(),
             success=False,
+            confirmed=False, dispatch_state="uncertain" if dispatched else "not_sent",
             error="Antigravity request failed; inspect native CLI diagnostics." if account.provider == "antigravity" else str(e),
             kick_model=requested_model,
             prompt_text=prompt_text,
         )
 
-    if record:
+    if record and event.dispatch_state != "not_sent":
         append_kick_event(event)
     return event
 

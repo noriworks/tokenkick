@@ -28,6 +28,8 @@ from tokenkick.models import AccountConfig, DataSource
 
 @pytest.fixture(autouse=True)
 def isolate_kicker_config(monkeypatch, tmp_path):
+    monkeypatch.setattr("tokenkick.kicker.read_codex_identity", lambda _home: SimpleNamespace(email="kick-fixture@example.test"))
+    monkeypatch.setattr("tokenkick.kicker.read_claude_identity", lambda: SimpleNamespace(email="kick-fixture@example.test"))
     monkeypatch.setattr("tokenkick.kicker.CONFIG_DIR", tmp_path / "config")
     monkeypatch.setattr("tokenkick.kicker.read_codex_model_catalog", lambda _home: [
         {"model": name, "supportedReasoningEfforts": [{"reasoningEffort": "low"}]}
@@ -36,7 +38,7 @@ def isolate_kicker_config(monkeypatch, tmp_path):
 
 
 def test_codex_home_for_session_account_uses_session_parent():
-    account = AccountConfig(
+    account = AccountConfig(identity_email="kick-fixture@example.test",
         label="managed",
         provider="codex",
         source=DataSource.CODEX_SESSION_FILE,
@@ -47,7 +49,7 @@ def test_codex_home_for_session_account_uses_session_parent():
 
 
 def test_kick_commands_use_economical_models_and_settings(tmp_path):
-    command, env = _kick_command(AccountConfig(label="claude", provider="claude"))
+    command, env = _kick_command(AccountConfig(identity_email="kick-fixture@example.test", label="claude", provider="claude"))
     assert command[command.index("--model") + 1] == "haiku"
     assert command[command.index("--effort") + 1] == "low"
     assert command[command.index("--tools") + 1] == ""
@@ -56,7 +58,7 @@ def test_kick_commands_use_economical_models_and_settings(tmp_path):
     }
     assert env["MAX_THINKING_TOKENS"] == "0"
     codex_command, env = _kick_command(
-        AccountConfig(label="codex", provider="codex", provider_home=str(tmp_path))
+        AccountConfig(identity_email="kick-fixture@example.test", label="codex", provider="codex", provider_home=str(tmp_path))
     )
     assert codex_command[:3] == ["codex", "exec", "--json"]
     assert "--skip-git-repo-check" not in codex_command
@@ -70,7 +72,7 @@ def test_kick_commands_use_economical_models_and_settings(tmp_path):
 
 
 def test_claude_kick_model_override_wins():
-    account = AccountConfig(label="claude", provider="claude", kick_model="haiku")
+    account = AccountConfig(identity_email="kick-fixture@example.test", label="claude", provider="claude", kick_model="haiku")
 
     command, _env = _kick_command(account)
 
@@ -83,7 +85,7 @@ def test_gemini_is_not_kickable():
 
 
 def test_codex_kick_model_override_wins(tmp_path):
-    account = AccountConfig(
+    account = AccountConfig(identity_email="kick-fixture@example.test",
         label="codex",
         provider="codex",
         provider_home=str(tmp_path),
@@ -97,7 +99,7 @@ def test_codex_kick_model_override_wins(tmp_path):
 
 
 def test_codex_spark_bucket_cannot_kick_after_retirement(tmp_path):
-    account = AccountConfig(
+    account = AccountConfig(identity_email="kick-fixture@example.test",
         label="codex-spark", provider="codex", provider_home=str(tmp_path),
         codex_rate_limit_id="codex_bengalfox",
     )
@@ -107,7 +109,7 @@ def test_codex_spark_bucket_cannot_kick_after_retirement(tmp_path):
 
 
 def test_codex_kick_default_uses_repo_workspace_without_skip(tmp_path):
-    account = AccountConfig(label="codex", provider="codex", provider_home=str(tmp_path))
+    account = AccountConfig(identity_email="kick-fixture@example.test", label="codex", provider="codex", provider_home=str(tmp_path))
 
     invocation = kick_invocation_for_account(account)
 
@@ -127,7 +129,7 @@ def test_codex_repo_surface_uses_stable_git_workspace_without_skip(monkeypatch, 
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
     monkeypatch.setattr("tokenkick.kicker.subprocess.run", fake_run)
-    account = AccountConfig(label="codex (debug)", provider="codex", provider_home=str(tmp_path))
+    account = AccountConfig(identity_email="kick-fixture@example.test", label="codex (debug)", provider="codex", provider_home=str(tmp_path))
 
     invocation = kick_invocation_for_account(account, codex_surface=CODEX_KICK_SURFACE_REPO)
 
@@ -150,7 +152,7 @@ def test_codex_repo_skip_surface_keeps_skip_but_sets_workspace(monkeypatch, tmp_
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
     monkeypatch.setattr("tokenkick.kicker.subprocess.run", fake_run)
-    account = AccountConfig(label="codex", provider="codex", provider_home=str(tmp_path))
+    account = AccountConfig(identity_email="kick-fixture@example.test", label="codex", provider="codex", provider_home=str(tmp_path))
 
     event = kick_account(account, record=False, codex_surface=CODEX_KICK_SURFACE_REPO_SKIP)
 
@@ -163,7 +165,7 @@ def test_codex_repo_skip_surface_keeps_skip_but_sets_workspace(monkeypatch, tmp_
 
 def test_codex_kick_prompt_is_not_trivial_arithmetic(tmp_path):
     command, _env = _kick_command(
-        AccountConfig(label="codex", provider="codex", provider_home=str(tmp_path))
+        AccountConfig(identity_email="kick-fixture@example.test", label="codex", provider="codex", provider_home=str(tmp_path))
     )
 
     assert "anchor probe" in command[-1]
@@ -175,7 +177,7 @@ def test_codex_kick_prompt_is_not_trivial_arithmetic(tmp_path):
 def test_codex_kick_prompt_varies_per_invocation(monkeypatch):
     values = iter([1_779_900_000_000_000_001, 1_779_900_000_000_000_002])
     monkeypatch.setattr("tokenkick.kicker.time.time_ns", lambda: next(values))
-    account = AccountConfig(label="codex (test)", provider="codex")
+    account = AccountConfig(identity_email="kick-fixture@example.test", label="codex (test)", provider="codex")
 
     first = _codex_kick_prompt(account)
     second = _codex_kick_prompt(account)
@@ -188,7 +190,7 @@ def test_codex_kick_prompt_varies_per_invocation(monkeypatch):
 
 def test_codex_phantom_recovery_uses_stronger_prompt_and_optional_model(monkeypatch, tmp_path):
     monkeypatch.setenv(CODEX_PHANTOM_RECOVERY_MODEL_ENV, "codex-stronger")
-    account = AccountConfig(label="codex", provider="codex", provider_home=str(tmp_path))
+    account = AccountConfig(identity_email="kick-fixture@example.test", label="codex", provider="codex", provider_home=str(tmp_path))
 
     command, env = _kick_command(account, phantom_recovery=True)
 
@@ -202,7 +204,7 @@ def test_codex_phantom_recovery_uses_stronger_prompt_and_optional_model(monkeypa
 
 def test_codex_phantom_recovery_model_does_not_affect_normal_kicks(monkeypatch, tmp_path):
     monkeypatch.setenv(CODEX_PHANTOM_RECOVERY_MODEL_ENV, "codex-stronger")
-    account = AccountConfig(label="codex", provider="codex", provider_home=str(tmp_path))
+    account = AccountConfig(identity_email="kick-fixture@example.test", label="codex", provider="codex", provider_home=str(tmp_path))
 
     command, _env = _kick_command(account)
 
@@ -213,7 +215,7 @@ def test_codex_phantom_recovery_model_does_not_affect_normal_kicks(monkeypatch, 
 def test_codex_phantom_recovery_model_ladder_dedupes_configured_models(monkeypatch):
     monkeypatch.setenv(CODEX_PHANTOM_RECOVERY_MODEL_ENV, "gpt-5-codex")
     monkeypatch.setenv("TOKENKICK_CODEX_PHANTOM_RECOVERY_MODELS", "gpt-5-codex, custom-alt")
-    account = AccountConfig(label="codex", provider="codex", kick_model="account-model")
+    account = AccountConfig(identity_email="kick-fixture@example.test", label="codex", provider="codex", kick_model="account-model")
 
     assert codex_phantom_recovery_model_ladder(account) == [
         "account-model",
@@ -244,7 +246,7 @@ def test_kick_account_records_requested_reported_model_and_tokens(monkeypatch):
 
     monkeypatch.setattr("tokenkick.kicker.subprocess.run", fake_run)
 
-    event = kick_account(AccountConfig(label="claude", provider="claude"), record=False)
+    event = kick_account(AccountConfig(identity_email="kick-fixture@example.test", label="claude", provider="claude"), record=False)
 
     assert captured["command"][captured["command"].index("--model") + 1] == "haiku"
     assert event.success is True
@@ -268,7 +270,7 @@ def test_kick_account_parses_codex_jsonl_metadata(monkeypatch):
 
     monkeypatch.setattr("tokenkick.kicker.subprocess.run", fake_run)
 
-    event = kick_account(AccountConfig(label="codex", provider="codex"), record=False)
+    event = kick_account(AccountConfig(identity_email="kick-fixture@example.test", label="codex", provider="codex"), record=False)
 
     assert event.kick_model == "gpt-6-luna"
     assert event.reported_model == "gpt-5.2-codex-mini"
@@ -279,7 +281,7 @@ def test_kick_account_parses_codex_jsonl_metadata(monkeypatch):
     assert event.prompt_text.startswith(CODEX_KICK_PROMPT)
     assert "Anchor account label: codex." in event.prompt_text
     assert event.response_text == "TokenKick anchor probe completed."
-    assert event.confirmed is True
+    assert event.confirmed is False  # generation alone does not verify a quota window
     assert event.codex_surface == CODEX_KICK_SURFACE_REPO
     assert event.evidence_response is True
     assert event.evidence_tokens is True
@@ -298,12 +300,12 @@ def test_kick_account_parses_codex_agent_message_string(monkeypatch):
 
     monkeypatch.setattr("tokenkick.kicker.subprocess.run", fake_run)
 
-    event = kick_account(AccountConfig(label="codex", provider="codex"), record=False)
+    event = kick_account(AccountConfig(identity_email="kick-fixture@example.test", label="codex", provider="codex"), record=False)
 
     assert event.input_tokens == 12
     assert event.output_tokens == 1
     assert event.response_text == "TokenKick anchor probe completed."
-    assert event.confirmed is True
+    assert event.confirmed is False  # generation alone does not verify a quota window
     assert event.evidence_response is True
     assert event.evidence_tokens is True
 
@@ -321,14 +323,14 @@ def test_kick_account_parses_codex_completed_agent_item(monkeypatch):
 
     monkeypatch.setattr("tokenkick.kicker.subprocess.run", fake_run)
 
-    event = kick_account(AccountConfig(label="codex", provider="codex"), record=False)
+    event = kick_account(AccountConfig(identity_email="kick-fixture@example.test", label="codex", provider="codex"), record=False)
 
     assert event.input_tokens == 11008
     assert event.output_tokens == 18
     assert event.prompt_text is not None
     assert "Anchor nonce:" in event.prompt_text
     assert event.response_text == "TokenKick anchor probe completed for codex."
-    assert event.confirmed is True
+    assert event.confirmed is False  # generation alone does not verify a quota window
     assert event.evidence_response is True
     assert event.evidence_tokens is True
     assert "item.completed" in (event.provider_output_excerpt or "")
@@ -346,7 +348,7 @@ def test_kick_account_marks_codex_exec_without_generation_unconfirmed(monkeypatc
 
     monkeypatch.setattr("tokenkick.kicker.subprocess.run", fake_run)
 
-    event = kick_account(AccountConfig(label="codex", provider="codex"), record=False)
+    event = kick_account(AccountConfig(identity_email="kick-fixture@example.test", label="codex", provider="codex"), record=False)
 
     assert event.success is True
     assert event.confirmed is False
@@ -370,7 +372,7 @@ def test_kick_account_marks_codex_exec_failure_unconfirmed(monkeypatch):
 
     monkeypatch.setattr("tokenkick.kicker.subprocess.run", fake_run)
 
-    event = kick_account(AccountConfig(label="codex", provider="codex"), record=False)
+    event = kick_account(AccountConfig(identity_email="kick-fixture@example.test", label="codex", provider="codex"), record=False)
 
     assert event.success is False
     assert event.confirmed is False
@@ -387,7 +389,7 @@ def test_kick_account_records_bounded_codex_output_excerpt(monkeypatch):
 
     monkeypatch.setattr("tokenkick.kicker.subprocess.run", fake_run)
 
-    event = kick_account(AccountConfig(label="codex", provider="codex"), record=False)
+    event = kick_account(AccountConfig(identity_email="kick-fixture@example.test", label="codex", provider="codex"), record=False)
 
     assert event.provider_output_excerpt is not None
     assert event.provider_output_excerpt.startswith('{"event":"start"}')
@@ -400,7 +402,7 @@ def test_kick_account_records_bounded_codex_output_excerpt(monkeypatch):
 def test_kick_account_sets_codex_home_env(monkeypatch):
     calls = []
     events = []
-    account = AccountConfig(
+    account = AccountConfig(identity_email="kick-fixture@example.test",
         label="managed",
         provider="codex",
         source=DataSource.CODEX_SESSION_FILE,
@@ -424,7 +426,7 @@ def test_kick_account_sets_codex_home_env(monkeypatch):
 
 def test_kick_account_rejects_non_kickable_provider(monkeypatch):
     events = []
-    account = AccountConfig(
+    account = AccountConfig(identity_email="kick-fixture@example.test",
         label="openrouter",
         provider="openrouter",
         source=DataSource.CODEXBAR_CLI,
@@ -435,12 +437,13 @@ def test_kick_account_rejects_non_kickable_provider(monkeypatch):
 
     assert event.success is False
     assert 'not "openrouter"' in event.error
-    assert events == [event]
+    assert events == []
+    assert event.dispatch_state == "not_sent"
 
 
 def test_kick_account_rejects_gemini_monitor_only(monkeypatch):
     events = []
-    account = AccountConfig(label="gemini", provider="gemini", source=DataSource.CODEXBAR_CLI)
+    account = AccountConfig(identity_email="kick-fixture@example.test", label="gemini", provider="gemini", source=DataSource.CODEXBAR_CLI)
 
     monkeypatch.setattr(
         "tokenkick.kicker.subprocess.run",
@@ -452,4 +455,5 @@ def test_kick_account_rejects_gemini_monitor_only(monkeypatch):
 
     assert event.success is False
     assert event.error == GEMINI_MONITOR_ONLY_MESSAGE
-    assert events == [event]
+    assert events == []
+    assert event.dispatch_state == "not_sent"

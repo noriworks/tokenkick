@@ -1,0 +1,1062 @@
+[
+  {
+    "path": ".github/workflows/release.yml",
+    "sha256": "6215c90bcf7e3bad63ebeae9914174da62f1b301f72d4b338361e8199716c6ca",
+    "bytes": 1742
+  },
+  {
+    "path": ".github/workflows/verify.yml",
+    "sha256": "39543cc2495f795db6d86cee9dbc56bdfa1c8024a70fd5785e1d8c5d622f9b43",
+    "bytes": 1170
+  },
+  {
+    "path": "CONTRIBUTING.md",
+    "sha256": "a3b042112bd29eb281242a1aacbdccb06240ee7971f763886a6a2de9d8fcd109",
+    "bytes": 1691
+  },
+  {
+    "path": "README.md",
+    "sha256": "5a69ce905cf8879ca0bef13b253dcb6554564602c650721a18bc72969c87ec3a",
+    "bytes": 7123
+  },
+  {
+    "path": "SECURITY.md",
+    "sha256": "20cf94cab21ed96c4e848e77edd21e61bb74e9efcef1f8afa4e5850d47e72f7c",
+    "bytes": 1335
+  },
+  {
+    "path": "docs/AGENT_PLAYBOOK.md",
+    "sha256": "94cc7ef70ee4dd5a5b3eea3a7849ce8c9c8dc56f7e7550bc04db7207455eb762",
+    "bytes": 15294
+  },
+  {
+    "path": "docs/ANTIGRAVITY_AUTOMATION.md",
+    "sha256": "e3b847ead071bbdae8e0df0ec02b2447cd8d924651de74429cdf21a78f3e76ce",
+    "bytes": 3830
+  },
+  {
+    "path": "docs/ANTIGRAVITY_ONGOING_STAGGER_PLAN.md",
+    "sha256": "f5778d7fcbd8ec1022ca69da08bbf47d088a24f86bc17304a3e457e998cd51c1",
+    "bytes": 14549
+  },
+  {
+    "path": "docs/AUDIT_REPAIR.md",
+    "sha256": "e838b04287c8a56502e38d6b5dffeed0d87bbdc9064f189a246b53b5bd883e72",
+    "bytes": 12460
+  },
+  {
+    "path": "docs/CLAUDE_MONITORING_RELIABILITY.md",
+    "sha256": "a0b80d906566505571d06d0e0819746519c6497d22d044c061c4ccb254ac5a05",
+    "bytes": 4370
+  },
+  {
+    "path": "docs/CODEX_LIMIT_DETECTION.md",
+    "sha256": "dd9a772d5c9bc1414c32f54ef9bc300d97d4e691a783ddac2258b640d47d3c3c",
+    "bytes": 5716
+  },
+  {
+    "path": "docs/HOW_TOKENKICK_WORKS.md",
+    "sha256": "de76b75870ba3494aeec551f06576467e951c59540be5c0c44043eceef7d09c3",
+    "bytes": 24975
+  },
+  {
+    "path": "docs/MAGIC_SETUP.md",
+    "sha256": "14531f147541cea8af5d6d47f7a267dba56d54fcef13d634b07a65deff30574f",
+    "bytes": 3759
+  },
+  {
+    "path": "docs/MCP.md",
+    "sha256": "e47b677bd31bd8b6daa147dc37d2c137c70781aa9d211cb9dab1b259eb7a6cb1",
+    "bytes": 6295
+  },
+  {
+    "path": "docs/MODEL_SELECTION_VERIFICATION.md",
+    "sha256": "1c5fac3cec57b9a32d02cd403e069a06ed4eb5b288eb3b8f92b0e166b3bb5fa4",
+    "bytes": 4192
+  },
+  {
+    "path": "docs/NOTIFICATION_MENU_IMPROVEMENTS.md",
+    "sha256": "70883af0d70459dad33720fa8bd4980a03eec344ed7e9c2bbd9663c37c490896",
+    "bytes": 4710
+  },
+  {
+    "path": "docs/PROVIDERS.md",
+    "sha256": "e7dc0ba9f90e2f8a39b317b1d656af1ebe62570d1f8745cd4e6372a175cf8187",
+    "bytes": 13298
+  },
+  {
+    "path": "docs/PROVIDER_COMPATIBILITY_VERIFICATION.md",
+    "sha256": "153d3494f5f300802e803b5ad77dd53181067eea16bc81b8e823e790758cbd77",
+    "bytes": 4443
+  },
+  {
+    "path": "docs/README.md",
+    "sha256": "3fefc77d92b5aec6fd8fe99d8944702fb0a47e2286ffaadac76e85887884fbdb",
+    "bytes": 29239
+  },
+  {
+    "path": "docs/SELECTION_MENU_IMPROVEMENTS.md",
+    "sha256": "6327bec50df969b51cbc88dec9d0d9371e1c1c48b911c273f21f9dc3d2795f73",
+    "bytes": 2969
+  },
+  {
+    "path": "docs/TOKENKICK_COMMANDS.md",
+    "sha256": "c973d883a449a44c640e08ad60fd6ab8eda9805595d1097f1c307de8b0d308fe",
+    "bytes": 40223
+  },
+  {
+    "path": "docs/macos/INSTALL.md",
+    "sha256": "c303161278f0814062c7e790af6b5ce4d353d3703fc6cf84c357776f3178ca6d",
+    "bytes": 1747
+  },
+  {
+    "path": "docs/macos/TROUBLESHOOTING.md",
+    "sha256": "d172c8eee992329be1bdde1cd6b5c39eb2dac12e9e67f08b07ca781f62ede4e0",
+    "bytes": 2033
+  },
+  {
+    "path": "docs/macos/UPDATE.md",
+    "sha256": "f1756154d0ba7e4e649f27f94ae095ae534238bfdf04e1feb0b5e586dca3aa78",
+    "bytes": 1137
+  },
+  {
+    "path": "macos/TokenKickKit/Package.swift",
+    "sha256": "5f1eb8e6747f5eb8b83b345a65d4f83415572795d545470b03e8a474f4bea06f",
+    "bytes": 1000
+  },
+  {
+    "path": "macos/TokenKickKit/README.md",
+    "sha256": "72b5e2ed2dc5eac3cf6321ecdced2ace05c35ef4433635732cbecf7fdb75f01d",
+    "bytes": 2941
+  },
+  {
+    "path": "macos/TokenKickKit/Sources/TokenKick/TokenKickApp.swift",
+    "sha256": "50ede69095e59d07ff21f6adbb0292128325177baa320c3e81e6282b489285b9",
+    "bytes": 947
+  },
+  {
+    "path": "macos/TokenKickKit/Sources/TokenKickKit/TKAdvanced.swift",
+    "sha256": "10f15d7c9a38c4dbed9424f401027271579494fa0e4f8bd3f24f27b87e81d007",
+    "bytes": 9124
+  },
+  {
+    "path": "macos/TokenKickKit/Sources/TokenKickKit/TKClient.swift",
+    "sha256": "124cec383cae3e4e1cea4c42a6e8fc6fdbe93d41c9a0eeec8936a9828b218c2d",
+    "bytes": 4004
+  },
+  {
+    "path": "macos/TokenKickKit/Sources/TokenKickKit/TKEnvelope.swift",
+    "sha256": "60761a82e5387c28b6c3b794f9901d172d35f11b4a8648b14902a8e35d956e2d",
+    "bytes": 2751
+  },
+  {
+    "path": "macos/TokenKickKit/Sources/TokenKickKit/TKEnvironment.swift",
+    "sha256": "cea37aa270347ceb344afe25d77dcacbbd5a990cc33d5e38e7face573588f327",
+    "bytes": 2294
+  },
+  {
+    "path": "macos/TokenKickKit/Sources/TokenKickKit/TKJSONValue.swift",
+    "sha256": "8a0cf77e537f5ae943fe036cbe937baca29aa69077cc8ed37db2bc63b5c190ee",
+    "bytes": 2062
+  },
+  {
+    "path": "macos/TokenKickKit/Sources/TokenKickKit/TKKickResult.swift",
+    "sha256": "82e180d558d9dffb67d8bf1c6f94421c6764f6dee6e4c47cc58e8e4c682051ce",
+    "bytes": 1957
+  },
+  {
+    "path": "macos/TokenKickKit/Sources/TokenKickKit/TKLaunchAgent.swift",
+    "sha256": "75e074d61018c88859330d2f248d04595e61cfa609da0bcaff97cef9f96df8b0",
+    "bytes": 15719
+  },
+  {
+    "path": "macos/TokenKickKit/Sources/TokenKickKit/TKLineStream.swift",
+    "sha256": "6ab50a152a42721aa3ae0ff3f0f853355ab0c1242fd8a16dba0823a6cfb854ab",
+    "bytes": 2424
+  },
+  {
+    "path": "macos/TokenKickKit/Sources/TokenKickKit/TKOwnedProcess.swift",
+    "sha256": "de4dfb7af1a8b03460d6550116265b1218e059be61d5e921b52c930153539ba2",
+    "bytes": 6352
+  },
+  {
+    "path": "macos/TokenKickKit/Sources/TokenKickKit/TKPlanning.swift",
+    "sha256": "77e033459f47e7d5242fbbd0658e1949d328f789b07bf5977d7007c11cadde01",
+    "bytes": 10506
+  },
+  {
+    "path": "macos/TokenKickKit/Sources/TokenKickKit/TKProcessRunner.swift",
+    "sha256": "e5c0f3586146f1a3ca4c49ca0aea45f0c3a17a889fa54203d9c9d15e5fc03517",
+    "bytes": 1993
+  },
+  {
+    "path": "macos/TokenKickKit/Sources/TokenKickKit/TKRuntimeLocator.swift",
+    "sha256": "369e523c6e3c34c6db0be8bd02bb746553450ea4f5f5718d42f7c83d5b0de475",
+    "bytes": 3172
+  },
+  {
+    "path": "macos/TokenKickKit/Sources/TokenKickKit/TKSetupStream.swift",
+    "sha256": "34ef0961679ea294b1ae6355b418d45904317f6d8e26908c00e2ab2f6682d7c6",
+    "bytes": 2429
+  },
+  {
+    "path": "macos/TokenKickKit/Sources/TokenKickKit/TKSnapshot.swift",
+    "sha256": "c77b51ed69261e24696e558e43673dede2eb5548446a9266e64069575c2171a5",
+    "bytes": 8703
+  },
+  {
+    "path": "macos/TokenKickKit/Sources/TokenKickShell/AccountsViewModel.swift",
+    "sha256": "4062fb340a5cf698815d2d30dab40d03e304a02bf2ca519745acdd2f253617ed",
+    "bytes": 13490
+  },
+  {
+    "path": "macos/TokenKickKit/Sources/TokenKickShell/AdvancedViewModel.swift",
+    "sha256": "62ab551e179214867065c77e97db7f49312859a6c577554ddceb8c73273401f3",
+    "bytes": 17512
+  },
+  {
+    "path": "macos/TokenKickKit/Sources/TokenKickShell/AppRoot.swift",
+    "sha256": "562988fae6fa0fd5c2908908a66b86f6dd72cde360bd36745b0d3e0b4d329795",
+    "bytes": 5504
+  },
+  {
+    "path": "macos/TokenKickKit/Sources/TokenKickShell/AppSettingsModel.swift",
+    "sha256": "6094b844575dc123b19f42a88bdfe80a1adb2731e1e510fd53a7791745f1ec27",
+    "bytes": 4744
+  },
+  {
+    "path": "macos/TokenKickKit/Sources/TokenKickShell/ConfirmedAction.swift",
+    "sha256": "a73f2f779ae838e343e5c0c9dc0e509d306bff9442bacba31f94099ebee44ef6",
+    "bytes": 5542
+  },
+  {
+    "path": "macos/TokenKickKit/Sources/TokenKickShell/DaemonPresentation.swift",
+    "sha256": "5c10bc9cbb54401268198e7a06148ae090e5bbdddb1d8454f647dece832243b9",
+    "bytes": 4202
+  },
+  {
+    "path": "macos/TokenKickKit/Sources/TokenKickShell/DaemonViewModel.swift",
+    "sha256": "a8c0f31247b54fd31c0dd5468453912f90496186183813582bc09c2746966c46",
+    "bytes": 10507
+  },
+  {
+    "path": "macos/TokenKickKit/Sources/TokenKickShell/DiagnosticsViewModel.swift",
+    "sha256": "081341f1b886574fc6c4a592810a2fa9eb9ec0a1807c3797ca383ff0b2739a63",
+    "bytes": 10945
+  },
+  {
+    "path": "macos/TokenKickKit/Sources/TokenKickShell/HistoryViewModel.swift",
+    "sha256": "1a624abe3d48407a7c1f6902314e2e0c4cc6c5098c492671b2cee613973b80e1",
+    "bytes": 5265
+  },
+  {
+    "path": "macos/TokenKickKit/Sources/TokenKickShell/KickViewModel.swift",
+    "sha256": "24205d26898d2ff28b633f5293a837c54c6b3c8a0ab2cf768e46b87455acef8e",
+    "bytes": 5491
+  },
+  {
+    "path": "macos/TokenKickKit/Sources/TokenKickShell/MainWindowPresenter.swift",
+    "sha256": "1dea2064a1131a8510a006c59950986934fc9aefe546b4addcd1c9f22c831ba1",
+    "bytes": 1484
+  },
+  {
+    "path": "macos/TokenKickKit/Sources/TokenKickShell/NavigationModel.swift",
+    "sha256": "dab95c4153e677ccae7865359f87cea4fda7574e7f696e59c0ddbb79c56c4d31",
+    "bytes": 2612
+  },
+  {
+    "path": "macos/TokenKickKit/Sources/TokenKickShell/PlannerViewModel.swift",
+    "sha256": "3e28b97d6846d299e21e0c66dd0aa747237e3e428a50935d16f183f6c40a08d5",
+    "bytes": 17064
+  },
+  {
+    "path": "macos/TokenKickKit/Sources/TokenKickShell/PopoverModel.swift",
+    "sha256": "1b34dba60bd5d85f0790dfb8efcfdba95db521e5ae5cef95c356fcbdd9cca83b",
+    "bytes": 3922
+  },
+  {
+    "path": "macos/TokenKickKit/Sources/TokenKickShell/ScheduleViewModel.swift",
+    "sha256": "3b276d34105b414c69e43750f953546712b662d483bbc767ad723ff19eab63f4",
+    "bytes": 12214
+  },
+  {
+    "path": "macos/TokenKickKit/Sources/TokenKickShell/SetupViewModel.swift",
+    "sha256": "942bbce1a2ea9ed32d6c6d3a07ef0fe750f6cebf29e17ef11babded4081be584",
+    "bytes": 8568
+  },
+  {
+    "path": "macos/TokenKickKit/Sources/TokenKickShell/SnapshotAccountRow.swift",
+    "sha256": "3a7713ef5ea34e7dbd9f3a0d673582474d87b54a478b286d65ed59e181909ada",
+    "bytes": 5220
+  },
+  {
+    "path": "macos/TokenKickKit/Sources/TokenKickShell/SnapshotStore.swift",
+    "sha256": "8090a9ff61c1cf9911ab3ea23510f8a8322f77c9a427b6ab13edb2ebae2e4bd4",
+    "bytes": 5402
+  },
+  {
+    "path": "macos/TokenKickKit/Sources/TokenKickShell/Views/AccountsScreen.swift",
+    "sha256": "3bc493c1231b9c50a070e5d788690ee161b23dc2b2a8eb5111d7b39dc91962d8",
+    "bytes": 12910
+  },
+  {
+    "path": "macos/TokenKickKit/Sources/TokenKickShell/Views/AdvancedScreen.swift",
+    "sha256": "4296477eb7c02c91da67fd242f51665eea2e015a739a449a33fb24ccb5e2866c",
+    "bytes": 18374
+  },
+  {
+    "path": "macos/TokenKickKit/Sources/TokenKickShell/Views/ConfirmationSheetView.swift",
+    "sha256": "ad62cb5e131ce9f4b831ad435e0883af98869c7e38d11352456d57c121ec272c",
+    "bytes": 2404
+  },
+  {
+    "path": "macos/TokenKickKit/Sources/TokenKickShell/Views/DaemonScreen.swift",
+    "sha256": "de6ba34fd428950d2a37a3662f839cd183d869e783732859d9648bfff991c461",
+    "bytes": 10218
+  },
+  {
+    "path": "macos/TokenKickKit/Sources/TokenKickShell/Views/DiagnosticsScreen.swift",
+    "sha256": "d2cae42f8705803f9f0dc5700ef975363dd61a981300a9b7286da8acdf444d0f",
+    "bytes": 12184
+  },
+  {
+    "path": "macos/TokenKickKit/Sources/TokenKickShell/Views/HistoryScreen.swift",
+    "sha256": "0a9497cfc8736415b6c9160d3a6920cbe2749b22499cdbd3cf35bdfc0f456a1c",
+    "bytes": 5927
+  },
+  {
+    "path": "macos/TokenKickKit/Sources/TokenKickShell/Views/KickScreen.swift",
+    "sha256": "869e863f4a25d6aa2e67a0743d0a3fde4adbc9550caa9a179bddeabac93ab642",
+    "bytes": 5916
+  },
+  {
+    "path": "macos/TokenKickKit/Sources/TokenKickShell/Views/MainWindowView.swift",
+    "sha256": "78be6160339146b110b8f67d5bb6648d3febb8bb9031e820193a5dfd27e8e2b2",
+    "bytes": 5842
+  },
+  {
+    "path": "macos/TokenKickKit/Sources/TokenKickShell/Views/MenuBarPopoverView.swift",
+    "sha256": "6e248d0db468f48160eaec07200275557f2bd33a3a6a486112d3d5b0535a631e",
+    "bytes": 10461
+  },
+  {
+    "path": "macos/TokenKickKit/Sources/TokenKickShell/Views/NotificationsScreen.swift",
+    "sha256": "22cdf9dbf7ce1f33a0474880a1047912587af02585afffd6e03b435b42eec941",
+    "bytes": 8506
+  },
+  {
+    "path": "macos/TokenKickKit/Sources/TokenKickShell/Views/PlannerScreen.swift",
+    "sha256": "1608fb767eea387c477aefe9c1cbfe4cb67449ff075725c834771592e1c63255",
+    "bytes": 13763
+  },
+  {
+    "path": "macos/TokenKickKit/Sources/TokenKickShell/Views/ScheduleScreen.swift",
+    "sha256": "f54a978dbf2f63d233b369e101047fcf4231c680fc3b849452c8f7181b528ff7",
+    "bytes": 8074
+  },
+  {
+    "path": "macos/TokenKickKit/Sources/TokenKickShell/Views/SettingsView.swift",
+    "sha256": "ed5663671298d3942c6e93953b12b13d3d06310e91a18b58dde0742e670b9fe5",
+    "bytes": 6922
+  },
+  {
+    "path": "macos/TokenKickKit/Sources/TokenKickShell/Views/SetupFlowViews.swift",
+    "sha256": "bd069686e96e59259c11990a2d89fa19a850c93cc871b187004a087b945c8cff",
+    "bytes": 7621
+  },
+  {
+    "path": "macos/TokenKickKit/Sources/TokenKickShell/Views/SharedViews.swift",
+    "sha256": "3e7d886cd5ab59505f73f3cae70b492ce767986f384df9e46664230986389158",
+    "bytes": 4460
+  },
+  {
+    "path": "macos/TokenKickKit/Sources/TokenKickShell/Views/StatusScreen.swift",
+    "sha256": "d378ec8ab0ede03d869c99bb9566f877310256a6d82b33baf6e8ea5a483e4de4",
+    "bytes": 5541
+  },
+  {
+    "path": "macos/TokenKickKit/Sources/TokenKickShell/Views/WindowFrameAutosaver.swift",
+    "sha256": "d22d18899a5b9175daa2f6ecdb06e77aa3b16ca85ac327aa3188d89d3bbef39e",
+    "bytes": 845
+  },
+  {
+    "path": "macos/TokenKickKit/Sources/TokenKickShell/WarningModel.swift",
+    "sha256": "7864ebcd03c9db58df87f4ab3efcaaf20da1c8c269a7c70094866fe6368ca47d",
+    "bytes": 8770
+  },
+  {
+    "path": "macos/TokenKickKit/Sources/tkapp-probe/main.swift",
+    "sha256": "ce3d0e25a42d046064e83bb7973853c9bfa9f3f2d329d25fa4b25e31c1ae24ea",
+    "bytes": 5224
+  },
+  {
+    "path": "macos/TokenKickKit/Tests/TokenKickKitTests/BundledRuntimeIntegrationTests.swift",
+    "sha256": "264a7c6781a51aa0838a2328f5c5a9bbdb1c50eb1a1553852a024f389f7ea387",
+    "bytes": 7190
+  },
+  {
+    "path": "macos/TokenKickKit/Tests/TokenKickKitTests/DecodingTests.swift",
+    "sha256": "766856165a78c9f07f6ec874f8c5f7083c297ebaf70bd7a32c37ae592638b938",
+    "bytes": 12448
+  },
+  {
+    "path": "macos/TokenKickKit/Tests/TokenKickKitTests/EnvironmentAndLocatorTests.swift",
+    "sha256": "5aa89926f13f19fd9e3999ab922b216fd652d4c305318346145ddd9b26af890f",
+    "bytes": 9509
+  },
+  {
+    "path": "macos/TokenKickKit/Tests/TokenKickKitTests/Fixtures/accounts_list.json",
+    "sha256": "8fc5bc2e9db4b968b82d34c8ae3492e490db379fe0ef58cb7dfe8f9df882e65a",
+    "bytes": 986
+  },
+  {
+    "path": "macos/TokenKickKit/Tests/TokenKickKitTests/Fixtures/app_doctor.json",
+    "sha256": "033afdac5f7b3ae18d205c5dece892def3be412904d61200c95779d61d5239b5",
+    "bytes": 8369
+  },
+  {
+    "path": "macos/TokenKickKit/Tests/TokenKickKitTests/Fixtures/codex_strategy.json",
+    "sha256": "ab57bd31a1abee2d0a546f48697f0cec2a4f6e42dbe80988085e1646ab28d777",
+    "bytes": 1280
+  },
+  {
+    "path": "macos/TokenKickKit/Tests/TokenKickKitTests/Fixtures/codex_surface_patterns.json",
+    "sha256": "89a5e016af3530adabb4046f8be2254e60e351ba5aa0679afa03411f9f877167",
+    "bytes": 683
+  },
+  {
+    "path": "macos/TokenKickKit/Tests/TokenKickKitTests/Fixtures/codex_surfaces.json",
+    "sha256": "30f8db6f5adc0e9ed7a2b42c17844f11dc5d84d92ff18d75d84e0f56d6964ee3",
+    "bytes": 1972
+  },
+  {
+    "path": "macos/TokenKickKit/Tests/TokenKickKitTests/Fixtures/daemon_status.json",
+    "sha256": "fafc8a46fe91146813e912a1ace588743cd1ff89869e5690a5fab7c221a2622a",
+    "bytes": 575
+  },
+  {
+    "path": "macos/TokenKickKit/Tests/TokenKickKitTests/Fixtures/history.json",
+    "sha256": "3be5c6ea32f958e8a9c10ec5a0630bcc7188445431800d3e456ef66cf51ac2a2",
+    "bytes": 3516
+  },
+  {
+    "path": "macos/TokenKickKit/Tests/TokenKickKitTests/Fixtures/kick_skipped.json",
+    "sha256": "5c0803b1fdadc8a1d6f5c1081feb160e0ee4e99e5c4690c2e454f0bc89fb3ff4",
+    "bytes": 351
+  },
+  {
+    "path": "macos/TokenKickKit/Tests/TokenKickKitTests/Fixtures/mutation_error.json",
+    "sha256": "e9a7fa388168464d7f5ce02f53bf86389bc245e14745772b1d07e43f1707ce48",
+    "bytes": 157
+  },
+  {
+    "path": "macos/TokenKickKit/Tests/TokenKickKitTests/Fixtures/notify_global.json",
+    "sha256": "e49cf346a2a553ca46a47eaf631ee2c2c766d8fcfde3d2074b85244e179b1983",
+    "bytes": 632
+  },
+  {
+    "path": "macos/TokenKickKit/Tests/TokenKickKitTests/Fixtures/plan_preview.json",
+    "sha256": "84392fd14ece17242e512e4fcf0862c2e28e2d86802488317d2a90bedd151776",
+    "bytes": 1464
+  },
+  {
+    "path": "macos/TokenKickKit/Tests/TokenKickKitTests/Fixtures/reset_log.json",
+    "sha256": "1af769f2b7daa3f132c86ea5ca6a8e62a69e6c8a9748ea0c7e480f07812866ee",
+    "bytes": 609
+  },
+  {
+    "path": "macos/TokenKickKit/Tests/TokenKickKitTests/Fixtures/schedule_show.json",
+    "sha256": "3e4f717869b6e6a1e632702589a3ce706f479c90b92d7481e4668fb6b3c28113",
+    "bytes": 636
+  },
+  {
+    "path": "macos/TokenKickKit/Tests/TokenKickKitTests/Fixtures/snapshot.json",
+    "sha256": "7f10ef61b8f1a3ba1c66a60d5061e8ba09f269116e64bc75ec2caebb6a96c7df",
+    "bytes": 4072
+  },
+  {
+    "path": "macos/TokenKickKit/Tests/TokenKickKitTests/Fixtures/usage_error.json",
+    "sha256": "b4f00b6d1cb3009df1c9a5a701c6e2748ba75e9d9233537cb3f7e8d1f323c56e",
+    "bytes": 155
+  },
+  {
+    "path": "macos/TokenKickKit/Tests/TokenKickKitTests/LaunchAgentTests.swift",
+    "sha256": "caf6c3f36f35800894cf7fe73fe70bdecad9f45eff1e6eebcfb4e236c445f89f",
+    "bytes": 12352
+  },
+  {
+    "path": "macos/TokenKickKit/Tests/TokenKickKitTests/LineStreamTests.swift",
+    "sha256": "09efe5169b265bc1b3130fe8cdf8ac95963d4518ad0e02702379325ac68b7d6c",
+    "bytes": 2592
+  },
+  {
+    "path": "macos/TokenKickKit/Tests/TokenKickKitTests/ProcessOwnershipTests.swift",
+    "sha256": "d1ac1116bf2d0cd3f641424ad60dee52b72c8d2383bc6050b7a6fe3d858f65c3",
+    "bytes": 3028
+  },
+  {
+    "path": "macos/TokenKickKit/Tests/TokenKickShellTests/AccountsAndNotificationsTests.swift",
+    "sha256": "48e2ae9f7e774ad05176c73b603c0b8ff9831725e9c4a3c312a348a614ddecce",
+    "bytes": 20320
+  },
+  {
+    "path": "macos/TokenKickKit/Tests/TokenKickShellTests/AdvancedTests.swift",
+    "sha256": "501027da95bd73b37b2e27568125bb4bf37f2355410561ba5bbafae352f2273e",
+    "bytes": 15239
+  },
+  {
+    "path": "macos/TokenKickKit/Tests/TokenKickShellTests/DaemonPresentationTests.swift",
+    "sha256": "0a8fb8b8539d6787e9033685cb0c69f1ee18d1aa6f7a78ddbb610a76aef002ac",
+    "bytes": 3745
+  },
+  {
+    "path": "macos/TokenKickKit/Tests/TokenKickShellTests/DaemonViewModelTests.swift",
+    "sha256": "5f916a326fd5d19f49e380d6754c6e73a2df64f24199c6cc43778fa9c0a02801",
+    "bytes": 11054
+  },
+  {
+    "path": "macos/TokenKickKit/Tests/TokenKickShellTests/HistoryAndDiagnosticsTests.swift",
+    "sha256": "de197e189dac9ccb01740baf9787f73d5ac13cb23f239f0933dcd4f2b78658bc",
+    "bytes": 14715
+  },
+  {
+    "path": "macos/TokenKickKit/Tests/TokenKickShellTests/KickTests.swift",
+    "sha256": "b95b801fca99b682b8896d10fa62efd765f98f7700955a3beb063f0a8931dae1",
+    "bytes": 16469
+  },
+  {
+    "path": "macos/TokenKickKit/Tests/TokenKickShellTests/NavigationAndSettingsTests.swift",
+    "sha256": "d482f7e4df2101ee3409837b5b4929ef910cdebfddb8142ce9fcbb2c469e97d9",
+    "bytes": 6277
+  },
+  {
+    "path": "macos/TokenKickKit/Tests/TokenKickShellTests/PlannerScheduleTests.swift",
+    "sha256": "5109dc85a21e1f33c05e02a8dfe227cca6aea729f08286fb9134d576de878a9e",
+    "bytes": 23019
+  },
+  {
+    "path": "macos/TokenKickKit/Tests/TokenKickShellTests/PopoverModelTests.swift",
+    "sha256": "13f616e83f90ed6d01207a3769f3c1bc9b1f2950525ad8bc232921f643ed35a3",
+    "bytes": 5604
+  },
+  {
+    "path": "macos/TokenKickKit/Tests/TokenKickShellTests/SetupAndFirstRunTests.swift",
+    "sha256": "c7835e7911757e4a8ef792960dbfb70bf83fc176b6ecac673959d4c8aabd9436",
+    "bytes": 9384
+  },
+  {
+    "path": "macos/TokenKickKit/Tests/TokenKickShellTests/ShellFixtures.swift",
+    "sha256": "b24797535ba793354d12bbb5dfa7bcc6d3c48a318e22ccb45a67e43a312d3df2",
+    "bytes": 8051
+  },
+  {
+    "path": "macos/TokenKickKit/Tests/TokenKickShellTests/SnapshotStoreTests.swift",
+    "sha256": "f530fd10f4bf7fcb776a83cbc426e1af95a9c59900e6aa0ccaeae0c07fb321c5",
+    "bytes": 4347
+  },
+  {
+    "path": "macos/TokenKickKit/Tests/TokenKickShellTests/WarningDerivationTests.swift",
+    "sha256": "935c3148fa9c92d7592b9bf1080266ca17fa97979e4307e05966ade2b31f5b95",
+    "bytes": 5845
+  },
+  {
+    "path": "packaging/macos/TokenKick.entitlements",
+    "sha256": "fc9203dd9db026ae6c07b492e7326c2383a15de9d97137191f297ffebc867a00",
+    "bytes": 490
+  },
+  {
+    "path": "packaging/macos/prepare_tkicons_icon.swift",
+    "sha256": "22069b8f15f8e63750e8e9300ee4a7a3e622f73583ecc9cbe779a2015c2990c5",
+    "bytes": 2946
+  },
+  {
+    "path": "packaging/macos/render_tokenkick_icon.swift",
+    "sha256": "26784d8fc7ebe802cfa5fbba317a1d22c8b934a74748c9a7f0aaa0d701db1807",
+    "bytes": 2335
+  },
+  {
+    "path": "pyproject.toml",
+    "sha256": "298813062c833be2c595a7866b7220546cfd0566bf78a7c9a4764017ee7cb0b3",
+    "bytes": 1957
+  },
+  {
+    "path": "scripts/assemble-macos-app.sh",
+    "sha256": "9c101fa79ee046d29f88cb4e200146da626473c72a0953d11956d0aa7d44d43c",
+    "bytes": 2881
+  },
+  {
+    "path": "scripts/build-bundled-tk.sh",
+    "sha256": "064a1a472529d9c51c513d3da8f95fc7975b420ad5870deb85770d3241b6180c",
+    "bytes": 2843
+  },
+  {
+    "path": "scripts/build-swift-app.sh",
+    "sha256": "d57b24f7110d6294a6f48b273be7fc72fcf5b3a7d90e91d082f323eb2d4b78b0",
+    "bytes": 1004
+  },
+  {
+    "path": "scripts/create-local-dmg.sh",
+    "sha256": "5e6a1733b8d62745cba1ab6b1b66d4923b3f3480be3aea93778395c3f1ae9be4",
+    "bytes": 2415
+  },
+  {
+    "path": "scripts/create-public-export.py",
+    "sha256": "29a4ee518089f4482479b8f3f5adb2f61c6749749235976fb9bfc59435c04f35",
+    "bytes": 1432
+  },
+  {
+    "path": "scripts/create-public-export.sh",
+    "sha256": "45aabd19bf503aeac13f2fae64323c232f3aa905be74282ac817ae58a3f6ced5",
+    "bytes": 348
+  },
+  {
+    "path": "scripts/find-macos-mach-o.sh",
+    "sha256": "1ce12c41623d7ee406fc71dd99e3672826ff589490f643c2cdb729f15e6a027a",
+    "bytes": 527
+  },
+  {
+    "path": "scripts/generate-macos-icon.sh",
+    "sha256": "2bff4940729ffe690758de01ee8f39f29ae34415e33c395e70fb02c1852206c3",
+    "bytes": 2260
+  },
+  {
+    "path": "scripts/generate-swift-fixtures.sh",
+    "sha256": "33bb5d20746f95fc4a59c0921053105303ff83cdce09e517c52e694ceaf1e5d7",
+    "bytes": 5749
+  },
+  {
+    "path": "scripts/notarize-macos-dmg.sh",
+    "sha256": "c0a4f1250b49e40c92b547c2ff108a34e0fb399b57ff84d7ba9fb700e0861c04",
+    "bytes": 1343
+  },
+  {
+    "path": "scripts/package-local-macos-app.sh",
+    "sha256": "26045aa979e2e4ea5842e40d03a825aae1f5702224e802a6e3695bfd9243c4bf",
+    "bytes": 459
+  },
+  {
+    "path": "scripts/package-public-macos-app.sh",
+    "sha256": "b6ff6d94a28a6fa58d4f45fb73dc163d02cf792a45e6d8eb3bfe35a6dc8ac460",
+    "bytes": 2107
+  },
+  {
+    "path": "scripts/pyinstaller_entry.py",
+    "sha256": "c765d279851ed3e6504df58d05b0c9e91c4a483af7f7e28d8bd1c52cac1c5615",
+    "bytes": 263
+  },
+  {
+    "path": "scripts/render-readme-demo.py",
+    "sha256": "b4d0f36f04f1039ab0d028920eb07f01d7f2ff9acd0e38278bb65cc47eadca78",
+    "bytes": 14774
+  },
+  {
+    "path": "scripts/sign-local-macos-app.sh",
+    "sha256": "42d3aa359bdd441663c67e13e6e9f5d2008f08caa5f80b31295f62fb7a964054",
+    "bytes": 604
+  },
+  {
+    "path": "scripts/sign-macos-app.sh",
+    "sha256": "f60c0cd283dc10b9dc85147103925c6d3fbd94fc6934ee643cf40684d58c764d",
+    "bytes": 2063
+  },
+  {
+    "path": "scripts/sign-macos-dmg.sh",
+    "sha256": "aa84c84520665a62f96a433dec029660709bb74c77edb4987716ff62ecf985b3",
+    "bytes": 1117
+  },
+  {
+    "path": "scripts/staple-and-verify-macos-package.sh",
+    "sha256": "a30c065b95a526042b20336b0b24abfe05284be497e4e460cd8f2b3c22242aeb",
+    "bytes": 1355
+  },
+  {
+    "path": "scripts/verify-macos-package.sh",
+    "sha256": "35d38b8c807a93f997986fbdd58bd74828bca52fabd3913792c4de4c7d2aa20d",
+    "bytes": 1929
+  },
+  {
+    "path": "scripts/verify-package-resources.py",
+    "sha256": "3494a2b611727c68a79956b7357fd55bcec778589c52e563a8deda42f852220a",
+    "bytes": 2121
+  },
+  {
+    "path": "test_account_presentation.py",
+    "sha256": "2ae820987a6538278e367c6c8ca30b83d44534d63fee5dacfeadf9192aa5eef1",
+    "bytes": 6858
+  },
+  {
+    "path": "test_antigravity_automation.py",
+    "sha256": "f8fd39fa0bea7b18c3b7e2a81e6a97dea2668cb4b50330cebdaa05c0f6b3e6a3",
+    "bytes": 24946
+  },
+  {
+    "path": "test_antigravity_windows.py",
+    "sha256": "81391442f9514be035a300b873f1ec1d1bca078b040c1314efbfdb8973582a21",
+    "bytes": 18746
+  },
+  {
+    "path": "test_app_mode.py",
+    "sha256": "487aae352c096405723cedd44b583560787ece517be6137453251927529cd006",
+    "bytes": 53994
+  },
+  {
+    "path": "test_claude_monitoring.py",
+    "sha256": "26c0b452590f1baff0c94db4e469f67dea10cc850a918abda462b79ac25fd8ed",
+    "bytes": 18391
+  },
+  {
+    "path": "test_claude_setup.py",
+    "sha256": "4d2fb14f6886297862f9218eef0319c453c28b3153299c66d7cd2018548e80a9",
+    "bytes": 2226
+  },
+  {
+    "path": "test_cli.py",
+    "sha256": "c96e64c2728f29805411af72c4edb2656891547fa1149cd682a0370dbcbbc44e",
+    "bytes": 970358
+  },
+  {
+    "path": "test_codex_limits.py",
+    "sha256": "a2b73fedaecea41095fc61070778695087dc0fb58a9c85156a428a7ff904fdc7",
+    "bytes": 18879
+  },
+  {
+    "path": "test_codex_surface_patterns.py",
+    "sha256": "0d9e94afa7e33b6dbcf44a9f27f74fc4044b7cc09cbe72d7e4a64794245c99c7",
+    "bytes": 5754
+  },
+  {
+    "path": "test_codex_surface_stats.py",
+    "sha256": "0dd0cb2628a849f95437702da2bfa4fcb40e46559b4d042e49a3d2bfde5a2836",
+    "bytes": 14421
+  },
+  {
+    "path": "test_consent.py",
+    "sha256": "f76b936903a083fc77bae918f47692a106fbfa45f107c5f5f15bd0f58c63d813",
+    "bytes": 2291
+  },
+  {
+    "path": "test_direct.py",
+    "sha256": "333bd6e0d5c8c78d01862c290bc332785d175bef92e5c3b8ece965e7547f29d2",
+    "bytes": 2357
+  },
+  {
+    "path": "test_docs.py",
+    "sha256": "2a5d19776104ddf2add7affec1d2c1ee0ae8597e43dfd7b316faa956d405eea8",
+    "bytes": 7499
+  },
+  {
+    "path": "test_doctor.py",
+    "sha256": "88a4fe3c48f5a2def96e54254347837b36a2d7bf009d0cfc449ac4981d5220e7",
+    "bytes": 34525
+  },
+  {
+    "path": "test_hardening.py",
+    "sha256": "621b39a325c3712a45e3a0482f8d0741f8bcbe97221e263fbecbbf2e078c0406",
+    "bytes": 25031
+  },
+  {
+    "path": "test_kicker.py",
+    "sha256": "9137e01c20f96fd1590310597f928264f229886f56baeb15bf14d68297ba1327",
+    "bytes": 17153
+  },
+  {
+    "path": "test_mcp_core.py",
+    "sha256": "017be33c8ffc9713f85e513a3cfa6bf1d59ae31c592ddd2dd6f7565a66088a66",
+    "bytes": 22705
+  },
+  {
+    "path": "test_mcp_setup.py",
+    "sha256": "f301f5e6eebaea7c0802cdaeec722d063c6a38363b33fcad9df86ee658ac10b3",
+    "bytes": 9793
+  },
+  {
+    "path": "test_model_selection.py",
+    "sha256": "127b4235be9761b3fa4e399d508c708960c82b02ecde58580beedf8b9b3ebb56",
+    "bytes": 11887
+  },
+  {
+    "path": "test_models.py",
+    "sha256": "4530648acae27334b14cd11a92309f30176cf1c220660de9e883a58bce8fca89",
+    "bytes": 34908
+  },
+  {
+    "path": "test_notification_settings.py",
+    "sha256": "64a82572cc5de0d986ca7fc6f7c55879cd4c0580f93134919d492d135cc0331e",
+    "bytes": 14374
+  },
+  {
+    "path": "test_notifier.py",
+    "sha256": "5d895223d1141b5dc30f7035f93027176ed83afd54e42fcc29b74ed960dbe8bb",
+    "bytes": 17345
+  },
+  {
+    "path": "test_orchestration.py",
+    "sha256": "a6dff8c5e0ab29c3f53a9fa887fdadf825298e6c785a54bac6fd27bd89932ea1",
+    "bytes": 42088
+  },
+  {
+    "path": "test_reset_calendar.py",
+    "sha256": "90b2a06904451ee6c9059096253bcde6a2a36e81068f5cbc595da98cfa56d9f5",
+    "bytes": 10021
+  },
+  {
+    "path": "test_reset_defense.py",
+    "sha256": "d203e8f64178ebc50b48dda83837aa6ae133345c3ac00168c16c10f45c773f1c",
+    "bytes": 26246
+  },
+  {
+    "path": "test_scheduling.py",
+    "sha256": "112c9c0f8aebbf34f3a439dbe69ac2d985996608ac8ac8a8b5f65bba5322cda0",
+    "bytes": 20799
+  },
+  {
+    "path": "test_selection_menus.py",
+    "sha256": "1c691b507937719482b226fea4360c07f666148dd0a9d30a9c44689a63e0178f",
+    "bytes": 11279
+  },
+  {
+    "path": "test_sources.py",
+    "sha256": "9801d11bdc955da09bf5abddb8cc81760a7ea41daae1233a8eb0460ce35723b8",
+    "bytes": 150985
+  },
+  {
+    "path": "test_stagger.py",
+    "sha256": "67e83bbe3fd90ae889e604e62d1dd8ea06f57ebd0c31bbf7bf03f48eda339894",
+    "bytes": 27705
+  },
+  {
+    "path": "test_state_io.py",
+    "sha256": "62f40ba910f66f82227eaf1292b68a5bf2f57cb0464c6af569ada44f31fe533b",
+    "bytes": 7182
+  },
+  {
+    "path": "test_telegram_remote.py",
+    "sha256": "10b20866560a9a11ea0e0d07e6aceb22536336d1f0d132dcc7294283f5715f08",
+    "bytes": 12624
+  },
+  {
+    "path": "tokenkick-telegram@.service",
+    "sha256": "18b014fc71cec660e3ec8abb5ca3cd2512c3a4994f326b5415398f4fa71d110a",
+    "bytes": 346
+  },
+  {
+    "path": "tokenkick/__init__.py",
+    "sha256": "6a920a73ba667c4513111421589f86df71fa9a0536a2878c3464a426cbc17e06",
+    "bytes": 189
+  },
+  {
+    "path": "tokenkick/action_state.py",
+    "sha256": "404d99cb8568238e994dbf0f2b85f98ae1621040cd439f0f1a8af2cff8445777",
+    "bytes": 1393
+  },
+  {
+    "path": "tokenkick/antigravity.py",
+    "sha256": "a51c435b56c35590b94cf1d5a4763db34645c74b5112e8298d58e21b03abdd8e",
+    "bytes": 30776
+  },
+  {
+    "path": "tokenkick/antigravity_automation.py",
+    "sha256": "cfa7860fd0032fd8a0282985fc418bf565c0f3a87e9bd89ff0758bb69ffd8fb9",
+    "bytes": 4836
+  },
+  {
+    "path": "tokenkick/antigravity_stagger.py",
+    "sha256": "4973654e252e5cc239437f427dfd51eba21988e6e9f489ee0fa868e92c3c0fb9",
+    "bytes": 4059
+  },
+  {
+    "path": "tokenkick/antigravity_windows.py",
+    "sha256": "90b461da22814cfaea8a836f3392eedcb8df5da4b7aed0e656fc6dbb80c84ddc",
+    "bytes": 5292
+  },
+  {
+    "path": "tokenkick/app_commands.py",
+    "sha256": "d5b5c999d1cea5e9625bdea282a79297453651e0efc08f135771caef3a875f92",
+    "bytes": 20636
+  },
+  {
+    "path": "tokenkick/app_mode.py",
+    "sha256": "6eff7ef0cb3a9eef22292a0fef7176d4d12a172582ebeb28990b1aff2afff7c5",
+    "bytes": 2632
+  },
+  {
+    "path": "tokenkick/claude_monitoring.py",
+    "sha256": "88f9ea2adb8ce42e6826bcbd80a275ccffba0ec0e4ec125d1ba53df25523e053",
+    "bytes": 3492
+  },
+  {
+    "path": "tokenkick/claude_setup.py",
+    "sha256": "e521ba0fc70ab19706709d3bc427f1dd214106270bdbf0097b2bcad71d88754c",
+    "bytes": 1489
+  },
+  {
+    "path": "tokenkick/cli.py",
+    "sha256": "f3e502d7e06e9722ff1ab4a090586329df6a43ad79dc642740d4ebdadef79dc0",
+    "bytes": 567424
+  },
+  {
+    "path": "tokenkick/codex_limits.py",
+    "sha256": "5c42252d364bbbf54acffd24c66561d7b3a5317413fe479c0492af10baf23952",
+    "bytes": 3185
+  },
+  {
+    "path": "tokenkick/codex_surface_patterns.py",
+    "sha256": "c962fab712a5593c31288178a6634a517ba3b8452306981b3e893088f07fa5c3",
+    "bytes": 16419
+  },
+  {
+    "path": "tokenkick/codex_surface_stats.py",
+    "sha256": "9b010d368a3372444da9fabb058fcef78bb759a817bd2c3553da3b5d0a4cd566",
+    "bytes": 28874
+  },
+  {
+    "path": "tokenkick/codexbar_source.py",
+    "sha256": "43c3b5d86a2a976be2a49dd5bc8b75c9bd4b427d014f71099a3c7fc89045468d",
+    "bytes": 35881
+  },
+  {
+    "path": "tokenkick/consent.py",
+    "sha256": "397f2efd1a8d7ddfc979a32c797e9645c574f252217ddc14f1314213604be7cd",
+    "bytes": 3325
+  },
+  {
+    "path": "tokenkick/direct.py",
+    "sha256": "028449e43df7f045d9cde7716c2ab70afea00ed9a7d8f83235a0fa460ad0ffbe",
+    "bytes": 14677
+  },
+  {
+    "path": "tokenkick/discovery.py",
+    "sha256": "15ecd7a8a2da815bcc35d209a8e4589a27099255b21b98f9d2a974b96611fbe1",
+    "bytes": 32954
+  },
+  {
+    "path": "tokenkick/doctor.py",
+    "sha256": "041a55765a2f98bb6bbaaf037faf3090794254586fc3f0b8d0e98b4128198970",
+    "bytes": 57873
+  },
+  {
+    "path": "tokenkick/interactive.py",
+    "sha256": "5575693302bd3e572f1d7a7140c82af34f5b65856f6aecf376372170e2225642",
+    "bytes": 129298
+  },
+  {
+    "path": "tokenkick/kicker.py",
+    "sha256": "8895da9dd0dab6761ea1a3c400768d9ed219b73889089c2fea4c05852c40627d",
+    "bytes": 26808
+  },
+  {
+    "path": "tokenkick/mcp_core.py",
+    "sha256": "e488004d427397eafed21ab4f428ba698ce251654f11b7e4e44018d3e167fc7e",
+    "bytes": 57498
+  },
+  {
+    "path": "tokenkick/mcp_server.py",
+    "sha256": "1381ec9dc0c41f7c948bfb0e1844bf61f0a6ab016fb24246e2685d53430e5041",
+    "bytes": 14969
+  },
+  {
+    "path": "tokenkick/mcp_setup.py",
+    "sha256": "af9baf98630f1049c52d1fd688a9237ccec33198d742495baffb9eab8efeb851",
+    "bytes": 29889
+  },
+  {
+    "path": "tokenkick/migrations.py",
+    "sha256": "03e1c232c499cee86163aff748a73dca27a137c540bed867f83371cbcebd590b",
+    "bytes": 35798
+  },
+  {
+    "path": "tokenkick/model_selection.py",
+    "sha256": "cfba1632aeb3c35f10e118c9be390304c17429c0bb9303f953664743a60cbf89",
+    "bytes": 4582
+  },
+  {
+    "path": "tokenkick/models.py",
+    "sha256": "25f49be36fecf9e4692664f585b1aa7e9947f66dc345a74bf90372e03a9a1279",
+    "bytes": 54798
+  },
+  {
+    "path": "tokenkick/notifier.py",
+    "sha256": "e059129fc1d543c64f739c82cae6d5be2d6cea9aaa6b957ccbd3b034f8e71ae8",
+    "bytes": 14806
+  },
+  {
+    "path": "tokenkick/orchestration.py",
+    "sha256": "6c1fb959bc6a242f3104d4b234787dbada6b3fa2f5efb1179159bb73035fc0eb",
+    "bytes": 54986
+  },
+  {
+    "path": "tokenkick/recovery_hints.py",
+    "sha256": "1437faf4741ddc66e2a6b1851eca7b92750d4b210cb35796bd69075285ea8980",
+    "bytes": 2833
+  },
+  {
+    "path": "tokenkick/reservation_advisories.py",
+    "sha256": "baa1778337e890579db073608bfb61ef8fff6c8d14cbc8c404e540fc50332349",
+    "bytes": 13222
+  },
+  {
+    "path": "tokenkick/reset_calendar.py",
+    "sha256": "6184230a794090684e9bc45f2d80c884b6fcb1d796fbcffbc7640dbd1ec276e5",
+    "bytes": 17208
+  },
+  {
+    "path": "tokenkick/reset_defense.py",
+    "sha256": "a7f0739d600ea333407066f0eef9de7f286a1efac3cdbe0fb29042046ddee043",
+    "bytes": 36484
+  },
+  {
+    "path": "tokenkick/scheduling.py",
+    "sha256": "7d79cb98a868754a4b588e23f8666b9810e27626760a7eb25b0b9f9949f48bb0",
+    "bytes": 30760
+  },
+  {
+    "path": "tokenkick/source_utils.py",
+    "sha256": "0c324d43fb05c357a8ccb0dd2542b6f320e40e7db5ec3a90b794846efaacc4a5",
+    "bytes": 3626
+  },
+  {
+    "path": "tokenkick/sources.py",
+    "sha256": "ba120ae358aad6a100cfb6a14c0da210eb425bf8f6b39498e9d7bb9e0feeba5f",
+    "bytes": 117101
+  },
+  {
+    "path": "tokenkick/stagger.py",
+    "sha256": "d89fdd79482df33053877afaa375942cf7ebd038b38fbed20bf524b9e2dd5f5e",
+    "bytes": 30490
+  },
+  {
+    "path": "tokenkick/stagger_commands.py",
+    "sha256": "ad46d87bc3c690039554dad2fe65a2221ab11017f6047d3cf016f2d557059bfc",
+    "bytes": 3526
+  },
+  {
+    "path": "tokenkick/state_io.py",
+    "sha256": "ce877727fc848677c063522ed57f462bef5bafca1c03b5cfe8509f75810a78ed",
+    "bytes": 3641
+  },
+  {
+    "path": "tokenkick/status_cache.py",
+    "sha256": "30bf17c3fb7c3536a7109fdb200d5838d0e84d1c4af36136afd388f9add3c862",
+    "bytes": 41035
+  },
+  {
+    "path": "tokenkick/status_rendering.py",
+    "sha256": "969f4afa0563c86253b85891e02640b8ce7c73dadd34cc490b35b01455950b25",
+    "bytes": 46227
+  },
+  {
+    "path": "tokenkick/telegram_remote.py",
+    "sha256": "a93956004c856af7c0a37f756efe2bcc85c1c2999ebe3dbae3e5ed65cacc26ec",
+    "bytes": 21677
+  },
+  {
+    "path": "tokenkick/versioning.py",
+    "sha256": "330f7dccc8b9f21b53ab12ae87f85a7ec3e44922c83584acb92e2898e559268f",
+    "bytes": 3302
+  },
+  {
+    "path": "tokenkick@.service",
+    "sha256": "1007a5f81a8c59a0be04d3fd7b8bc2d92e5804c64a7d325e58ab99ac26ae7672",
+    "bytes": 323
+  }
+]

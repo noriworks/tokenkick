@@ -28,7 +28,7 @@
   <text x="1012" y="236" font-size="13" font-weight="700" fill="#6e6e73" font-family="-apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif">Used</text>
   <text x="1130" y="236" font-size="13" font-weight="700" fill="#6e6e73" font-family="-apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif">Action</text>
   <line x1="308" y1="258" x2="1344" y2="258" stroke="#e1e1e6"/>
-  <circle cx="342" cy="307" r="8" fill="#34c759"/><text x="364" y="313" font-size="16" font-weight="650" fill="#1d1d1f" font-family="-apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif">codex-spark (lab)</text>
+  <circle cx="342" cy="307" r="8" fill="#34c759"/><text x="364" y="313" font-size="16" font-weight="650" fill="#1d1d1f" font-family="-apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif">codex (reserve)</text>
   <text x="604" y="313" font-size="16" font-weight="400" fill="#137333" font-family="-apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif">Weekly ready</text><text x="792" y="301" font-size="14" font-weight="400" fill="#6e6e73" font-family="-apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif">weekly in 6d 7h</text><text x="792" y="325" font-size="14" font-weight="400" fill="#137333" font-family="-apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif">session ready</text>
   <text x="1012" y="313" font-size="16" font-weight="650" fill="#137333" font-family="-apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif">8%</text><text x="1130" y="313" font-size="16" font-weight="650" fill="#1d1d1f" font-family="-apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif">Kick now</text>
   <line x1="334" y1="354" x2="1318" y2="354" stroke="#eeeeF2"/>
@@ -41,7 +41,7 @@
   <text x="1012" y="509" font-size="16" font-weight="650" fill="#185abc" font-family="-apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif">42%</text><text x="1130" y="509" font-size="16" font-weight="400" fill="#6e6e73" font-family="-apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif">Use if needed</text>
   <rect x="308" y="660" width="492" height="170" rx="12" fill="#ffffff" stroke="#d7d7dc"/>
   <text x="334" y="699" font-size="18" font-weight="750" fill="#1d1d1f" font-family="-apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif">Next action</text>
-  <text x="334" y="731" font-size="15" font-weight="400" fill="#3a3a3c" font-family="-apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif">Kick codex-spark (lab) now, or let the daemon schedule it.</text>
+  <text x="334" y="731" font-size="15" font-weight="400" fill="#3a3a3c" font-family="-apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif">Kick codex (reserve) now, or let the daemon schedule it.</text>
   <rect x="334" y="762" width="132" height="30" rx="15" fill="#1d1d1f" stroke="none"/><text x="349" y="783" font-size="13" font-weight="600" fill="#ffffff" font-family="-apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif">Kick now</text>
   <rect x="482" y="762" width="170" height="30" rx="15" fill="#f2f2f4" stroke="#d1d1d6"/><text x="497" y="783" font-size="13" font-weight="600" fill="#1d1d1f" font-family="-apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif">Open planner</text>
   <rect x="832" y="660" width="512" height="170" rx="12" fill="#ffffff" stroke="#d7d7dc"/>

@@ -96,9 +96,10 @@ public struct NotificationsScreen: View {
 
     @ViewBuilder
     private func accountRow(_ row: AccountConfigRow) -> some View {
+        let preference = accounts.notifications?.accounts.first { $0.label == row.label }
         let current = NotificationRoute.from(
-            routeDisplay: row.list.notificationsRoute,
-            enabled: row.list.notificationsEnabled
+            backends: preference?.backends,
+            enabled: preference?.notificationsEnabled ?? row.list.notificationsEnabled
         )
         VStack(alignment: .leading, spacing: 4) {
             HStack {

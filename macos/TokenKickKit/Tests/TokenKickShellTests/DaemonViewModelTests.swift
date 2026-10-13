@@ -184,7 +184,7 @@ final class DaemonViewModelTests: XCTestCase {
 
         XCTAssertEqual(
             agent.calls.filter { $0 != "status" },
-            ["install", "startAgent(takeover:false)"]
+            ["startAgent(takeover:false)"]
         )
         guard case .finished(_, let success, _) = model.phase else {
             return XCTFail("expected finished phase")
@@ -264,7 +264,7 @@ final class DaemonViewModelTests: XCTestCase {
 
         XCTAssertEqual(
             agent.calls.filter { $0 != "status" },
-            ["install", "startAgent(takeover:true)"]
+            ["startAgent(takeover:true)"]
         )
         guard case .finished(let action, let success, _) = model.phase else {
             return XCTFail("expected finished phase")

@@ -596,6 +596,7 @@ final class ScheduleViewModelTests: XCTestCase {
             "--json-output",
         ])
 
+        model.selectedScope = "default" // Confirmation retains the original target.
         await model.confirmPendingAction()
 
         XCTAssertEqual(service.disableCalls, ["codex (a)"])

@@ -79,16 +79,20 @@ public struct PendingKickRow: Equatable, Sendable {
     public let accountLabel: String
     public let kickAt: Date
     public let reason: String
+    public let gaveUp: Bool
+    public let workEnd: Date?
 
     public init?(json: TKJSONValue) {
         guard
             let label = json["account_label"]?.stringValue,
-            let kickAtText = json["kick_at"]?.stringValue,
+            let kickAtText = json["next_retry_at"]?.stringValue ?? json["kick_at"]?.stringValue,
             let kickAt = parseUTCISO(kickAtText)
         else { return nil }
         self.accountLabel = label
         self.kickAt = kickAt
         self.reason = json["reason"]?.stringValue ?? "scheduled"
+        self.gaveUp = json["gave_up_at"]?.stringValue != nil
+        self.workEnd = json["work_end"]?.stringValue.flatMap(parseUTCISO)
     }
 
     public static func rows(from snapshot: TKSnapshotPayload?) -> [PendingKickRow] {

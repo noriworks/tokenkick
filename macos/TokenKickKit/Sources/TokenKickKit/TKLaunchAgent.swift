@@ -85,12 +85,15 @@ public struct TKLaunchAgentStatus: Equatable, Sendable {
 }
 
 public enum TKLaunchAgentError: Error, CustomStringConvertible {
+    case ownershipUnavailable
     case takeoverRequired(pid: Int?, executable: String?)
     case takeoverStopFailed(message: String)
     case launchctlFailed(arguments: [String], exitCode: Int32, stderr: String)
 
     public var description: String {
         switch self {
+        case .ownershipUnavailable:
+            return "Daemon ownership is unavailable; refresh before starting the login service."
         case .takeoverRequired(let pid, let executable):
             let pidText = pid.map(String.init) ?? "unknown"
             return "A non-app TokenKick daemon is already running (pid \(pidText), executable \(executable ?? "unknown"))."
@@ -114,19 +117,22 @@ public struct TKLaunchAgentManager {
     public let launchctl: any TKLaunchctl
     public let daemonClient: (any TKDaemonCommanding)?
     public let fileManager: FileManager
+    public let extraPathEntries: [String]
 
     public init(
         runtime: URL,
         home: URL = URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true),
         launchctl: any TKLaunchctl = TKSystemLaunchctl(),
         daemonClient: (any TKDaemonCommanding)? = nil,
-        fileManager: FileManager = .default
+        fileManager: FileManager = .default,
+        extraPathEntries: [String] = []
     ) {
         self.runtime = runtime
         self.home = home
         self.launchctl = launchctl
         self.daemonClient = daemonClient
         self.fileManager = fileManager
+        self.extraPathEntries = extraPathEntries
     }
 
     public var label: String { Self.label }
@@ -169,7 +175,7 @@ public struct TKLaunchAgentManager {
         let executableMismatch = daemon?.running == true && daemon?.executableMatch == false
         let versionMismatch = daemon?.running == true && daemon?.versionMatch == false
         let stalePidfile = daemon?.stalePidfile == true
-        let needsRepair = !installed || !helperExists || !runtimePathMatches || !plistProgramMatchesHelper
+        let needsRepair = !installed || !helperExists || !runtimePathMatches || !plistProgramMatchesHelper || !environmentMatches()
         return TKLaunchAgentStatus(
             label: label,
             installed: installed,
@@ -204,11 +210,16 @@ public struct TKLaunchAgentManager {
         daemon: TKDaemonStatus? = nil,
         takeover: Bool = false
     ) async throws -> TKLaunchAgentStatus {
+        guard daemon != nil else { throw TKLaunchAgentError.ownershipUnavailable }
         if classifyDaemon(daemon) == .appManaged {
             try writeManagedFiles()
             return await status(daemon: daemon)
         }
         try await prepareForStart(daemon: daemon, takeover: takeover)
+        let files = [plistURL, helperURL, runtimePathURL]
+        let saved = files.map { try? Data(contentsOf: $0) }
+        let wasLoaded = await launchAgentLoaded()
+        do {
         try writeManagedFiles()
         let bootstrap = try await launchctl.run(["bootstrap", launchDomain, plistURL.path])
         if bootstrap.exitCode != 0, !isAlreadyBootstrapped(bootstrap.stderrText) {
@@ -227,6 +238,15 @@ public struct TKLaunchAgentManager {
             )
         }
         return await status()
+        } catch {
+            if !wasLoaded { _ = try? await launchctl.run(["bootout", serviceTarget]) }
+            for (url, content) in zip(files, saved) {
+                if let content { try content.write(to: url, options: .atomic) }
+                else if fileManager.fileExists(atPath: url.path) { try fileManager.removeItem(at: url) }
+            }
+            if saved[1] != nil { try fileManager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: helperURL.path) }
+            throw error
+        }
     }
 
     public func stop() async throws -> TKLaunchAgentStatus {
@@ -264,6 +284,7 @@ public struct TKLaunchAgentManager {
             "EnvironmentVariables": [
                 "PATH": TKEnvironment.augmentedPath(
                     basePath: "/usr/bin:/bin:/usr/sbin:/sbin",
+                    additions: TKEnvironment.defaultPathAdditions + extraPathEntries,
                     home: home.path
                 ),
             ],
@@ -315,7 +336,7 @@ public struct TKLaunchAgentManager {
         let configuredRuntime = readConfiguredRuntime()
         let runtimePathMatches = configuredRuntime.map { pathsMatch($0, runtime.path) } ?? false
         let plistProgramMatchesHelper = readPlistProgramArgument().map { pathsMatch($0, helperURL.path) } ?? false
-        let needsRepair = !installed || !helperExists || !runtimePathMatches || !plistProgramMatchesHelper
+        let needsRepair = !installed || !helperExists || !runtimePathMatches || !plistProgramMatchesHelper || !environmentMatches()
         return TKLaunchAgentStatus(
             label: label,
             installed: installed,
@@ -369,6 +390,15 @@ public struct TKLaunchAgentManager {
         } catch {
             return false
         }
+    }
+
+    private func environmentMatches() -> Bool {
+        guard let data = try? Data(contentsOf: plistURL),
+              let saved = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil) as? [String: Any],
+              let environment = saved["EnvironmentVariables"] as? [String: String],
+              let expected = plistDictionary()["EnvironmentVariables"] as? [String: String]
+        else { return false }
+        return environment == expected
     }
 
     private func readConfiguredRuntime() -> String? {

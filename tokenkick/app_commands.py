@@ -174,6 +174,7 @@ def build_app_snapshot() -> tuple[dict, list[str]]:
                 statuses_by_key,
                 pending,
                 now=now,
+                display_timezone=config.schedule.timezone or "UTC",
             )
         ]
     except Exception as exc:  # noqa: BLE001 — advisories must not break the snapshot
@@ -235,6 +236,7 @@ def build_app_snapshot() -> tuple[dict, list[str]]:
         },
         "daemon": daemon,
         "status": status_payload,
+        "stagger": cli._stagger_status_payload(),
         "pending_kicks": cli._pending_kicks_payload(pending),
         "schedule": schedule,
         "advisories": advisories,
