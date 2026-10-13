@@ -6,9 +6,14 @@ import errno
 import os
 import tempfile
 import time
+import threading
+from functools import wraps
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Callable, Iterator
+
+
+_lock_state = threading.local()
 
 
 class StateFileLockTimeout(TimeoutError):
@@ -30,6 +35,11 @@ def state_file_lock(
     import fcntl
 
     lock_path = state_lock_path(path)
+    key = (os.getpid(), str(lock_path.resolve()))
+    held = getattr(_lock_state, "held", set())
+    if key in held:
+        yield
+        return
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
     start = time.monotonic()
@@ -42,7 +52,12 @@ def state_file_lock(
                 if timeout is not None and time.monotonic() - start >= timeout:
                     raise StateFileLockTimeout(f"Timed out waiting for {lock_path}") from exc
                 time.sleep(poll_interval)
-        yield
+        _lock_state.held = held
+        held.add(key)
+        try:
+            yield
+        finally:
+            held.remove(key)
     finally:
         try:
             fcntl.flock(fd, fcntl.LOCK_UN)
@@ -108,3 +123,12 @@ def _fsync_directory(path: Path) -> None:
                 raise
     finally:
         os.close(fd)
+
+
+def state_transaction(function):
+    """Serialize a complete update whose first argument is its state-file path."""
+    @wraps(function)
+    def locked(path, *args, **kwargs):
+        with state_file_lock(path):
+            return function(path, *args, **kwargs)
+    return locked

@@ -160,10 +160,10 @@ def _status_cache_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def _parse_status_cache_observed_at(value: str) -> datetime | None:
+def _parse_status_cache_observed_at(value: str | None) -> datetime | None:
     try:
         return datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
-    except ValueError:
+    except (ValueError, TypeError):
         return None
 
 
@@ -475,6 +475,18 @@ def _status_cache_entry_is_stale(entry: dict, config: Config) -> bool:
         return True
     age_seconds = int((_cli()._status_cache_now() - observed).total_seconds())
     return age_seconds > config.poll_interval_minutes * 60 * 2
+
+
+def effective_cached_status(status: AccountStatus, entry: dict, config: Config) -> AccountStatus:
+    """Carry observation age and refresh failures through every cache consumer."""
+    if not _status_cache_entry_is_stale(entry, config):
+        return status
+    observed = _parse_status_cache_observed_at(_status_cache_provider_observed_at(entry))
+    age = max(0, int((_cli()._status_cache_now() - observed).total_seconds())) if observed else None
+    return replace(
+        status, stale=True, stale_seconds=age,
+        error=status.error or entry.get("refresh_error") or "Cached observation needs refresh.",
+    )
 
 
 def _status_cache_provider_observed_at(entry: dict) -> str | None:
@@ -1015,6 +1027,7 @@ def _load_status_cache_for_accounts(
         else [entry["account"] for entry in entries.values()]
     )
     statuses: list[AccountStatus] = []
+    matched_accounts: list[AccountConfig] = []
     entries_for_display: dict[str, dict] = {}
     for account in accounts_for_display:
         key = account_key_string(account)
@@ -1028,11 +1041,13 @@ def _load_status_cache_for_accounts(
                 return None
             continue
         display_status = replace(entry["status"], label=account.label)
+        display_status = effective_cached_status(display_status, entry, config or Config())
+        matched_accounts.append(account)
         statuses.append(display_status)
         entries_for_display[key] = {**entry, "account": account, "status": display_status}
     if require_all and len(statuses) != len(accounts_for_display):
         return None
-    return accounts_for_display, statuses, entries_for_display
+    return matched_accounts, statuses, entries_for_display
 
 
 def _status_cache_entry_matches_configured_account(

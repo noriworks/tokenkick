@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 import json
+import time
+import random
+from html.parser import HTMLParser
+import httpx
 import subprocess
 from dataclasses import dataclass
 from datetime import datetime
@@ -30,7 +34,11 @@ class TelegramRemoteConfigError(TelegramRemoteError):
 
 
 class TelegramRemoteAPIError(TelegramRemoteError):
-    """Raised for Telegram Bot API failures."""
+    """Raised for Telegram Bot API failures, with a bounded retry hint."""
+
+    def __init__(self, message: str, *, retry_after: float = 0) -> None:
+        super().__init__(message)
+        self.retry_after = min(300.0, max(0.0, retry_after))
 
 
 @dataclass(frozen=True)
@@ -74,13 +82,18 @@ class TelegramRemoteClient:
     def __init__(self, token: str) -> None:
         self.token = token
 
+    def _request(self, method: str, url: str, **kwargs):
+        try:
+            return getattr(httpx, method)(url, **kwargs)
+        except httpx.RequestError as exc:
+            # Exception URLs can contain the bot token. Log only the type.
+            raise TelegramRemoteAPIError(f"Telegram transport error: {type(exc).__name__}") from None
+
     def _url(self, method: str) -> str:
         return f"https://api.telegram.org/bot{self.token}/{method}"
 
     def get_webhook_info(self) -> dict:
-        import httpx
-
-        response = httpx.get(
+        response = self._request("get",
             self._url("getWebhookInfo"),
             timeout=TELEGRAM_HTTP_TIMEOUT_SECONDS,
         )
@@ -88,15 +101,13 @@ class TelegramRemoteClient:
         return result if isinstance(result, dict) else {}
 
     def get_updates(self, *, offset: int | None, timeout: int) -> list[dict]:
-        import httpx
-
         params: dict[str, object] = {
             "timeout": timeout,
             "allowed_updates": json.dumps(["message"]),
         }
         if offset is not None:
             params["offset"] = offset
-        response = httpx.get(
+        response = self._request("get",
             self._url("getUpdates"),
             params=params,
             timeout=timeout + TELEGRAM_HTTP_TIMEOUT_SECONDS,
@@ -105,12 +116,10 @@ class TelegramRemoteClient:
         return result if isinstance(result, list) else []
 
     def send_message(self, chat_id: str, text: str, *, parse_mode: str | None = None) -> None:
-        import httpx
-
-        payload = {"chat_id": chat_id, "text": truncate_telegram_reply(text)}
+        payload = {"chat_id": chat_id, "text": truncate_telegram_reply(text, html=parse_mode == "HTML")}
         if parse_mode is not None:
             payload["parse_mode"] = parse_mode
-        response = httpx.post(
+        response = self._request("post",
             self._url("sendMessage"),
             json=payload,
             timeout=TELEGRAM_HTTP_TIMEOUT_SECONDS,
@@ -122,7 +131,14 @@ def _telegram_result(response, method: str):
     status_code = getattr(response, "status_code", None)
     if status_code is None or not (200 <= int(status_code) < 300):
         detail = _response_text(response)
-        raise TelegramRemoteAPIError(f"Telegram {method} HTTP {status_code}: {detail}")
+        retry_after = 0.0
+        try:
+            retry_after = float(response.json().get("parameters", {}).get("retry_after", 0))
+        except (ValueError, TypeError, AttributeError):
+            pass
+        raise TelegramRemoteAPIError(
+            f"Telegram {method} HTTP {status_code}: {detail}", retry_after=retry_after,
+        )
     try:
         data = response.json()
     except Exception as exc:  # noqa: BLE001 - response shape is external input
@@ -269,7 +285,7 @@ def format_status_reply(
         return truncate_telegram_reply(
             "<b>TokenKick status failed</b>\n"
             f"{mode_icon} {mode_label} · <code>{html_escape(checked)}</code>\n\n"
-            f"⚠️ <i>{html_escape(_status_failure_detail(result))}</i>"
+            f"⚠️ <i>{html_escape(_status_failure_detail(result))}</i>", html=True
         )
     try:
         payload = json.loads(result.stdout)
@@ -277,13 +293,13 @@ def format_status_reply(
         return truncate_telegram_reply(
             "<b>TokenKick status failed</b>\n"
             f"{mode_icon} {mode_label} · <code>{html_escape(checked)}</code>\n\n"
-            "⚠️ <i>status command returned invalid JSON</i>"
+            "⚠️ <i>status command returned invalid JSON</i>", html=True
         )
     if not isinstance(payload, dict):
         return truncate_telegram_reply(
             "<b>TokenKick status failed</b>\n"
             f"{mode_icon} {mode_label} · <code>{html_escape(checked)}</code>\n\n"
-            "⚠️ <i>status command returned an invalid payload</i>"
+            "⚠️ <i>status command returned an invalid payload</i>", html=True
         )
     accounts = payload.get("accounts")
     if not isinstance(accounts, list):
@@ -319,7 +335,7 @@ def format_status_reply(
         )
     elif isinstance(refresh_error, str) and refresh_error:
         lines.extend(["", f"⚠️ <i>{html_escape(_fit_cell(refresh_error, 800))}</i>"])
-    return truncate_telegram_reply("\n".join(lines).rstrip())
+    return truncate_telegram_reply("\n".join(lines).rstrip(), html=True)
 
 
 def _status_failure_detail(result: StatusCommandResult) -> str:
@@ -473,11 +489,30 @@ def _compact_relative_seconds(seconds: int) -> str:
     return f"{days}d{hours_total % 24}h"
 
 
-def truncate_telegram_reply(text: str, *, limit: int = TELEGRAM_REPLY_LIMIT) -> str:
+def truncate_telegram_reply(text: str, *, limit: int = TELEGRAM_REPLY_LIMIT, html: bool = False) -> str:
     if len(text) <= limit:
         return text
-    suffix = "\n... truncated"
-    return text[: max(0, limit - len(suffix))].rstrip() + suffix
+    suffix = "\n... truncated"[:max(0, limit)]
+    budget = max(0, limit - len(suffix))
+    if html:
+        class PlainText(HTMLParser):
+            def __init__(self):
+                super().__init__(convert_charrefs=True)
+                self.parts = []
+
+            def handle_data(self, data):
+                self.parts.append(data)
+        parser = PlainText()
+        parser.feed(text)
+        parts = []
+        for char in "".join(parser.parts):
+            escaped = html_escape(char)
+            if len(escaped) > budget:
+                break
+            parts.append(escaped)
+            budget -= len(escaped)
+        return "".join(parts).rstrip() + suffix
+    return text[:budget].rstrip() + suffix
 
 
 def help_reply() -> str:
@@ -530,6 +565,7 @@ class TelegramRemoteListener:
 
     def run_forever(self) -> None:
         self.check_webhook()
+        failures = 0
         while True:
             offset = self.next_offset()
             try:
@@ -537,9 +573,15 @@ class TelegramRemoteListener:
                     offset=offset,
                     timeout=TELEGRAM_LONG_POLL_TIMEOUT_SECONDS,
                 )
-            except TelegramRemoteAPIError as exc:
-                self._log("telegram_remote_poll_error", error=str(exc))
+            except (TelegramRemoteAPIError, httpx.RequestError) as exc:
+                failures = min(failures + 1, 9)
+                delay = max(getattr(exc, "retry_after", 0), min(300, 2 ** failures))
+                delay = min(300, delay + random.uniform(0, delay * 0.1))
+                detail = str(exc) if isinstance(exc, TelegramRemoteAPIError) else type(exc).__name__
+                self._log("telegram_remote_poll_error", error=detail, retry_in_seconds=delay)
+                time.sleep(delay)
                 continue
+            failures = 0
             for update in updates:
                 update_id = update.get("update_id")
                 if not isinstance(update_id, int):

@@ -79,6 +79,7 @@ from tokenkick.cli import (
     _kick_type_for_status,
     _kick_all_enabled_accounts,
     _kick_and_notify,
+    _kick_and_notify_owned,
     _kickable_window_targets,
     _load_accounts,
     _load_account_status_pairs,
@@ -4640,6 +4641,7 @@ def test_status_summary_lists_only_fresh_kickable_accounts(monkeypatch):
 
 
 def test_status_summary_excludes_session_cooldown_accounts(monkeypatch):
+    monkeypatch.setattr("tokenkick.cli._status_cache_now", lambda: observed)
     observed = datetime(2026, 5, 22, 8, 0, tzinfo=timezone.utc)
     monkeypatch.setattr("tokenkick.cli._status_cache_observed_at", lambda: "2026-05-22T08:00:00Z")
     monkeypatch.setattr("tokenkick.cli.time.time", lambda: observed.timestamp())
@@ -7376,6 +7378,7 @@ def test_status_refresh_codex_direct_failure_flows_through_codexbar_fallback(
 ):
     observed = "2026-05-23T04:18:33Z"
     observed_epoch = datetime.fromisoformat(observed.replace("Z", "+00:00")).timestamp()
+    monkeypatch.setattr("tokenkick.cli._status_cache_now", lambda: datetime.fromtimestamp(observed_epoch, timezone.utc))
     managed_home = tmp_path / "managed-codex"
     managed_home.mkdir()
     history_dir = tmp_path / "history"
@@ -7460,6 +7463,7 @@ def test_status_refresh_codex_direct_failure_flows_through_codexbar_fallback(
 
 
 def test_status_json_account_row_includes_agent_planning_fields(monkeypatch):
+    monkeypatch.setattr("tokenkick.cli._status_cache_now", lambda: datetime(2026, 5, 24, 14, 32, tzinfo=timezone.utc))
     account = AccountConfig(
         label="codex",
         provider="codex",
@@ -7576,7 +7580,7 @@ def test_run_refreshes_and_kicks_fresh_auto_account(monkeypatch):
     assert events[0][0] == "codex"
     stagger_state = events[0][1].pop("stagger_state")
     assert isinstance(stagger_state, KickStaggerState)
-    assert events[0][1] == {"send_notification": False, "kick_type": "kick"}
+    assert events[0][1] == {"automatic": True, "send_notification": False, "kick_type": "kick"}
     assert "Refreshed 1 accounts in 2.3s" in result.output
     assert "Kicked 1 accounts" in result.output
     assert "codex — weekly window anchored" in result.output
@@ -7992,7 +7996,7 @@ def test_run_session_auto_kick_requires_session_auto_enabled(monkeypatch):
     assert calls[0][0] == "enabled"
     stagger_state = calls[0][1].pop("stagger_state")
     assert isinstance(stagger_state, KickStaggerState)
-    assert calls[0][1] == {"send_notification": False, "kick_type": "session"}
+    assert calls[0][1] == {"automatic": True, "send_notification": False, "kick_type": "session"}
     assert "enabled — session window anchored" in result.output
     assert "disabled — session auto-kick disabled" in result.output
 
@@ -8164,7 +8168,7 @@ def test_claude_predicted_due_status_stops_after_newer_direct_probe_failure():
     assert synthetic_status_reason(statuses_by_key[key]) is None
 
 
-def test_codex_predicted_due_status_replaces_failed_direct_refresh():
+def test_codex_prediction_preserves_failed_direct_refresh():
     account = AccountConfig(
         label="codex",
         provider="codex",
@@ -8202,11 +8206,10 @@ def test_codex_predicted_due_status_replaces_failed_direct_refresh():
 
     _apply_codex_predicted_session_due_statuses([account], statuses_by_key, entries)
 
-    assert statuses_by_key[key].state == AccountState.ACTIVE
-    assert statuses_by_key[key].session_resets_in_seconds == 0
-    assert statuses_by_key[key].stale is False
-    assert statuses_by_key[key].error is None
-    assert synthetic_status_reason(statuses_by_key[key]) == "codex_session_due_from_cache"
+    assert statuses_by_key[key].state == AccountState.UNKNOWN
+    assert statuses_by_key[key].stale is True
+    assert statuses_by_key[key].error == "Codex provider usage failed."
+    assert synthetic_status_reason(statuses_by_key[key]) is None
 
 
 def test_codex_predicted_due_status_waits_until_cached_reset_due():
@@ -8273,7 +8276,7 @@ def test_codex_predicted_due_status_skips_weekly_exhausted_account():
     assert statuses_by_key[key].state == AccountState.UNKNOWN
 
 
-def test_codex_predicted_due_status_allows_stale_weekly_reset_ready():
+def test_codex_prediction_rejects_stale_weekly_reset_ready():
     account = AccountConfig(
         label="codex",
         provider="codex",
@@ -8306,11 +8309,9 @@ def test_codex_predicted_due_status_allows_stale_weekly_reset_ready():
 
     _apply_codex_predicted_session_due_statuses([account], statuses_by_key, entries)
 
-    assert statuses_by_key[key].state == AccountState.ACTIVE
-    assert statuses_by_key[key].used_percent == 100.0
-    assert statuses_by_key[key].session_resets_in_seconds == 0
-    assert statuses_by_key[key].stale is False
-    assert synthetic_status_reason(statuses_by_key[key]) == "codex_session_due_from_cache"
+    assert statuses_by_key[key].state == AccountState.UNKNOWN
+    assert statuses_by_key[key].error == "refresh failed"
+    assert synthetic_status_reason(statuses_by_key[key]) is None
 
 
 def test_daemon_sleep_uses_sixty_second_floor_for_phantom_recovery():
@@ -8465,7 +8466,7 @@ def test_kick_and_notify_uses_disabled_account_notification_config(monkeypatch):
         lambda _event, notifications: observed_configs.append(notifications) or notifications.enabled,
     )
 
-    event = _kick_and_notify(
+    event = _kick_and_notify_owned(
         account,
         Config(
             accounts=[account],
@@ -8497,7 +8498,7 @@ def test_kick_and_notify_fans_out_to_account_notification_backends(monkeypatch):
         lambda _event, notifications: observed_backends.append(notifications.backend) or True,
     )
 
-    event = _kick_and_notify(
+    event = _kick_and_notify_owned(
         account,
         Config(
             accounts=[account],
@@ -8533,7 +8534,7 @@ def test_kick_and_notify_does_not_send_account_telegram_when_backend_disabled(mo
         lambda _event, notifications: observed_configs.append(notifications) or notifications.enabled,
     )
 
-    event = _kick_and_notify(
+    event = _kick_and_notify_owned(
         account,
         Config(
             accounts=[account],
@@ -14567,7 +14568,7 @@ def test_kick_and_notify_non_daemon_codex_pending_prints_confirmation_later(
     )
     monkeypatch.setattr("tokenkick.cli.append_kick_event", lambda _event: None)
 
-    event = _kick_and_notify(
+    event = _kick_and_notify_owned(
         account,
         Config(accounts=[account]),
         pre_status=pre_status,
@@ -14727,6 +14728,7 @@ def test_verify_claude_session_anchor_prefers_already_active_over_near_full_move
 
 
 def test_codex_phantom_kick_stays_unconfirmed_when_exec_reports_tokens(monkeypatch):
+    monkeypatch.setattr("tokenkick.cli._phantom_session_ready", lambda *a, **kw: True)
     recorded = []
     calls = []
     accounts = [AccountConfig(label="phantom", provider="codex")]
@@ -15152,7 +15154,7 @@ def test_kick_and_notify_notifies_only_final_codex_retry_result(monkeypatch):
         lambda event, _notifications: notified.append(event) or True,
     )
 
-    event = _kick_and_notify(
+    event = _kick_and_notify_owned(
         account,
         Config(accounts=[account], notifications=NotifyConfig(enabled=True, backend="ntfy")),
         pre_status=status,
@@ -15185,7 +15187,7 @@ def test_kick_and_notify_does_not_retry_codex_hard_failure(monkeypatch):
     monkeypatch.setattr("tokenkick.cli.kick_account", fake_kick)
     monkeypatch.setattr("tokenkick.cli.append_kick_event", lambda event: recorded.append(event))
 
-    event = _kick_and_notify(
+    event = _kick_and_notify_owned(
         account,
         Config(accounts=[account]),
         pre_status=status,
@@ -16646,7 +16648,7 @@ def test_daemon_deferred_codex_session_records_pending_confirmation_state(
         lambda *_args, **_kwargs: (True, True),
     )
 
-    event = _kick_and_notify(
+    event = _kick_and_notify_owned(
         account,
         Config(accounts=[account]),
         pre_status=pre_status,
@@ -16711,7 +16713,7 @@ def test_daemon_deferred_codex_phantom_records_pending_confirmation_state(
         lambda *_args, **_kwargs: (True, True),
     )
 
-    event = _kick_and_notify(
+    event = _kick_and_notify_owned(
         account,
         Config(accounts=[account]),
         pre_status=phantom_status,
@@ -18833,7 +18835,7 @@ def test_confirm_prompt_foregrounds_tty_process_group(monkeypatch, capsys):
     assert signal_calls[-1] == (signal.SIGTTOU, "old-handler")
 
 
-def test_wake_kicks_stale_fresh_account_without_prompt_and_logs_wake_type(monkeypatch):
+def test_wake_refuses_stale_fresh_account_without_consuming_quota(monkeypatch):
     account = AccountConfig(label="codex (work)", provider="codex")
     recorded = []
 
@@ -18854,7 +18856,7 @@ def test_wake_kicks_stale_fresh_account_without_prompt_and_logs_wake_type(monkey
     )
     monkeypatch.setattr(
         "tokenkick.cli.kick_account",
-        lambda loaded, **_kwargs: KickEvent(label=loaded.label, success=True),
+        lambda loaded, **_kwargs: pytest.fail("stale wake must not reach the provider"),
     )
     monkeypatch.setattr("tokenkick.cli.append_kick_event", lambda event: recorded.append(event))
     monkeypatch.setattr("tokenkick.cli.notify_kick", lambda event, notifications: None)
@@ -18863,10 +18865,8 @@ def test_wake_kicks_stale_fresh_account_without_prompt_and_logs_wake_type(monkey
 
     assert result.exit_code == 0
     assert "Kick \"codex (work)\" anyway?" not in result.output
-    assert len(recorded) == 1
-    assert recorded[0].label == "codex (work)"
-    assert recorded[0].kind == "wake"
-    assert recorded[0].to_dict()["kick_type"] == "wake"
+    assert not recorded
+    assert "Wake skipped: stale_status" in result.output
 
 
 def test_history_account_filter_resolves_pre_migration_label(monkeypatch):
@@ -18922,6 +18922,7 @@ def test_kick_specific_honors_configured_codexbar_thresholds(monkeypatch):
 
 
 def test_status_json_always_includes_freshness_fields(monkeypatch):
+    monkeypatch.setattr("tokenkick.cli._status_cache_now", lambda: datetime(2026, 5, 22, 8, tzinfo=timezone.utc))
     account = AccountConfig(label="codex", provider="codex")
     status = AccountStatus(label="codex", state=AccountState.ACTIVE, used_percent=1)
     monkeypatch.setattr("tokenkick.cli.Config.load", lambda: Config(accounts=[account]))
@@ -25568,6 +25569,12 @@ def test_daemon_foreground_cleanup_does_not_remove_replaced_pidfile(monkeypatch,
 
 
 def test_daemon_background_starts_process_and_writes_pid(monkeypatch, tmp_path):
+    monkeypatch.setattr("tokenkick.versioning.process_identity", lambda pid: "fixture-process-start")
+    def announce_child(process, path):
+        from tokenkick.versioning import write_daemon_pidfile
+        write_daemon_pidfile(path, process.pid, executable="/private/tmp/tk")
+        return True
+    monkeypatch.setattr("tokenkick.cli._wait_for_owned_start", announce_child)
     calls = []
 
     class FakeProcess:
@@ -25590,7 +25597,7 @@ def test_daemon_background_starts_process_and_writes_pid(monkeypatch, tmp_path):
 
     assert result.exit_code == 0
     assert "started in background" in result.output
-    assert pid_file.read_text().startswith("4242 0.5.2\nexecutable=")
+    assert pid_file.read_text().startswith("4242 0.5.2\nprocess_identity=fixture-process-start\nexecutable=")
     assert calls[0][0][0] == ["/tmp/tk", "daemon"]
     assert calls[0][1]["start_new_session"] is True
 
@@ -25614,10 +25621,11 @@ def test_daemon_background_does_not_start_duplicate(monkeypatch, tmp_path):
 
 
 def test_daemon_stop_kills_pid_and_removes_pidfile(monkeypatch, tmp_path):
+    monkeypatch.setattr("tokenkick.versioning.process_identity", lambda pid: "fixture-process-start")
     calls = []
     running = True
     pid_file = tmp_path / "daemon.pid"
-    pid_file.write_text("4242\n")
+    pid_file.write_text("4242\nprocess_identity=fixture-process-start\n")
     monkeypatch.setattr("tokenkick.cli.DAEMON_PID_FILE", pid_file)
 
     def fake_kill(pid, sig):
@@ -25638,9 +25646,10 @@ def test_daemon_stop_kills_pid_and_removes_pidfile(monkeypatch, tmp_path):
 
 
 def test_daemon_stop_keeps_pidfile_when_process_does_not_exit(monkeypatch, tmp_path):
+    monkeypatch.setattr("tokenkick.versioning.process_identity", lambda pid: "fixture-process-start")
     calls = []
     pid_file = tmp_path / "daemon.pid"
-    pid_file.write_text("4242\n")
+    pid_file.write_text("4242\nprocess_identity=fixture-process-start\n")
     monkeypatch.setattr("tokenkick.cli.DAEMON_PID_FILE", pid_file)
     monkeypatch.setattr("tokenkick.cli.DAEMON_STOP_TIMEOUT_SECONDS", 0)
     monkeypatch.setattr("tokenkick.cli._pid_is_running", lambda pid: True)
@@ -25739,6 +25748,12 @@ def test_daemon_status_reports_missing_pidfile(monkeypatch, tmp_path):
 
 
 def test_daemon_restart_stops_running_and_starts_new_background(monkeypatch, tmp_path):
+    monkeypatch.setattr("tokenkick.versioning.process_identity", lambda pid: "fixture-process-start")
+    def announce_child(process, path):
+        from tokenkick.versioning import write_daemon_pidfile
+        write_daemon_pidfile(path, process.pid, executable="/private/tmp/tk")
+        return True
+    monkeypatch.setattr("tokenkick.cli._wait_for_owned_start", announce_child)
     killed = []
     calls = []
     running = True
@@ -25758,7 +25773,7 @@ def test_daemon_restart_stops_running_and_starts_new_background(monkeypatch, tmp
 
     pid_file = tmp_path / "daemon.pid"
     log_file = tmp_path / "daemon.log"
-    pid_file.write_text("4242\n")
+    pid_file.write_text("4242\nprocess_identity=fixture-process-start\n")
     monkeypatch.setattr("tokenkick.cli.DAEMON_PID_FILE", pid_file)
     monkeypatch.setattr("tokenkick.cli.DAEMON_LOG_FILE", log_file)
     monkeypatch.setattr("tokenkick.cli.CONFIG_DIR", tmp_path)
@@ -25774,7 +25789,7 @@ def test_daemon_restart_stops_running_and_starts_new_background(monkeypatch, tmp
     assert "daemon restarted" in result.output
     assert "pid 7777" in result.output
     assert killed == [(4242, signal.SIGTERM)]
-    assert pid_file.read_text().startswith("7777 0.5.2\nexecutable=")
+    assert pid_file.read_text().startswith("7777 0.5.2\nprocess_identity=fixture-process-start\nexecutable=")
     assert calls[0][0][0] == ["/tmp/tk", "daemon"]
 
 
@@ -25797,6 +25812,12 @@ def test_daemon_restart_aborts_when_existing_daemon_does_not_stop(monkeypatch, t
 
 
 def test_daemon_restart_starts_when_not_running(monkeypatch, tmp_path):
+    monkeypatch.setattr("tokenkick.versioning.process_identity", lambda pid: "fixture-process-start")
+    def announce_child(process, path):
+        from tokenkick.versioning import write_daemon_pidfile
+        write_daemon_pidfile(path, process.pid, executable="/private/tmp/tk")
+        return True
+    monkeypatch.setattr("tokenkick.cli._wait_for_owned_start", announce_child)
     class FakeProcess:
         pid = 7777
 
@@ -25814,7 +25835,7 @@ def test_daemon_restart_starts_when_not_running(monkeypatch, tmp_path):
     assert result.exit_code == 0
     assert "daemon started" in result.output
     assert "pid 7777" in result.output
-    assert pid_file.read_text().startswith("7777 0.5.2\nexecutable=")
+    assert pid_file.read_text().startswith("7777 0.5.2\nprocess_identity=fixture-process-start\nexecutable=")
 
 
 def test_daemon_rejects_multiple_modes():

@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
+
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
@@ -199,8 +202,19 @@ class OrchestrationPlan:
     cache_age_seconds: int | None = None
     message: str | None = None
     built_at: datetime | None = None
+    config_revision: str | None = None
+
+    def fingerprint(self) -> str:
+        data = self._payload()
+        for key in ("built_at", "cache_age_seconds", "message", "read_only", "applied"):
+            data.pop(key, None)
+        data["config_revision"] = self.config_revision
+        return hashlib.sha256(json.dumps(data, sort_keys=True).encode()).hexdigest()
 
     def to_dict(self) -> dict:
+        return {**self._payload(), "plan_fingerprint": self.fingerprint()}
+
+    def _payload(self) -> dict:
         return {
             "schema_version": ORCHESTRATION_SCHEMA_VERSION,
             "read_only": self.read_only,
@@ -487,7 +501,15 @@ def _pending_window_overlaps(
     return pending_start < work_end and pending_end > work_start
 
 
-def apply_orchestration_plan(
+def apply_orchestration_plan(plan: OrchestrationPlan, *, now: datetime,
+                             current_time: datetime | None = None) -> OrchestrationPlan:
+    from . import scheduling
+    from .state_io import state_file_lock
+    with state_file_lock(scheduling.PENDING_KICKS_FILE):
+        return _apply_orchestration_plan_locked(plan, now=now, current_time=current_time)
+
+
+def _apply_orchestration_plan_locked(
     plan: OrchestrationPlan,
     *,
     now: datetime,

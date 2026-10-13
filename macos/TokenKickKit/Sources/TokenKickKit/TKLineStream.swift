@@ -1,113 +1,60 @@
 import Foundation
 
-/// A running process whose stdout is consumed line by line — the transport
-/// for `tk app setup --json-lines`. Cancellation is cooperative and
-/// graceful: `interrupt()` sends SIGINT so the core can end the stream with
-/// its own terminal record (`setup_cancelled`), and reading continues to
-/// EOF so that record is never lost.
+/// Streaming setup output with graceful interrupt and bounded escalation.
 public final class TKLineStream: @unchecked Sendable {
     public let lines: AsyncThrowingStream<String, Error>
+    private let child: TKOwnedProcess
+    private let completion: Task<TKProcessResult, Never>
 
-    private let process: Process
-    private let exitWaiter: ExitWaiter
-    private let stderrTask: Task<Data, Never>
-
-    init(process: Process, exitWaiter: ExitWaiter, lines: AsyncThrowingStream<String, Error>, stderrTask: Task<Data, Never>) {
-        self.process = process
-        self.exitWaiter = exitWaiter
-        self.lines = lines
-        self.stderrTask = stderrTask
+    init(child: TKOwnedProcess) {
+        self.child = child
+        var continuation: AsyncThrowingStream<String, Error>.Continuation!
+        self.lines = AsyncThrowingStream { continuation = $0 }
+        let sink = continuation!
+        self.completion = Task.detached(priority: .utility) {
+            let buffer = LineBuffer(sink: sink)
+            let outcome = child.collect(timeout: nil) { buffer.append($0) }
+            buffer.finish()
+            sink.finish()
+            return outcome.result
+        }
+        sink.onTermination = { termination in
+            if case .cancelled = termination { child.stop(signal: SIGTERM) }
+        }
     }
 
-    /// Ask the process to stop gracefully (SIGINT). Safe to call once or
-    /// repeatedly, before or after exit.
-    public func interrupt() {
-        guard process.isRunning else { return }
-        process.interrupt()
-    }
-
-    /// Force-stop: SIGTERM, short grace, SIGKILL. Used as the escalation
-    /// path when a graceful interrupt is not honored.
-    public func terminate() {
-        guard process.isRunning else { return }
-        process.terminate()
-    }
-
-    /// Wait for the process to exit and return (exit code, stderr).
+    deinit { child.stop(signal: SIGTERM) }
+    public func interrupt() { child.stop(signal: SIGINT) }
+    public func terminate() { child.stop(signal: SIGTERM) }
     public func waitForExit() async -> (exitCode: Int32, stderr: String) {
-        await exitWaiter.wait()
-        let stderrData = await stderrTask.value
-        return (process.terminationStatus, String(decoding: stderrData, as: UTF8.self))
+        let result = await withTaskCancellationHandler {
+            await completion.value
+        } onCancel: { child.stop(signal: SIGTERM) }
+        return (result.exitCode, result.stderrText)
     }
 }
 
+// Used exclusively by the collector thread.
+private final class LineBuffer: @unchecked Sendable {
+    var buffer = Data()
+    let sink: AsyncThrowingStream<String, Error>.Continuation
+    init(sink: AsyncThrowingStream<String, Error>.Continuation) { self.sink = sink }
+    func append(_ chunk: Data) {
+        buffer.append(chunk)
+        while let newline = buffer.firstIndex(of: UInt8(ascii: "\n")) {
+            emit(Data(buffer[..<newline]))
+            buffer.removeSubrange(...newline)
+        }
+    }
+    func emit(_ data: Data) {
+        let line = String(decoding: data, as: UTF8.self)
+        if !line.trimmingCharacters(in: .whitespaces).isEmpty { sink.yield(line) }
+    }
+    func finish() { if !buffer.isEmpty { emit(buffer) } }
+}
+
 extension TKProcessRunner {
-    /// Launch a process for line-by-line stdout consumption. The caller owns
-    /// the lifetime via the returned handle; there is no implicit timeout —
-    /// streams like setup may legitimately run for minutes.
-    public func streamLines(
-        executable: URL,
-        arguments: [String],
-        environment: [String: String]
-    ) throws -> TKLineStream {
-        let process = Process()
-        process.executableURL = executable
-        process.arguments = arguments
-        process.environment = environment
-        let stdoutPipe = Pipe()
-        let stderrPipe = Pipe()
-        process.standardOutput = stdoutPipe
-        process.standardError = stderrPipe
-        process.standardInput = FileHandle.nullDevice
-
-        let exitWaiter = ExitWaiter()
-        process.terminationHandler = { _ in exitWaiter.markExited() }
-
-        do {
-            try process.run()
-        } catch {
-            throw TKProcessError.launchFailed(path: executable.path, underlying: error)
-        }
-
-        let stderrTask = Task.detached(priority: .utility) {
-            stderrPipe.fileHandleForReading.readDataToEndOfFile()
-        }
-
-        let lines = AsyncThrowingStream<String, Error> { continuation in
-            let reader = Task.detached(priority: .userInitiated) {
-                let handle = stdoutPipe.fileHandleForReading
-                var buffer = Data()
-                while true {
-                    let chunk = handle.availableData
-                    if chunk.isEmpty { break }
-                    buffer.append(chunk)
-                    while let newlineIndex = buffer.firstIndex(of: UInt8(ascii: "\n")) {
-                        let lineData = buffer[buffer.startIndex..<newlineIndex]
-                        buffer.removeSubrange(buffer.startIndex...newlineIndex)
-                        let line = String(decoding: lineData, as: UTF8.self)
-                        if !line.trimmingCharacters(in: .whitespaces).isEmpty {
-                            continuation.yield(line)
-                        }
-                    }
-                }
-                if !buffer.isEmpty {
-                    let line = String(decoding: buffer, as: UTF8.self)
-                    if !line.trimmingCharacters(in: .whitespaces).isEmpty {
-                        continuation.yield(line)
-                    }
-                }
-                continuation.finish()
-            }
-            continuation.onTermination = { _ in
-                reader.cancel()
-            }
-        }
-
-        return TKLineStream(
-            process: process,
-            exitWaiter: exitWaiter,
-            lines: lines,
-            stderrTask: stderrTask
-        )
+    public func streamLines(executable: URL, arguments: [String], environment: [String: String]) throws -> TKLineStream {
+        TKLineStream(child: try TKOwnedProcess(executable: executable, arguments: arguments, environment: environment))
     }
 }

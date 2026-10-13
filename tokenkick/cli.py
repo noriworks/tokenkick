@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import hashlib
 import json
 import os
 import re
@@ -67,6 +68,7 @@ from .models import (
     append_kick_event,
     load_kick_history,
     mark_synthetic_status,
+    is_synthetic_status,
     merge_discovered_account,
     normalize_orchestration_role,
     normalize_notification_backends,
@@ -82,7 +84,8 @@ from .sources import (
     claude_cli_usage_refresh_allowed,
     fetch_status as fetch_status,
 )
-from .versioning import installed_version, read_daemon_pidfile, write_daemon_pidfile
+from .action_state import account_action, UncertainActionError
+from .versioning import installed_version, read_daemon_pidfile, write_daemon_pidfile, pidfile_process_matches
 from .telegram_remote import (
     TelegramRemoteClient,
     TelegramRemoteConfigError,
@@ -331,7 +334,7 @@ from .scheduling import (
     upsert_pending_kick,
     cancel_orchestrated_pending_kicks,
 )
-from .state_io import locked_atomic_write_text, locked_update_text
+from .state_io import locked_atomic_write_text, locked_update_text, state_file_lock, StateFileLockTimeout
 from .app_mode import (
     APP_SCHEMA_VERSION as APP_SCHEMA_VERSION,
     ERROR_ABORTED,
@@ -1788,6 +1791,8 @@ def _kick_eligibility(
     allow_stale: bool = False,
 ) -> KickEligibility:
     resolved_provider = provider or (account.provider if account is not None else None)
+    if is_synthetic_status(status):
+        return KickEligibility(False, reason="predicted_status_requires_refresh")
     if resolved_provider not in KICKABLE_PROVIDERS:
         return KickEligibility(False, reason="provider_not_kickable")
     if status.state != AccountState.FRESH and _weekly_quota_exhausted(status):
@@ -2090,8 +2095,14 @@ def _codex_predicted_session_due_status(
     entry = entries.get(account_key_string(account))
     if not isinstance(entry, dict):
         return None
+    # Predictions are useful display evidence, never a replacement for a failed
+    # live read. Execution must see the original freshness and error state.
+    if _status_cache_entry_is_stale(entry, Config()) or entry.get("refresh_error"):
+        return None
     status = entry.get("status")
     if not isinstance(status, AccountStatus):
+        return None
+    if status.stale or status.error:
         return None
     if _auto_kick_blocked_by_codexbar_fallback(account, status):
         return None
@@ -2104,7 +2115,7 @@ def _codex_predicted_session_due_status(
     if _effective_session_window_minutes(status) != 300:
         return None
     return mark_synthetic_status(
-        replace(status, label=account.label, stale=False, stale_seconds=None, error=None),
+        replace(status, label=account.label),
         "codex_session_due_from_cache",
     )
 
@@ -2119,7 +2130,7 @@ def _apply_codex_predicted_session_due_statuses(
     for account in accounts:
         key = account_key_string(account)
         current = statuses_by_key.get(key)
-        if current is not None and current.state != AccountState.UNKNOWN and not current.stale:
+        if current is not None:
             continue
         predicted = _codex_predicted_session_due_status(account, entries)
         if predicted is None:
@@ -3267,6 +3278,7 @@ def _run_evaluate_account(
         account,
         config,
         status,
+        automatic=True,
         send_notification=False,
         kick_type=kick_type,
         stagger_state=stagger_state,
@@ -3562,6 +3574,15 @@ def _execute_due_pending_kicks(
             scheduled_for = from_utc_iso(pending.kick_at)
         except ValueError:
             continue
+        try:
+            expired = from_utc_iso(pending.work_end) <= now
+        except (ValueError, TypeError):
+            expired = True
+        if expired:
+            account = accounts_by_key.get(key)
+            if account is not None:
+                remove_pending_kick(account)
+            continue
         action_at = pending_kick_next_action_at(pending) or scheduled_for
         if action_at > now:
             continue
@@ -3697,6 +3718,11 @@ def _execute_due_pending_kicks(
                 _daemon_log("scheduled_kick_deferred", account=account.label, reason="phantom_session")
             continue
 
+        eligibility = _kick_eligibility(account, status, history=history)
+        if not eligibility.kickable:
+            if daemon_log:
+                _daemon_log("scheduled_kick_waiting", account=account.label, reason=eligibility.reason)
+            continue
         _stagger_codex_kick_if_needed(account, stagger_state, daemon_log=daemon_log)
         actual = datetime.now(timezone.utc)
         if daemon_log:
@@ -3712,6 +3738,7 @@ def _execute_due_pending_kicks(
             account,
             config,
             status,
+            automatic=True,
             daemon_log=False,
             send_notification=False,
             kick_type="session" if session_ready else "kick",
@@ -3805,6 +3832,8 @@ def _execute_codex_surface_reintroductions(
                 account,
                 config,
                 status,
+                recovery_history=history,
+                automatic=True,
                 daemon_log=daemon_log,
                 send_notification=True,
                 kick_type="session",
@@ -3908,6 +3937,8 @@ def _schedule_or_kick_target(
             account,
             config,
             status,
+            automatic=False,
+            force=True,
             daemon_log=daemon_log,
             kick_type=kick_type,
             stagger_state=stagger_state,
@@ -3960,6 +3991,7 @@ def _schedule_or_kick_target(
             account,
             config,
             status,
+            automatic=True,
             daemon_log=daemon_log,
             kick_type=kick_type,
             stagger_state=stagger_state,
@@ -3993,6 +4025,7 @@ def _schedule_or_kick_target(
             account,
             config,
             status,
+            automatic=True,
             daemon_log=daemon_log,
             kick_type=kick_type,
             stagger_state=stagger_state,
@@ -4001,6 +4034,8 @@ def _schedule_or_kick_target(
         remove_pending_kick(account)
         return True
 
+    if work_window[1] <= now:
+        return False
     selection = select_scheduling_window(status, config.schedule.scheduling_target)
     if selection is None:
         if daemon_log:
@@ -4023,6 +4058,7 @@ def _schedule_or_kick_target(
             account,
             config,
             status,
+            automatic=True,
             daemon_log=daemon_log,
             kick_type=kick_type,
             stagger_state=stagger_state,
@@ -4040,6 +4076,7 @@ def _schedule_or_kick_target(
             account,
             config,
             status,
+            automatic=True,
             daemon_log=daemon_log,
             kick_type=kick_type,
             stagger_state=stagger_state,
@@ -4059,6 +4096,7 @@ def _schedule_or_kick_target(
             account,
             config,
             status,
+            automatic=True,
             daemon_log=daemon_log,
             send_notification=False,
             kick_type=kick_type,
@@ -4349,7 +4387,9 @@ def _execute_verified_phantom_recoveries(
             account,
             config,
             status,
+            automatic=True,
             daemon_log=daemon_log,
+            recovery_history=load_kick_history(limit=300),
             send_notification=attempt_number == 1,
             kick_type="session",
             stagger_state=stagger_state,
@@ -4441,6 +4481,50 @@ def _execute_verified_phantom_recoveries(
 
 
 def _kick_and_notify(
+    account: AccountConfig, config: Config, pre_status: AccountStatus | None = None,
+    *, force: bool = False, automatic: bool = False, allow_stale: bool = False,
+    recovery_history: list[KickEvent] | None = None, **kwargs,
+) -> KickEvent:
+    try:
+        with account_action(CONFIG_DIR, account_key_string(account), recover=force) as prior_action:
+            if config.loaded_from_file:
+                latest = Config.load()
+                current = next((a for a in latest.accounts
+                                if account_key_string(a) == account_key_string(account)), None)
+                if current is None:
+                    return KickEvent(label=account.label, success=False, confirmed=False, error="Account was removed.")
+                if automatic and (not current.auto_kick or not (
+                    current.session_auto_kick if kwargs.get("kick_type") == "session"
+                    else current.weekly_auto_kick
+                )):
+                    return KickEvent(label=account.label, success=False, confirmed=False, error="Auto-kick was disabled.")
+                account, config = current, latest
+            # Recheck after waiting for ownership. Predictions alone never authorize
+            # a request. Ordinary paths use the same policy as the displayed status.
+            status = pre_status
+            if status is None or is_synthetic_status(status):
+                status = _fetch_status(account, config)
+            if not force:
+                history = load_kick_history(limit=300)
+                if recovery_history is not None:
+                    last_completion = _to_float(prior_action.get("completed_at"))
+                    if last_completion is not None and time.time() - last_completion < 60:
+                        return KickEvent(label=account.label, success=False, confirmed=False,
+                                         error="Recent action completed; refresh before recovery.")
+                    if history != recovery_history:
+                        return KickEvent(label=account.label, success=False, confirmed=False,
+                                         error="Recovery history changed; retry after refreshing.")
+                    history = []
+                eligibility = _kick_eligibility(account, status, history=history,
+                                                allow_stale=allow_stale and not automatic)
+                if not eligibility.kickable:
+                    return KickEvent(label=account.label, success=False, confirmed=False, error=eligibility.reason)
+            return _kick_and_notify_owned(account, config, status, **kwargs)
+    except (StateFileLockTimeout, UncertainActionError) as exc:
+        return KickEvent(label=account.label, success=False, confirmed=False, error=str(exc))
+
+
+def _kick_and_notify_owned(
     account: AccountConfig,
     config: Config,
     pre_status: AccountStatus | None = None,
@@ -7139,6 +7223,8 @@ def calendar_cmd(
     help="Per-plan expected usage, e.g. 'codex (home)=3h' or 'claude=90m'",
 )
 @click.option("--json-output", "as_json", is_flag=True, help="Output as JSON")
+@click.option("--preview-at", help="Build-time clock from the reviewed preview")
+@click.option("--expected-plan", help="Require the exact fingerprint returned by the reviewed preview")
 @click.option("--apply", "apply_plan", is_flag=True, help="Write orchestrated pending session kicks")
 @click.option("--yes", is_flag=True, help="Confirm --apply in non-interactive mode")
 @click.pass_context
@@ -7151,6 +7237,8 @@ def plan_cmd(
     as_json: bool,
     apply_plan: bool,
     yes: bool,
+    expected_plan: str | None = None,
+    preview_at: str | None = None,
 ):
     """Plan multi-account session coverage from cached state."""
     if ctx.invoked_subcommand is not None:
@@ -7162,6 +7250,7 @@ def plan_cmd(
         date_text=date_text,
         timezone_text=timezone_text,
         usage_overrides=usage_overrides,
+        preview_at=preview_at,
     )
 
     if apply_plan:
@@ -7174,11 +7263,22 @@ def plan_cmd(
             if not _confirm_prompt("Apply this orchestration plan?", default=False):
                 console.print("\n[bold]Read-only:[/bold] not applied; user declined apply")
                 return
-        plan = apply_orchestration_plan(
-            plan,
-            now=now,
-            current_time=_status_cache_now().astimezone(timezone.utc),
-        )
+        reviewed = expected_plan or plan.fingerprint()
+        from . import scheduling
+        with state_file_lock(CONFIG_FILE), state_file_lock(scheduling.PENDING_KICKS_FILE):
+            current, current_now = _build_plan_from_options(
+                work_window=work_window, date_text=date_text, timezone_text=timezone_text,
+                usage_overrides=usage_overrides,
+                preview_at=to_utc_iso(plan.built_at or now),
+            )
+            if current.fingerprint() != reviewed:
+                current.message = "not applied; plan changed since preview, review a new preview"
+                _emit_plan(current, as_json=as_json)
+                ctx.exit(1)
+            plan = apply_orchestration_plan(
+                current, now=current_now,
+                current_time=_status_cache_now().astimezone(timezone.utc),
+            )
 
     _emit_plan(plan, as_json=as_json)
 
@@ -7261,6 +7361,7 @@ def _build_plan_from_options(
     date_text: str | None,
     timezone_text: str | None,
     usage_overrides: Sequence[str] | None = None,
+    preview_at: str | None = None,
 ) -> tuple[OrchestrationPlan, datetime]:
     config = Config.load()
     config = _migrate_provider_first_labels_if_needed(config)
@@ -7280,6 +7381,14 @@ def _build_plan_from_options(
         raise click.ClickException(str(exc)) from exc
 
     now = _status_cache_now().astimezone(timezone.utc)
+    if preview_at:
+        try:
+            reviewed_now = from_utc_iso(preview_at)
+            if reviewed_now.tzinfo is None or reviewed_now > now:
+                raise ValueError("preview time must be timezone-aware and not in the future")
+            now = reviewed_now
+        except (ValueError, TypeError) as exc:
+            raise click.ClickException(f"Invalid --preview-at: {exc}") from exc
     if work_end <= now:
         ended_local = work_end.astimezone(tz).strftime("%H:%M %Z")
         raise click.ClickException(
@@ -7302,7 +7411,7 @@ def _build_plan_from_options(
             cache_stale=(
                 _status_cache_entry_is_stale(entries[account_key_string(account)], config)
                 if account_key_string(account) in entries
-                else False
+                else True
             ),
         )
         for account in config.accounts
@@ -7319,6 +7428,7 @@ def _build_plan_from_options(
         cache_age_seconds=_plan_cache_age_seconds(entries),
         usage_overrides_by_key=usage_overrides_by_key,
     )
+    plan.config_revision = hashlib.sha256(json.dumps(config._data(), sort_keys=True).encode()).hexdigest()
     return plan, now
 
 
@@ -8525,6 +8635,11 @@ def _resolve_single_kick_target(
             cli_markup=f"[dim]{message}[/dim]",
         )
 
+    if not force:
+        eligibility = _kick_eligibility(account, status, history=history, allow_stale=stale_confirmed)
+        if not eligibility.kickable:
+            raise _SingleKickStopped(eligibility.reason or "not_eligible",
+                                     f'Skipping "{label}": {eligibility.reason}.')
     return _SingleKickTarget(account=account, status=status, clear_pending=clear_pending)
 
 
@@ -8616,7 +8731,7 @@ def _kick_label_json(
         )
         return
 
-    event = _kick_and_notify(target.account, config, target.status, kick_type=kick_type)
+    event = _kick_and_notify(target.account, config, target.status, kick_type=kick_type, force=force, allow_stale=target.status.stale)
     if event.success and target.clear_pending:
         remove_pending_kick(target.account)
     if event.success and event.confirmed:
@@ -8752,7 +8867,7 @@ def kick(
             console.print(f'[dim]Would kick:[/dim] {account.label}')
             continue
 
-        event = _kick_and_notify(account, config, status, kick_type=_kick_type_for_status(status))
+        event = _kick_and_notify(account, config, status, kick_type=_kick_type_for_status(status), force=force, allow_stale=status.stale)
         if event.success and account_key_string(account) in clear_pending_after_manual_success:
             remove_pending_kick(account)
 
@@ -8781,7 +8896,9 @@ def wake(label: str):
     if status.state != AccountState.FRESH:
         console.print(f'[dim]Skipping "{label}": state is {status.state.value}, not fresh.[/dim]')
         return
-    _kick_and_notify(account, config, status, kick_type="wake")
+    event = _kick_and_notify(account, config, status, kick_type="wake")
+    if not event.success:
+        console.print(f'[yellow]Wake skipped: {event.error}[/yellow]')
 
 
 # ---------------------------------------------------------------------------
@@ -12806,6 +12923,40 @@ def _require_telegram_remote_config(as_json: bool) -> None:
     sys.exit(1)
 
 
+def _wait_for_owned_start(process, path: Path, *, timeout: float = 10) -> bool:
+    """Only the child holding the lifetime lock may publish its PID file."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        info = read_daemon_pidfile(path)
+        if info is not None and info.pid == process.pid and pidfile_process_matches(info):
+            return True
+        if process.poll() is not None:
+            return False
+        time.sleep(0.05)
+    process.terminate()
+    try:
+        process.wait(timeout=2)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait()
+    return False
+
+
+def _process_lock(path_getter):
+    from functools import wraps
+    def decorate(function):
+        @wraps(function)
+        def run(*args, **kwargs):
+            try:
+                with state_file_lock(path_getter(), timeout=0):
+                    return function(*args, **kwargs)
+            except StateFileLockTimeout as exc:
+                raise click.ClickException("Another TokenKick process owns this operation.") from exc
+        return run
+    return decorate
+
+
+@_process_lock(lambda: TELEGRAM_REMOTE_PID_FILE.with_suffix(".launch"))
 def _start_telegram_remote_background(*, quiet: bool = False) -> int | None:
     telegram_remote_credentials(Config.load())
     pid = _prepare_telegram_remote_pidfile_for_start()
@@ -12824,7 +12975,9 @@ def _start_telegram_remote_background(*, quiet: bool = False) -> int | None:
             stderr=subprocess.STDOUT,
             start_new_session=True,
         )
-    _write_owned_telegram_remote_pidfile(process.pid)
+    if not _wait_for_owned_start(process, TELEGRAM_REMOTE_PID_FILE):
+        console.print("[red]Telegram remote did not acquire ownership; inspect its log.[/red]")
+        return None
     _set_telegram_remote_enabled(True)
     if not quiet:
         console.print(
@@ -12869,6 +13022,11 @@ def _stop_telegram_remote(*, quiet: bool = False, disable_intent: bool = True) -
             )
         return False
 
+    if not pidfile_process_matches(pid_info):
+        if not quiet:
+            console.print("[red]Process ownership is unverified; refusing to signal this PID. "
+                          "Check the service owner before stopping a legacy process.[/red]")
+        return False
     exited = False
     try:
         os.kill(pid, signal.SIGTERM)
@@ -13051,6 +13209,7 @@ def _telegram_remote_restart_json() -> None:
     )
 
 
+@_process_lock(lambda: TELEGRAM_REMOTE_PID_FILE.with_suffix(".owner"))
 def _run_telegram_remote_foreground() -> None:
     try:
         credentials = telegram_remote_credentials(Config.load())
@@ -13209,6 +13368,8 @@ def poll_interval(minutes: int | None):
 
 
 def _pid_is_running(pid: int) -> bool:
+    if pid <= 0:
+        return False
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -13409,6 +13570,7 @@ def _daemon_restart_json() -> None:
     )
 
 
+@_process_lock(lambda: DAEMON_PID_FILE.with_suffix(".launch"))
 def _start_daemon_background(*, quiet: bool = False) -> int | None:
     pid = _prepare_daemon_pidfile_for_start()
     if pid is not None:
@@ -13425,7 +13587,9 @@ def _start_daemon_background(*, quiet: bool = False) -> int | None:
             stderr=subprocess.STDOUT,
             start_new_session=True,
         )
-    _write_owned_daemon_pidfile(process.pid)
+    if not _wait_for_owned_start(process, DAEMON_PID_FILE):
+        console.print("[red]Daemon did not acquire ownership; inspect its log.[/red]")
+        return None
     if not quiet:
         console.print(
             f"[green]TokenKick daemon started in background[/green] "
@@ -13460,6 +13624,11 @@ def _stop_daemon(*, quiet: bool = False) -> bool:
             console.print(f"[yellow]TokenKick daemon was not running[/yellow] (stale pid {pid}).")
         return False
 
+    if not pidfile_process_matches(pid_info):
+        if not quiet:
+            console.print("[red]Process ownership is unverified; refusing to signal this PID. "
+                          "Check the service owner before stopping a legacy process.[/red]")
+        return False
     exited = False
     try:
         os.kill(pid, signal.SIGTERM)
@@ -14111,6 +14280,11 @@ def daemon(background: bool, stop_daemon: bool, daemon_status: bool, restart_dae
             _start_daemon_background()
         return
 
+    _run_daemon_foreground()
+
+
+@_process_lock(lambda: DAEMON_PID_FILE.with_suffix(".owner"))
+def _run_daemon_foreground():
     current_pid = os.getpid()
     existing_pid = _prepare_daemon_pidfile_for_start()
     if existing_pid is not None and existing_pid != current_pid:

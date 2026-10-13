@@ -24,7 +24,7 @@ from .scheduling import (
     pending_kick_next_action_at,
     schedule_for_account,
 )
-from .status_cache import _read_dormant_hint_state, _write_dormant_hint_state
+from .status_cache import _read_dormant_hint_state, _write_dormant_hint_state, effective_cached_status
 
 
 def _cli():
@@ -329,8 +329,11 @@ def _status_rows_as_dict(
     history = _cli().load_kick_history(limit=200)
     rows = []
     for status in _sort_statuses(statuses, accounts):
-        row = status.to_dict()
         account = accounts_by_label.get(status.label)
+        entry = cache_entries.get(account_key_string(account)) if account is not None else None
+        if entry is not None:
+            status = effective_cached_status(status, entry, config or Config())
+        row = status.to_dict()
         row.setdefault("observed_at", _cli()._status_cache_observed_at())
         row.setdefault("source_detail", account.source.value if account is not None else "unknown")
         row.setdefault("stale", False)

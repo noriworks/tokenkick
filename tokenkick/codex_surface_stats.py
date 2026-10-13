@@ -14,7 +14,7 @@ from .kicker import (
     CODEX_KICK_SURFACE_REPO_SKIP,
 )
 from .models import AccountConfig, KickEvent, account_key_string
-from .state_io import locked_atomic_write_text
+from .state_io import locked_atomic_write_text, state_transaction
 
 DEFAULT_CODEX_SURFACE_ORDER = (
     CODEX_KICK_SURFACE_REPO_SKIP,
@@ -120,6 +120,7 @@ def _ranked_surface_order(account_stats: dict[str, Any]) -> tuple[str, ...]:
     )
 
 
+@state_transaction
 def update_codex_surface_stats(
     path: Path,
     account: AccountConfig,
@@ -162,6 +163,7 @@ def update_codex_surface_stats(
     return demotion_events
 
 
+@state_transaction
 def apply_codex_surface_late_confirmation(
     path: Path,
     account: AccountConfig,
@@ -385,6 +387,7 @@ def _kept_ahead_surfaces_from_clusters(
     return []
 
 
+@state_transaction
 def reintroduce_codex_surfaces_after_miss(
     path: Path,
     account: AccountConfig,
@@ -431,6 +434,7 @@ def reintroduce_codex_surfaces_after_miss(
     ]
 
 
+@state_transaction
 def reset_codex_surface_demotion_evidence(path: Path, account: AccountConfig) -> None:
     data = load_codex_surface_stats(path)
     account_stats = _account_stats(data, account, create=True)
@@ -443,6 +447,7 @@ def reset_codex_surface_demotion_evidence(path: Path, account: AccountConfig) ->
     save_codex_surface_stats(path, data)
 
 
+@state_transaction
 def reset_codex_surface_learning_stats(path: Path, account: AccountConfig) -> None:
     data = load_codex_surface_stats(path)
     account_stats = _account_stats(data, account, create=True)

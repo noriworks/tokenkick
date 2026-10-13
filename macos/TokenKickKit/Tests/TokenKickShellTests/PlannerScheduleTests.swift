@@ -3,12 +3,13 @@ import TokenKickKit
 @testable import TokenKickShell
 
 private final class StubPlannerService: PlannerServicing, @unchecked Sendable {
+    var previewHandler: (@Sendable (String) async throws -> TKPlanPayload)?
     var planningResult: Result<TKEnvelope<TKAccountsPlanningPayload>, Error>
     var previewResult: Result<TKPlanPayload, Error>
     var applyResult: Result<TKPlanPayload, Error>
     var cancelResult: Result<TKPlanCancelPayload, Error>
     private(set) var previewCalls: [(workWindow: String, date: String, usage: [String: Int])] = []
-    private(set) var applyCalls: [(workWindow: String, date: String, usage: [String: Int])] = []
+    private(set) var applyCalls: [(workWindow: String, date: String, usage: [String: Int], expectedPlan: String, previewAt: String)] = []
     private(set) var cancelCalls: [[String]] = []
 
     init(
@@ -33,15 +34,18 @@ private final class StubPlannerService: PlannerServicing, @unchecked Sendable {
         usage: [String: Int]
     ) async throws -> TKPlanPayload {
         previewCalls.append((workWindow, date, usage))
+        if let previewHandler { return try await previewHandler(workWindow) }
         return try previewResult.get()
     }
 
     func applyPlan(
         workWindow: String,
         date: String,
-        usage: [String: Int]
+        usage: [String: Int],
+        expectedPlan: String,
+        previewAt: String
     ) async throws -> TKPlanPayload {
-        applyCalls.append((workWindow, date, usage))
+        applyCalls.append((workWindow, date, usage, expectedPlan, previewAt))
         return try applyResult.get()
     }
 
@@ -117,6 +121,7 @@ private final class StubPlannerService: PlannerServicing, @unchecked Sendable {
         ]
         let object: [String: Any] = [
             "schema_version": 1,
+            "plan_fingerprint": "reviewed-plan",
             "read_only": readOnly,
             "applied": applied,
             "built_at": "2026-06-11T12:00:00Z",
@@ -211,6 +216,59 @@ final class PlannerViewModelTests: XCTestCase {
         XCTAssertFalse(model.canApplyPreview)
     }
 
+    func testChangingInputsInvalidatesPreviewAndConfirmation() async throws {
+        let service = StubPlannerService(planning: try StubPlannerService.planningEnvelope(), preview: StubPlannerService.planPayload())
+        let model = makeModel(service: service)
+        await model.load(snapshot: nil)
+        XCTAssertTrue(model.canApplyPreview)
+        model.requestApply()
+        model.endTime = model.endTime.addingTimeInterval(3600)
+        XCTAssertFalse(model.canApplyPreview)
+        await model.confirmPendingAction(snapshot: nil)
+        XCTAssertTrue(service.applyCalls.isEmpty)
+        XCTAssertTrue(model.actionMessage?.contains("changed") ?? false)
+        await model.previewPlan()
+        XCTAssertTrue(model.canApplyPreview)
+        model.usageMode = .custom
+        model.customUsageMinutes = ["codex (a)": 42]
+        XCTAssertFalse(model.canApplyPreview)
+    }
+
+    func testOlderAsyncPreviewCannotReplaceNewerPreview() async throws {
+        let service = StubPlannerService(planning: try StubPlannerService.planningEnvelope(), preview: StubPlannerService.planPayload())
+        let model = makeModel(service: service)
+        let firstWindow = model.workWindow
+        service.previewHandler = { window in
+            if window == firstWindow { try await Task.sleep(nanoseconds: 100_000_000) }
+            return StubPlannerService.planPayload(message: window)
+        }
+        let old = Task { await model.previewPlan() }
+        while !model.isPreviewing { await Task.yield() }
+        XCTAssertFalse(model.canApplyPreview)
+        model.endTime = model.endTime.addingTimeInterval(3600)
+        await model.previewPlan()
+        await old.value
+        XCTAssertEqual(model.preview?.message, model.workWindow)
+        XCTAssertTrue(model.canApplyPreview)
+    }
+
+    func testMissingPreviewFingerprintCannotApply() async throws {
+        let encoded = try JSONSerialization.data(withJSONObject: [
+            "schema_version": 1, "read_only": true, "applied": false,
+            "work_window": ["start": "2026-06-11T19:00:00Z", "end": "2026-06-11T21:00:00Z"],
+            "accounts_considered": [], "segments": [], "planned_kicks": [],
+            "coverage_gaps": [], "skipped_accounts": [], "limitations": [],
+            "diff": ["adds": [], "replaces_orchestrated": [], "unchanged_orchestrated": [], "conflicts_unmanaged": [], "skipped": [], "removes_orchestrated": []]
+        ])
+        let oldPayload = try JSONDecoder().decode(TKPlanPayload.self, from: encoded)
+        let service = StubPlannerService(planning: try StubPlannerService.planningEnvelope(), preview: oldPayload)
+        let model = makeModel(service: service)
+        await model.load(snapshot: nil)
+        XCTAssertFalse(model.canApplyPreview)
+        model.requestApply()
+        XCTAssertNil(model.pendingConfirmation)
+    }
+
     func testApplyConfirmationAndSuccessRefresh() async throws {
         let applied = StubPlannerService.planPayload(
             readOnly: false,
@@ -234,6 +292,8 @@ final class PlannerViewModelTests: XCTestCase {
         await model.confirmPendingAction(snapshot: nil)
 
         XCTAssertEqual(service.applyCalls.count, 1)
+        XCTAssertEqual(service.applyCalls.first?.expectedPlan, "reviewed-plan")
+        XCTAssertEqual(service.applyCalls.first?.previewAt, "2026-06-11T12:00:00Z")
         XCTAssertEqual(refreshCount, 1)
         XCTAssertTrue(model.actionMessage?.contains("applied") ?? false)
         XCTAssertEqual(model.activeOrchestratedPendingRows.map(\.account), ["codex (a)"])

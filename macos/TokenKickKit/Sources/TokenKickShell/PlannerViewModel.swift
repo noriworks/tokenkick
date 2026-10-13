@@ -12,7 +12,9 @@ public protocol PlannerServicing: Sendable {
     func applyPlan(
         workWindow: String,
         date: String,
-        usage: [String: Int]
+        usage: [String: Int],
+        expectedPlan: String,
+        previewAt: String
     ) async throws -> TKPlanPayload
     func cancelPlan(accountLabels: [String]) async throws -> TKPlanCancelPayload
 }
@@ -43,13 +45,17 @@ public struct LivePlannerService: PlannerServicing {
     public func applyPlan(
         workWindow: String,
         date: String,
-        usage: [String: Int]
+        usage: [String: Int],
+        expectedPlan: String,
+        previewAt: String
     ) async throws -> TKPlanPayload {
         try await LiveTKClient.make(timeout: timeout).plan(
             workWindow: workWindow,
             date: date,
             usage: usage,
-            apply: true
+            apply: true,
+            expectedPlan: expectedPlan,
+            previewAt: previewAt
         )
     }
 
@@ -250,6 +256,17 @@ public final class PlannerViewModel {
     public var usageMode: UsageAssumptionMode = .defaults
     public var customUsageMinutes: [String: Int] = [:]
 
+    private struct Request: Equatable {
+        let workWindow: String
+        let date: String
+        let usage: [String: Int]
+    }
+    private var request: Request { Request(workWindow: workWindow, date: dateArgument, usage: usageOverrides) }
+    private var previewRequest: Request?
+    private var confirmedRequest: Request?
+    private var confirmedFingerprint: String?
+    private var confirmedBuiltAt: String?
+    private var previewGeneration = 0
     private let service: any PlannerServicing
     private let onMutation: @MainActor () async -> Void
 
@@ -291,7 +308,8 @@ public final class PlannerViewModel {
 
     public var canApplyPreview: Bool {
         guard let preview else { return false }
-        return !isMutating && preview.readOnly && !preview.plannedKicks.isEmpty
+        return !isMutating && !isPreviewing && previewRequest == request
+            && preview.planFingerprint != nil && preview.builtAt != nil && preview.readOnly && !preview.plannedKicks.isEmpty
             && preview.diff.conflictsUnmanaged.isEmpty
     }
 
@@ -325,23 +343,40 @@ public final class PlannerViewModel {
     }
 
     public func previewPlan() async {
+        guard !isMutating else { return }
+        previewGeneration += 1
+        let generation = previewGeneration
+        let inputs = request
         isPreviewing = true
-        defer { isPreviewing = false }
+        cancelConfirmation()
+        defer { if generation == previewGeneration { isPreviewing = false } }
         do {
-            preview = try await service.previewPlan(
-                workWindow: workWindow,
-                date: dateArgument,
-                usage: usageOverrides
+            let result = try await service.previewPlan(
+                workWindow: inputs.workWindow, date: inputs.date, usage: inputs.usage
             )
+            guard generation == previewGeneration, inputs == request else { return }
+            preview = result
+            previewRequest = inputs
             actionMessage = nil
             phase = .loaded
         } catch {
+            guard generation == previewGeneration else { return }
+            preview = nil
+            previewRequest = nil
             phase = .failed(message: String(describing: error))
         }
     }
 
     public func requestApply() {
-        guard canApplyPreview else { return }
+        guard canApplyPreview, let fingerprint = preview?.planFingerprint, let builtAt = preview?.builtAt else { return }
+        var arguments = ["plan", "--work-window", workWindow, "--date", dateArgument, "--apply", "--yes", "--json-output",
+                         "--expected-plan", fingerprint, "--preview-at", builtAt]
+        for label in usageOverrides.keys.sorted() {
+            arguments += ["--usage", "\(label)=\(usageOverrides[label]!)m"]
+        }
+        confirmedRequest = previewRequest
+        confirmedFingerprint = preview?.planFingerprint
+        confirmedBuiltAt = preview?.builtAt
         pendingAction = .apply
         pendingConfirmation = ConfirmedAction(
             id: "planner-apply",
@@ -352,7 +387,7 @@ public final class PlannerViewModel {
             scopeLabel: "Orchestration plan",
             verb: "Apply Plan",
             isDestructive: false,
-            tkArguments: ["plan", "--work-window", workWindow, "--date", dateArgument, "--apply", "--yes", "--json-output"]
+            tkArguments: arguments
         )
     }
 
@@ -375,21 +410,34 @@ public final class PlannerViewModel {
     public func cancelConfirmation() {
         pendingConfirmation = nil
         pendingAction = nil
+        confirmedRequest = nil
+        confirmedFingerprint = nil
+        confirmedBuiltAt = nil
     }
 
     public func confirmPendingAction(snapshot: TKSnapshotPayload?) async {
         guard let action = pendingAction else { return }
-        pendingConfirmation = nil
-        pendingAction = nil
+        let inputs = confirmedRequest
+        let fingerprint = confirmedFingerprint
+        let builtAt = confirmedBuiltAt
+        cancelConfirmation()
+        if action == .apply && (inputs != request || !canApplyPreview) {
+            actionMessage = "Plan inputs changed; review a new preview."
+            return
+        }
+        previewGeneration += 1
         isMutating = true
         defer { isMutating = false }
         do {
             switch action {
             case .apply:
+                guard let inputs, let fingerprint, let builtAt else { return }
                 preview = try await service.applyPlan(
-                    workWindow: workWindow,
-                    date: dateArgument,
-                    usage: usageOverrides
+                    workWindow: inputs.workWindow,
+                    date: inputs.date,
+                    usage: inputs.usage,
+                    expectedPlan: fingerprint,
+                    previewAt: builtAt
                 )
                 actionMessage = preview?.message
                 let reference = preview.flatMap { parseUTCISO($0.workWindow.start) }

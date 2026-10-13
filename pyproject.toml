@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "tokenkick"
-version = "1.21.5"
+version = "1.21.6"
 description = "Local CLI for tracking AI coding quota windows, planning reset coverage, and optional explicit provider-native kicks."
 readme = "README.md"
 license = "MIT"
@@ -61,3 +61,7 @@ target-version = "py310"
 [tool.pytest.ini_options]
 testpaths = ["."]
 python_files = ["test_*.py"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"docs/AGENT_PLAYBOOK.md" = "tokenkick/resources/AGENT_PLAYBOOK.md"
+"docs/TOKENKICK_COMMANDS.md" = "tokenkick/resources/TOKENKICK_COMMANDS.md"

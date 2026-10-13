@@ -921,3 +921,26 @@ tk doctor "codex (account)" --json-output
 Development setup and contribution checks live in
 [`CONTRIBUTING.md`](../CONTRIBUTING.md). This command reference is for installed
 TokenKick usage.
+
+
+## Preview and recovery safeguards
+
+`tk plan --json-output` includes `plan_fingerprint` and `built_at`. To apply a reviewed
+preview, pass those values as `--expected-plan HASH --preview-at TIMESTAMP` alongside
+the same work window, date, timezone, and usage arguments, plus `--apply --yes`.
+TokenKick rereads configuration and pending work under locks before applying. Changed
+plans and expired previews require another review. The macOS Planner and MCP tools
+supply these fields automatically.
+
+Ordinary kicks, including `wake`, require eligible, current provider observations.
+A failed refresh or a predicted reset is insufficient. Explicit manual stale-data
+confirmation remains available through `tk kick`; `--force` is an explicit override.
+After an interrupted action, inspect `tk history` and refresh the account before using
+that override: the provider may already have received the previous request.
+
+New daemon and Telegram PID files include a process creation identity. TokenKick
+refuses to signal legacy or mismatched PID files. During an upgrade, first stop a
+legacy process through its verified service manager, then start the new runtime.
+
+`scripts/create-public-export.sh DESTINATION` requires a new destination outside the
+repository. It refuses existing destinations, source aliases, and overlapping paths.

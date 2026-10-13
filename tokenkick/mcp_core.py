@@ -10,6 +10,7 @@ normalization, and redaction live here so they can be tested with a fake ``tk``.
 from __future__ import annotations
 
 import hashlib
+from importlib.resources import files
 import json
 import os
 import re
@@ -72,6 +73,8 @@ class PreviewToken:
     risk: RiskLevel
     created_at: float
     expires_at: float
+    expected_plan: str | None = None
+    preview_at: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -89,7 +92,7 @@ class PreviewTokenStore:
         self.ttl_seconds = ttl_seconds
         self._tokens: dict[str, PreviewToken] = {}
 
-    def create(self, *, tool_name: str, argv: list[str], risk: RiskLevel) -> PreviewToken:
+    def create(self, *, tool_name: str, argv: list[str], risk: RiskLevel, expected_plan: str | None = None, preview_at: str | None = None) -> PreviewToken:
         self._prune()
         now = time.time()
         token = secrets.token_urlsafe(32)
@@ -100,11 +103,13 @@ class PreviewTokenStore:
             risk=risk,
             created_at=now,
             expires_at=now + self.ttl_seconds,
+            expected_plan=expected_plan,
+            preview_at=preview_at,
         )
         self._tokens[token] = preview
         return preview
 
-    def consume(self, token: str, *, tool_name: str, argv: list[str], risk: RiskLevel) -> None:
+    def consume(self, token: str, *, tool_name: str, argv: list[str], risk: RiskLevel) -> PreviewToken:
         self._prune()
         preview = self._tokens.pop(token, None)
         if preview is None:
@@ -115,6 +120,7 @@ class PreviewTokenStore:
             raise ValueError("preview_token was created for a different risk level")
         if preview.argv_hash != _argv_hash(argv):
             raise ValueError("preview_token does not match the requested command arguments")
+        return preview
 
     def _prune(self) -> None:
         now = time.time()
@@ -359,12 +365,15 @@ class TokenKickMCPCore:
             apply=True,
         )
         self._require_confirm(confirm)
-        self.token_store.consume(
+        preview = self.token_store.consume(
             preview_token,
             tool_name="tokenkick_plan_apply",
             argv=argv,
             risk="low_risk_mutation",
         )
+        if not preview.expected_plan or not preview.preview_at:
+            raise ValueError("Plan preview is missing its fingerprint; update tk and preview again")
+        argv += ["--expected-plan", preview.expected_plan, "--preview-at", preview.preview_at]
         return self._run(argv, risk="low_risk_mutation", app_mode=True, timeout=MUTATION_TIMEOUT_SECONDS)
 
     def tokenkick_plan_cancel_preview(self, *, accounts: list[str] | None = None) -> dict[str, Any]:
@@ -891,7 +900,11 @@ class TokenKickMCPCore:
             if no_token_reason:
                 result.setdefault("warnings", []).append(no_token_reason)
             return result
-        preview = self.token_store.create(tool_name=tool_name, argv=argv, risk=risk)
+        preview = self.token_store.create(
+            tool_name=tool_name, argv=argv, risk=risk,
+            preview_at=payload.get("built_at") if isinstance(payload, dict) else None,
+            expected_plan=payload.get("plan_fingerprint") if tool_name == "tokenkick_plan_apply" and isinstance(payload, dict) else None,
+        )
         result["preview_token"] = preview.to_dict()
         return result
 
@@ -1366,7 +1379,12 @@ def _string_list(value: Any) -> list[str]:
 
 
 def _read_repo_text(relative_path: str) -> str:
-    root = os.path.dirname(os.path.dirname(__file__))
-    path = os.path.join(root, relative_path)
-    with open(path, encoding="utf-8") as handle:
-        return handle.read()
+    name = os.path.basename(relative_path)
+    if name not in {"AGENT_PLAYBOOK.md", "TOKENKICK_COMMANDS.md"}:
+        raise ValueError("Unknown documentation resource")
+    packaged = files("tokenkick").joinpath("resources", name)
+    if packaged.is_file():
+        return packaged.read_text(encoding="utf-8")
+    # Editable/source checkouts keep one canonical documentation copy.
+    from pathlib import Path
+    return (Path(__file__).parent.parent / "docs" / name).read_text(encoding="utf-8")

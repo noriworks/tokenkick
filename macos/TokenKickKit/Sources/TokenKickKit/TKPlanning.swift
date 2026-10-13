@@ -103,6 +103,7 @@ public struct TKPlanPayload: Decodable, Equatable, Sendable {
     public let schemaVersion: Int
     public let readOnly: Bool
     public let applied: Bool
+    public let planFingerprint: String?
     public let builtAt: String?
     public let workWindow: WorkWindow
     public let cacheAgeSeconds: Int?
@@ -119,6 +120,7 @@ public struct TKPlanPayload: Decodable, Equatable, Sendable {
         case schemaVersion = "schema_version"
         case readOnly = "read_only"
         case applied
+        case planFingerprint = "plan_fingerprint"
         case builtAt = "built_at"
         case workWindow = "work_window"
         case cacheAgeSeconds = "cache_age_seconds"
@@ -214,7 +216,9 @@ extension TKClient {
         date: String,
         timezone: String? = nil,
         usage: [String: Int] = [:],
-        apply: Bool = false
+        apply: Bool = false,
+        expectedPlan: String? = nil,
+        previewAt: String? = nil
     ) async throws -> TKPlanPayload {
         var arguments = ["plan", "--work-window", workWindow, "--date", date, "--json-output"]
         if let timezone, !timezone.isEmpty {
@@ -227,6 +231,8 @@ extension TKClient {
         }
         if apply {
             arguments += ["--apply", "--yes"]
+            if let expectedPlan { arguments += ["--expected-plan", expectedPlan] }
+            if let previewAt { arguments += ["--preview-at", previewAt] }
         }
         let result = try await runner.run(
             executable: runtime,

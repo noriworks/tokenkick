@@ -1,5 +1,25 @@
 # Changelog
 
+## v1.21.6
+
+- Preserve account identity in partial caches and consistently mark expired observations stale.
+  Failed reads and predicted resets cannot authorize automatic kicks.
+- Merge independent configuration edits, reject conflicting edits, and serialize statistics,
+  pending-plan updates, daemon lifetimes, and per-account provider actions. Interrupted actions
+  require a refreshed status/history review before explicit `--force` recovery.
+- Verify process creation identity before stopping a daemon or Telegram listener. Legacy PID
+  files remain readable; stop an existing legacy process through its verified service manager
+  before upgrading and restarting it.
+- Apply the common quota/freshness policy to manual and scheduled kicks, drop expired work,
+  and preserve active overnight schedules across weekday/weekend boundaries.
+- Accept independent optional Codex quota windows and isolate malformed historical fallbacks.
+- Preserve unrelated TOML during MCP setup, ship MCP documentation in wheels and app runtimes,
+  and require exports to use a new directory that does not overlap the source repository.
+- Retry Telegram transport failures with bounded backoff and preserve valid HTML on truncation.
+- Bound macOS process cancellation and pipe draining, including descendants. Planner apply now
+  requires unchanged preview inputs and state; CLI clients can pass `--expected-plan` with the
+  preview's `plan_fingerprint`. MCP and the macOS app do this automatically.
+
 ## v1.21.5
 
 - Allow hidden Codex and Claude accounts, including Codex Spark surfaces, to

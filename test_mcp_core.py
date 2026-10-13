@@ -123,6 +123,8 @@ def _fake_tk(
                     "schema_version": 1,
                     "read_only": not applied,
                     "applied": applied,
+                    "plan_fingerprint": "reviewed-plan",
+                    "built_at": "2026-06-15T12:00:00Z",
                     "planned_kicks": [{{
                         "account_label": "codex (work)",
                         "account_key": "codex-home|codex|work",
@@ -363,7 +365,7 @@ def test_history_summarizes_detail_fields_by_default_and_verbose_keeps_redacted_
 
 
 def test_plan_apply_requires_preview_token_and_exact_arguments(tmp_path):
-    core, _log_path = _core(tmp_path)
+    core, log_path = _core(tmp_path)
     preview = core.tokenkick_plan_preview(work_window="21:00-02:00", date="2026-06-15")
     token = preview["preview_token"]["token"]
 
@@ -393,6 +395,9 @@ def test_plan_apply_requires_preview_token_and_exact_arguments(tmp_path):
 
     assert result["risk"] == "low_risk_mutation"
     assert result["payload"]["applied"] is True
+    assert _calls(log_path)[-1]["argv"][-4:] == [
+        "--expected-plan", "reviewed-plan", "--preview-at", "2026-06-15T12:00:00Z"
+    ]
 
 
 def test_failed_plan_preview_does_not_create_preview_token(tmp_path):

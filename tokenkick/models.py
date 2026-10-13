@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import copy
 import sys
 import time
 from dataclasses import dataclass, field, fields, asdict, replace
@@ -12,7 +13,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 from .consent import AUTO_KICK_CONSENT_VERSION, normalize_auto_kick_consents
-from .state_io import locked_atomic_write_text, locked_update_text
+from .state_io import atomic_write_text, state_file_lock, locked_update_text
 
 
 class StateFileError(Exception):
@@ -852,6 +853,7 @@ class Config:
     auto_kick_consents: dict[str, int] = field(default_factory=dict)
     migrations: dict[str, bool] = field(default_factory=dict)
     loaded_from_file: bool = False
+    _baseline: dict | None = field(default=None, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         self.auto_kick_consents = normalize_auto_kick_consents(self.auto_kick_consents)
@@ -877,8 +879,7 @@ class Config:
         self.codex_fire_all_surface_gap_seconds = self.codex_burst_ladder_gap_seconds
         self.codex_fire_all_surface_order = list(self.codex_burst_ladder_surface_order)
 
-    def save(self) -> None:
-        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    def _data(self) -> dict:
         data = {
             "accounts": [a.to_dict() for a in self.accounts],
             "notifications": self.notifications.to_dict(),
@@ -902,12 +903,32 @@ class Config:
             data["migrations"] = self.migrations
         if not self.schedule.is_default():
             data["schedule"] = self.schedule.to_dict()
-        locked_atomic_write_text(CONFIG_FILE, json.dumps(data, indent=2) + "\n")
+        return data
+
+    def save(self) -> None:
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        proposed = self._data()
+        with state_file_lock(CONFIG_FILE):
+            data = proposed
+            if self._baseline is not None:
+                if not CONFIG_FILE.exists() and self._baseline:
+                    raise StateFileError(CONFIG_FILE, "Configuration changed concurrently.",
+                                         "The saved configuration was removed.", "Reload and retry.")
+                current = (
+                    self._from_payload(json.loads(CONFIG_FILE.read_text()))._data()
+                    if CONFIG_FILE.exists() else {}
+                )
+                data = _merge_config_changes(self._baseline, proposed, current)
+            atomic_write_text(CONFIG_FILE, json.dumps(data, indent=2) + "\n")
+        self.__dict__.update(self._from_payload(data).__dict__)
+        self._baseline = copy.deepcopy(data)
 
     @classmethod
     def load(cls) -> Config:
         if not CONFIG_FILE.exists():
-            return cls()
+            config = cls()
+            config._baseline = {}
+            return config
         try:
             raw = CONFIG_FILE.read_text()
         except OSError as exc:
@@ -934,6 +955,13 @@ class Config:
                 "Top-level config must be a JSON object.",
                 "Repair the config file or move it aside and run tk setup to recreate it.",
             )
+        config = cls._from_payload(data)
+        config._baseline = copy.deepcopy(config._data())
+        config._disable_gemini_auto_kick_if_needed()
+        return config
+
+    @classmethod
+    def _from_payload(cls, data: dict) -> Config:
         try:
             accounts = _load_account_configs(data.get("accounts", []))
             config = cls(
@@ -993,7 +1021,6 @@ class Config:
                 str(exc),
                 "Repair the config file or move it aside and run tk setup to recreate it.",
             ) from exc
-        config._disable_gemini_auto_kick_if_needed()
         return config
 
     def _disable_gemini_auto_kick_if_needed(self) -> None:
@@ -1030,6 +1057,35 @@ class Config:
             **self.auto_kick_consents,
             provider: AUTO_KICK_CONSENT_VERSION,
         }
+
+
+_CONFIG_MISSING = object()
+
+
+def _merge_config_changes(base, proposed, current, path="config"):
+    """Three-way merge disjoint edits; refuse ambiguous edits instead of losing consent."""
+    if proposed == base:
+        return current
+    if current == base or current == proposed:
+        return proposed
+    if all(isinstance(value, dict) for value in (base, proposed, current)):
+        result = {}
+        for key in base.keys() | proposed.keys() | current.keys():
+            value = _merge_config_changes(
+                base.get(key, _CONFIG_MISSING), proposed.get(key, _CONFIG_MISSING),
+                current.get(key, _CONFIG_MISSING), f"{path}.{key}",
+            )
+            if value is not _CONFIG_MISSING:
+                result[key] = value
+        return result
+    if path == "config.accounts" and all(isinstance(v, list) for v in (base, proposed, current)):
+        def keyed(rows):
+            return {account_key_string(AccountConfig.from_dict(row)): row for row in rows}
+        merged = _merge_config_changes(keyed(base), keyed(proposed), keyed(current), "accounts")
+        order = list(dict.fromkeys([*keyed(current), *keyed(proposed)]))
+        return [merged[key] for key in order if key in merged]
+    raise StateFileError(CONFIG_FILE, "Configuration changed concurrently.",
+                         f"Conflicting change at {path}.", "Reload the configuration and retry.")
 
 
 def _canonical_codex_burst_ladder_enabled(data: dict) -> object:

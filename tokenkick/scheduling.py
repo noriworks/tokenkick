@@ -396,6 +396,15 @@ def resolve_today_work_window(
     tz: tzinfo,
 ) -> tuple[datetime, datetime] | None:
     local_now = now.astimezone(tz)
+    yesterday = local_now.date() - timedelta(days=1)
+    previous = schedule.weekends if yesterday.weekday() >= 5 else schedule.weekdays
+    if previous:
+        try:
+            start, end = parse_work_window(previous, yesterday, tz)
+            if start <= local_now < end:
+                return start, end
+        except ValueError:
+            pass
     window = schedule.weekends if local_now.weekday() >= 5 else schedule.weekdays
     if not window:
         return None

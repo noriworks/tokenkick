@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import errno
 import json
+import math
 import os
 import re
 import shlex
@@ -320,8 +321,15 @@ def _fetch_codex_direct(
         else:
             return identity_mismatch
 
-    session_status, session_failure = _fetch_codex_session_jsonl_status(account)
     appserver_status = _fetch_codex_appserver_ratelimits(account)
+    try:
+        session_status, session_failure = _fetch_codex_session_jsonl_status(account)
+    except (OSError, ValueError, TypeError, AttributeError, OverflowError):
+        session_status = None
+        session_failure = AccountStatus(
+            label=account.label, state=AccountState.UNKNOWN,
+            error="Unreadable Codex session fallback.", source_detail="codex-session-jsonl",
+        )
     if codex_rate_limit_id_for_account(account) != CODEX_DEFAULT_RATE_LIMIT_ID:
         if appserver_status is not None:
             return appserver_status
@@ -717,17 +725,17 @@ def _parse_codex_appserver_ratelimits(
         if isinstance(rate_limits.get("limitName"), str)
         else rate_limit_name
     )
-    weekly = rate_limits["secondary"]
-    session = rate_limits["primary"]
+    weekly = _valid_codex_window(rate_limits.get("secondary"))
+    session = _valid_codex_window(rate_limits.get("primary"))
     now = time.time()
     resets_at = _parse_reset_timestamp(weekly.get("resetsAt"))
     session_resets_at = _parse_reset_timestamp(session.get("resetsAt"))
     used_pct = _to_float(weekly.get("usedPercent"))
     resets_in = _seconds_until_reset(resets_at=resets_at, now=now)
-    window_min = int(weekly["windowDurationMins"])
+    window_min = int(weekly["windowDurationMins"]) if weekly else None
     session_used_pct = _to_float(session.get("usedPercent"))
     session_resets_in = _seconds_until_reset(resets_at=session_resets_at, now=now)
-    session_window_min = int(session["windowDurationMins"])
+    session_window_min = int(session["windowDurationMins"]) if session else None
     anchor_state = _codex_appserver_anchor_state(
         used_pct=used_pct,
         resets_in_seconds=resets_in,
@@ -738,6 +746,8 @@ def _parse_codex_appserver_ratelimits(
         resets_in_seconds=resets_in,
         window_anchor_state=anchor_state,
     )
+    if not weekly and session:
+        state = AccountState.ACTIVE
     return AccountStatus(
         label=label,
         state=state,
@@ -905,33 +915,38 @@ def _codex_appserver_schema_issue(
     return _codex_appserver_rate_limit_issue(rate_limits)
 
 
+def _valid_codex_window(value: Any, *, native: bool = True) -> dict:
+    """Optional windows are independent; malformed windows cannot authorize actions."""
+    if not isinstance(value, dict):
+        return {}
+    used, duration, reset = (
+        ("usedPercent", "windowDurationMins", "resetsAt") if native
+        else ("used_percent", "window_minutes", "resets_at")
+    )
+    try:
+        percent = float(value[used])
+        minutes = float(value[duration])
+        reset_at = _parse_reset_timestamp(value.get(reset))
+        relative = value.get("resets_in_seconds") if not native else None
+        reset_value = float(relative) if relative is not None else reset_at
+        if not math.isfinite(percent) or not 0 <= percent <= 100:
+            return {}
+        if not math.isfinite(minutes) or minutes <= 0 or not minutes.is_integer():
+            return {}
+        if reset_value is None or not math.isfinite(reset_value):
+            return {}
+    except (TypeError, ValueError, KeyError, OverflowError):
+        return {}
+    normalized = {**value, used: percent, duration: int(minutes), reset: reset_at}
+    if relative is not None:
+        normalized["resets_in_seconds"] = float(relative)
+    return normalized
+
+
 def _codex_appserver_rate_limit_issue(rate_limits: dict) -> str | None:
-    for path in [
-        ("primary", "usedPercent"),
-        ("primary", "windowDurationMins"),
-        ("primary", "resetsAt"),
-        ("secondary", "usedPercent"),
-        ("secondary", "windowDurationMins"),
-        ("secondary", "resetsAt"),
-    ]:
-        current: Any = rate_limits
-        for part in path:
-            if not isinstance(current, dict) or part not in current:
-                return "missing result.rateLimitsByLimitId entry." + ".".join(path)
-            current = current[part]
-        if path[-1] == "usedPercent":
-            try:
-                float(current)
-            except (TypeError, ValueError):
-                return "invalid result.rateLimitsByLimitId entry." + ".".join(path)
-        if path[-1] == "windowDurationMins":
-            try:
-                int(current)
-            except (TypeError, ValueError):
-                return "invalid result.rateLimitsByLimitId entry." + ".".join(path)
-        if path[-1] == "resetsAt" and _parse_reset_timestamp(current) is None:
-            return "invalid result.rateLimitsByLimitId entry." + ".".join(path)
-    return None
+    if any(_valid_codex_window(rate_limits.get(key)) for key in ("primary", "secondary")):
+        return None
+    return "missing valid result.rateLimitsByLimitId quota window"
 
 
 def _codex_appserver_anchor_state(
@@ -2904,11 +2919,10 @@ def _extract_session_token_count(event: dict) -> Optional[dict]:
 
 def _parse_session_rate_limit(label: str, payload: dict) -> AccountStatus:
     """Parse a token_count payload from a Codex session file."""
-    rate_limits = payload.get("rate_limits", {})
-
-    # Use the weekly (secondary) window as the primary concern
-    weekly = rate_limits.get("secondary", {})
-    session = rate_limits.get("primary", {})
+    rate_limits = payload.get("rate_limits")
+    rate_limits = rate_limits if isinstance(rate_limits, dict) else {}
+    weekly = _valid_codex_window(rate_limits.get("secondary"), native=False)
+    session = _valid_codex_window(rate_limits.get("primary"), native=False)
     used_pct = _to_float(weekly.get("used_percent"))
     resets_in = _seconds_until_reset(
         resets_at=weekly.get("resets_at"),
@@ -2931,6 +2945,8 @@ def _parse_session_rate_limit(label: str, payload: dict) -> AccountStatus:
         window_anchor_state=anchor_state,
     )
 
+    if not weekly and session:
+        state = AccountState.ACTIVE
     return AccountStatus(
         label=label,
         state=state,

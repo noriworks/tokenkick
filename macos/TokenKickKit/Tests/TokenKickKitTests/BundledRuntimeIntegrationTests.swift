@@ -125,9 +125,15 @@ final class BundledRuntimeIntegrationTests: XCTestCase {
     func testSetupStreamThroughBundledRuntime() async throws {
         let runtime = try bundledRuntime()
         let home = try isolatedHome()
-        var environment = TKEnvironment.subprocessEnvironment(home: home.path)
-        // No provider CLIs on PATH: discovery deterministically finds nothing.
-        environment["PATH"] = "/usr/bin:/bin"
+        // PATH alone is insufficient isolation: Antigravity discovery also
+        // searches the passwd home and standard install paths. Select a fake
+        // executable explicitly so this integration test never invokes one.
+        let fakeProvider = home.appendingPathComponent("agy")
+        try "#!/bin/sh\nexit 1\n".write(to: fakeProvider, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: fakeProvider.path)
+        var environment = TKEnvironment.subprocessEnvironment(
+            base: ["PATH": "/usr/bin:/bin"], home: home.path, pathAdditions: [])
+        environment["ANTIGRAVITY_CLI_PATH"] = fakeProvider.path
 
         let stream = try TKProcessRunner().streamLines(
             executable: runtime,
@@ -144,7 +150,13 @@ final class BundledRuntimeIntegrationTests: XCTestCase {
         let terminal = try TKSetupStream.terminalEvent(in: events)
         XCTAssertEqual(terminal.event, "setup_completed")
         XCTAssertEqual(terminal.ok, true)
-        XCTAssertEqual(terminal.payload?["config_saved"]?.boolValue, false)
+        XCTAssertEqual(terminal.payload?["config_saved"]?.boolValue, true)
+        let saved = try Data(contentsOf: home.appendingPathComponent(".tokenkick/config.json"))
+        let config = try XCTUnwrap(JSONSerialization.jsonObject(with: saved) as? [String: Any])
+        let accounts = try XCTUnwrap(config["accounts"] as? [[String: Any]])
+        XCTAssertEqual(accounts.count, 1)
+        XCTAssertEqual(accounts.first?["provider"] as? String, "antigravity")
+        XCTAssertFalse(accounts.first?["auto_kick"] as? Bool ?? true)
         XCTAssertEqual(exit.exitCode, 0)
     }
 }

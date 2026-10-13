@@ -30,6 +30,8 @@ rm -rf "$DIST_DIR" "$WORK_DIR"
     --onedir \
     --name tk \
     --collect-submodules tokenkick \
+    --add-data "$REPO_ROOT/docs/AGENT_PLAYBOOK.md:tokenkick/resources" \
+    --add-data "$REPO_ROOT/docs/TOKENKICK_COMMANDS.md:tokenkick/resources" \
     --distpath "$REPO_ROOT/dist/pyinstaller-out" \
     --workpath "$WORK_DIR" \
     --specpath "$WORK_DIR" \

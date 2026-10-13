@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import shutil
 import stat
 import subprocess
@@ -596,7 +595,7 @@ def _codex_entry(parsed: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def _toml_tokenkick_block_present(text: str) -> bool:
-    return any(_toml_section_name(line) == f"mcp_servers.{MCP_SERVER_NAME}" for line in text.splitlines())
+    return any(_toml_section_name(line) == ("mcp_servers", MCP_SERVER_NAME) for line in text.splitlines())
 
 
 def _replace_toml_tokenkick_block(text: str, block: str) -> str:
@@ -613,17 +612,48 @@ def _remove_toml_tokenkick_block(text: str) -> str:
     for line in lines:
         section = _toml_section_name(line)
         if section is not None:
-            skipping = section == f"mcp_servers.{MCP_SERVER_NAME}" or section.startswith(
-                f"mcp_servers.{MCP_SERVER_NAME}."
-            )
+            skipping = section[:2] == ("mcp_servers", MCP_SERVER_NAME)
         if not skipping:
             output.append(line)
-    return "\n".join(output).rstrip() + ("\n" if output else "")
+    result = "\n".join(output).rstrip() + ("\n" if output else "")
+    # Parsing both sides also protects multiline strings containing header-like
+    # text. Refuse ambiguous edits rather than corrupt another client's settings.
+    try:
+        expected = tomllib.loads(text)
+        servers = expected.get("mcp_servers", {})
+        if isinstance(servers, dict):
+            servers.pop(MCP_SERVER_NAME, None)
+            if not servers:
+                expected.pop("mcp_servers", None)
+        actual = tomllib.loads(result)
+        if actual.get("mcp_servers") == {}:
+            actual.pop("mcp_servers")
+        if actual != expected:
+            raise ValueError("unrelated configuration would change")
+    except (ValueError, tomllib.TOMLDecodeError) as exc:
+        raise MCPSetupError("Cannot safely edit the TokenKick TOML section.") from exc
+    return result
 
 
-def _toml_section_name(line: str) -> str | None:
-    match = re.match(r"^\s*\[([A-Za-z0-9_.-]+)\]\s*(?:#.*)?$", line)
-    return match.group(1) if match else None
+def _toml_section_name(line: str) -> tuple[str, ...] | None:
+    if not line.lstrip().startswith("["):
+        return None
+    try:
+        value = tomllib.loads(line + "\n__tokenkick_header_probe__ = true\n")
+        parts = []
+        while isinstance(value, (dict, list)):
+            if isinstance(value, list):
+                value = value[0]
+            elif "__tokenkick_header_probe__" in value:
+                return tuple(parts)
+            elif len(value) == 1:
+                key, value = next(iter(value.items()))
+                parts.append(key)
+            else:
+                return None
+    except (ValueError, IndexError):
+        return None
+    return None
 
 
 def _codex_toml_block(config: dict[str, Any]) -> str:

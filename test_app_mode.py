@@ -298,6 +298,12 @@ def test_telegram_remote_status_json_not_running():
 
 
 def test_telegram_remote_background_starts_process_and_writes_pid(monkeypatch, isolate_state):
+    monkeypatch.setattr("tokenkick.versioning.process_identity", lambda pid: "fixture-process-start")
+    def announce_child(process, path):
+        from tokenkick.versioning import write_daemon_pidfile
+        write_daemon_pidfile(path, process.pid, executable="/private/tmp/tk")
+        return True
+    monkeypatch.setattr("tokenkick.cli._wait_for_owned_start", announce_child)
     Config(
         accounts=[_codex_account("codex (dev)")],
         notifications=NotifyConfig(
@@ -1130,7 +1136,7 @@ def test_kick_json_attempted_confirmed(monkeypatch):
 
     monkeypatch.setattr(
         "tokenkick.cli._kick_and_notify",
-        lambda account, config, status, kick_type=None: KickEvent(
+        lambda account, config, status, kick_type=None, **kwargs: KickEvent(
             label=account.label,
             success=True,
             confirmed=True,
@@ -1164,7 +1170,7 @@ def test_kick_json_attempted_unconfirmed(monkeypatch):
 
     monkeypatch.setattr(
         "tokenkick.cli._kick_and_notify",
-        lambda account, config, status, kick_type=None: KickEvent(
+        lambda account, config, status, kick_type=None, **kwargs: KickEvent(
             label=account.label,
             success=True,
             confirmed=False,
@@ -1191,7 +1197,7 @@ def test_kick_json_attempted_failed(monkeypatch):
 
     monkeypatch.setattr(
         "tokenkick.cli._kick_and_notify",
-        lambda account, config, status, kick_type=None: KickEvent(
+        lambda account, config, status, kick_type=None, **kwargs: KickEvent(
             label=account.label,
             success=False,
             confirmed=False,
@@ -1218,7 +1224,7 @@ def test_kick_json_stale_with_yes_proceeds(monkeypatch):
 
     monkeypatch.setattr(
         "tokenkick.cli._kick_and_notify",
-        lambda account, config, status, kick_type=None: KickEvent(
+        lambda account, config, status, kick_type=None, **kwargs: KickEvent(
             label=account.label, success=True, confirmed=True
         ),
     )
