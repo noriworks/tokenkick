@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.23.2
+
+- Make the kick/cache regression deterministic across second boundaries using
+  a controlled clock, retaining its zero-age assertion and checking later aging.
+  The 1.23.1 tagged verification caught this race before PyPI publication.
+- Includes the 1.23.0 feature batch and 1.23.1 background-refresh fix.
+
 ## v1.23.1
 
 - Fix Python-installed background refresh, which invoked a module without an

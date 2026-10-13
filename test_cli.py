@@ -12904,6 +12904,12 @@ def test_multi_codex_auto_kick_kicks_all_eligible_accounts_with_each_codex_home(
 
 
 def test_successful_weekly_kick_marks_status_cache_entry_stale(monkeypatch):
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    monkeypatch.setattr("tokenkick.cli._status_cache_now", lambda: now)
+    monkeypatch.setattr(
+        "tokenkick.cli._status_cache_observed_at",
+        lambda: now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+    )
     account = AccountConfig(label="codex", provider="codex", auto_kick=True)
     key = account_key_string(account)
     status = AccountStatus(
@@ -12949,6 +12955,8 @@ def test_successful_weekly_kick_marks_status_cache_entry_stale(monkeypatch):
     assert statuses[0].stale_seconds == 0
     assert entries[key]["needs_refresh"] is True
     assert cleared == [("observation", "codex"), ("recovery", "codex")]
+    monkeypatch.setattr("tokenkick.cli._status_cache_now", lambda: now + timedelta(seconds=2))
+    assert _load_status_cache(Config(accounts=[account]))[1][0].stale_seconds == 2
 
 
 def test_kick_all_staggers_codex_targets_when_batch_state_passed(monkeypatch):

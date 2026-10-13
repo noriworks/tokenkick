@@ -149,3 +149,10 @@ The executable-module regression also exposed an actual installed-runtime bug:
 1.23.1 adds `tokenkick/__main__.py` and launches `python -m tokenkick`. The
 existing command-construction test now expects that entry point; a new real
 background-child test requires a written cache and removal of its owned lock.
+
+Tagged 1.23.1 verification then caught a pre-existing wall-clock race in
+`test_successful_weekly_kick_marks_status_cache_entry_stale`: its cache could age
+one second between writing and asserting zero. The forward release **1.23.2**
+freezes the test observation/reading clocks, retains the zero-age assertion, and
+adds a two-second aging assertion. No production freshness logic changed for
+this test fix. Neither 1.23.0 nor 1.23.1 reached PyPI.
