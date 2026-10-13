@@ -27,11 +27,11 @@ Server deployment is a separate step after local verification.
 
 Verified locally on 2026-10-13:
 
-- Python: **1,390 passed**, including 50 new audit regression cases.
+- Python: **1,395 passed**, including 55 new audit regression cases.
 - Swift: **201 passed, zero skipped**, including eight new regressions and all five
   bundled-runtime integration tests.
 - Ruff and `git diff --check`: passed.
-- Built the 1.21.6 wheel, source distribution, and PyInstaller runtime.
+- Built the 1.21.7 wheel, source distribution, and PyInstaller runtime.
 - Imported MCP documentation directly from the wheel outside the checkout and read both
   bundled resources through a real MCP stdio session. Both checks passed.
 - Regression subprocesses exercise lock contention, crash evidence, lost-update protection,
@@ -117,6 +117,31 @@ Additional fixture and integration updates:
 
 ## Release boundary
 
-Version metadata is 1.21.6. The repair branch is suitable for review and subsequent server
+Version metadata is 1.21.7. The repair branch is suitable for review and subsequent server
 validation. A numeric tag push publishes to PyPI, so publication and the Hetzner upgrade remain
 separate from this local repair/verification batch.
+
+
+## Fresh-install CI follow-up
+
+The first clean Linux CI run found two additional production defects masked by the local
+installation: the unbounded MCP dependency selected an incompatible v2 API, and Claude reset
+strings with explicit IANA timezones were being interpreted in the host timezone. Version
+1.21.7 bounds the existing dependency to `mcp>=1.9,<2` and parses reset times in their stated
+zone, including DST changes. Five additional regressions cover host timezone independence,
+DST, and rejecting an unknown explicit zone. The unchanged compact-reset parser test now
+passes on UTC hosts. No new production dependency was introduced.
+
+Three additional existing doctor tests had incomplete host fixtures. Their assertions remain
+unchanged:
+
+- `test_doctor_summary_counts_aggregate_global_and_account` explicitly supplies a synthetic
+  installed CodexBar binary for its expected OK diagnostic.
+- `test_doctor_antigravity_metadata_no_http_and_masks_csrf` supplies an absent CLI probe so its
+  process-metadata mock only receives the commands the test is intended to verify.
+- `test_doctor_antigravity_absent` also supplies an absent CLI probe instead of falling through
+  to the host's login-shell discovery.
+
+The CI matrix no longer cancels the other Python version after a failure, preserving both
+sets of diagnostics. The local 1.21.6 tag remains an unpublished earlier checkpoint; the final
+verified checkpoint is 1.21.7. No release tag has been pushed.

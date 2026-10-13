@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.21.7
+
+- Bound the existing MCP dependency to its compatible v1 API so fresh installations cannot
+  unexpectedly load the incompatible v2 server/client interfaces.
+- Honor explicit IANA timezones in Claude reset times, including daylight-saving changes,
+  instead of interpreting provider timestamps in the server's local timezone.
+- Make doctor and bundled setup tests independent of provider tools installed on the test host.
+
 ## v1.21.6
 
 - Preserve account identity in partial caches and consistently mark expired observations stale.

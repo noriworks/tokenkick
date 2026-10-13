@@ -22,6 +22,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from pathlib import Path
 from typing import Any, Optional
 
@@ -1751,9 +1752,16 @@ def _claude_reset_seconds_from_line(line: str, *, now: float | None) -> int | No
         return ((days * 24 + hours) * 60 + minutes) * 60
 
     raw = re.sub(r"(?i)^.*?resets?\s*(?:at|on|:)?\s*", "", line).strip()
+    zone = re.search(r"\(([^)]*)\)", raw)
+    reset_timezone = None
+    if zone:
+        try:
+            reset_timezone = ZoneInfo(zone.group(1).strip())
+        except (ZoneInfoNotFoundError, ValueError):
+            return None
     raw = re.sub(r"\([^)]*\)", "", raw).strip()
     raw = re.sub(r"\s+", " ", raw)
-    base = datetime.fromtimestamp(current).astimezone()
+    base = datetime.fromtimestamp(current, tz=reset_timezone).astimezone(reset_timezone)
     today = base.date()
     if raw.lower().startswith("tomorrow"):
         parsed = _parse_claude_time(raw[len("tomorrow") :].strip(" ,at"))

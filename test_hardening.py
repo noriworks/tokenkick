@@ -513,3 +513,26 @@ def test_status_error_html_truncation_remains_valid():
     assert len(output) <= 3900
     assert output.count('<i>') == output.count('</i>')
     assert not output.endswith('&l')
+
+
+@pytest.mark.parametrize('host_timezone', ['UTC', 'America/Los_Angeles'])
+@pytest.mark.parametrize('month', [1, 5])
+def test_claude_reset_timezone_is_provider_owned_across_hosts_and_dst(monkeypatch, host_timezone, month):
+    import time
+    from zoneinfo import ZoneInfo
+    now = datetime(2026, month, 17, 6, tzinfo=timezone.utc)
+    target = datetime(2026, 5, 29, 14, tzinfo=ZoneInfo('Europe/Berlin'))
+    try:
+        with monkeypatch.context() as context:
+            context.setenv('TZ', host_timezone)
+            time.tzset()
+            result = sources._claude_reset_seconds_from_line(
+                'ResetsMay29at2pm(Europe/Berlin)', now=now.timestamp())
+            assert result == int(target.timestamp() - now.timestamp())
+    finally:
+        time.tzset()
+
+
+def test_claude_unknown_explicit_timezone_does_not_guess_local_time():
+    assert sources._claude_reset_seconds_from_line(
+        'Resets12:20pm(Missing/Timezone)', now=1_779_000_000) is None

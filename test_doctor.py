@@ -134,6 +134,7 @@ def test_doctor_zero_accounts_clean_report(monkeypatch, tmp_path):
 
 
 def test_doctor_summary_counts_aggregate_global_and_account(monkeypatch, tmp_path):
+    monkeypatch.setattr(doctor_mod.shutil, "which", lambda name: "/test/codexbar" if name == "codexbar" else None)
     account = AccountConfig(label="codex", provider="codex")
     paths = _isolate_doctor(monkeypatch, tmp_path, Config(accounts=[account]))
     _write_cache(paths.cache_file, [account], [AccountStatus(label="codex", state=AccountState.ACTIVE)])
@@ -347,6 +348,8 @@ def test_doctor_schedule_pending_and_stale_warning(monkeypatch, tmp_path):
 
 
 def test_doctor_antigravity_metadata_no_http_and_masks_csrf(monkeypatch, tmp_path):
+    from tokenkick.antigravity import AntigravityCliProbe
+    monkeypatch.setattr(doctor_mod, "antigravity_cli_probe", lambda: AntigravityCliProbe(None, None, (), ()))
     account = AccountConfig(label="ag", provider="antigravity")
     _isolate_doctor(monkeypatch, tmp_path, Config(accounts=[account]))
     token = "token-should-not-render"
@@ -379,6 +382,8 @@ def test_doctor_antigravity_metadata_no_http_and_masks_csrf(monkeypatch, tmp_pat
 
 
 def test_doctor_antigravity_absent(monkeypatch, tmp_path):
+    from tokenkick.antigravity import AntigravityCliProbe
+    monkeypatch.setattr(doctor_mod, "antigravity_cli_probe", lambda: AntigravityCliProbe(None, None, (), ()))
     account = AccountConfig(label="ag", provider="antigravity")
     _isolate_doctor(monkeypatch, tmp_path, Config(accounts=[account]))
     monkeypatch.setattr(doctor_mod.subprocess, "run", lambda *_args, **_kwargs: SimpleNamespace(stdout=""))
