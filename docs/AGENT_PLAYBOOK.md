@@ -90,10 +90,11 @@ CLI/helper behavior, not TokenKick using AppleScript directly. Allowing it gives
 full Codex direct behavior; denying it may leave Codex status/kicks degraded or
 stale.
 
-If the provider exposes the Codex-Spark bucket, setup may save a sibling account
-like `codex-spark (name)`. It uses the same Codex home but a separate quota
-bucket and its own status window. New Spark accounts follow normal onboarding:
-auto-kick stays disabled until explicitly enabled.
+Spark is retired. Configuration loading removes saved Spark quota entries and
+clears retired Spark model pins on ordinary accounts, retaining homes and history.
+Codex kicks resolve an available Luna model from the live catalog and use its
+lowest supported economical effort. GPT-6 Luna is preferred. Claude kicks use
+Haiku with low effort and thinking off; interactive defaults remain unchanged.
 
 ## Safe Read Commands
 

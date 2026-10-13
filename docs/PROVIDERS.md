@@ -12,7 +12,7 @@ restrictions.
 
 | Provider/tool | Status source of truth | Kickable? | Windows | Caveats |
 |---|---|---:|---|---|
-| OpenAI Codex CLI / ChatGPT Codex | Codex app-server provider usage through the account's configured `CODEX_HOME`; local Codex session JSONL as fallback/override for ambiguous stale shapes | Yes | 5h session + weekly, first-use anchored | Each account needs its own Codex home. Interactive Codex model labels and provider quota bucket names are not always the same. If a separate Spark bucket is exposed, TokenKick discovers it as a sibling `codex-spark (...)` account. |
+| OpenAI Codex CLI / ChatGPT Codex | Codex app-server provider usage through the account's configured `CODEX_HOME`; local Codex session JSONL as fallback/override for ambiguous stale shapes | Yes | 5h session + weekly, first-use anchored | Each account needs its own Codex home. Interactive Codex model labels and provider quota bucket names are not always the same. Retired Spark entries are removed during config loading; historical quota records remain readable. |
 | Claude Code | Claude CLI `/usage` when direct usage is enabled; passive fallback/cache otherwise | Yes | 5h session + weekly, first-use anchored | `/usage` is useful but not purely passive. Daemon background refresh avoids silently running it; due session anchors are tracked as kick-history events. |
 | Antigravity | Antigravity CLI login state plus local backend named quota windows; CodexBar named quota windows as compatibility fallback | Monitor-only today | Gemini 5h + weekly, Claude/GPT 5h + weekly | The CLI currently has no documented non-interactive quota command. Kicking is not implemented in this release. |
 | Gemini CLI | Optional CodexBar monitoring data where configured | No | Daily RPD, fixed midnight PT reset | Monitor-only. Not first-use anchored, so a kick does not start a useful rolling window. |
@@ -22,13 +22,21 @@ restrictions.
 
 Codex has the broadest direct-account support in this release.
 
-Spark is bucket-detected. If Codex provider usage exposes the Spark bucket,
-TokenKick shows it as its own account/window and uses the Spark model override
-for kicks. If the bucket is absent, no Spark account is created; if a previously
-saved Spark account loses the bucket, it becomes Unknown and auto-kick is
-blocked. TokenKick does not infer Spark entitlement from subscription tier.
-Orchestration skips Spark until `usable_session_minutes` is explicitly set for
-that account, so rough placeholders do not steer a plan.
+Codex kicks query the account's live `model/list` catalog before each request.
+Automatic selection prefers `gpt-6-luna`, then the newest available numeric Luna
+version (including `gpt-5.6-luna` for older clients). It uses the lowest advertised
+`none`, `minimal`, or `low` effort and explicitly selects the standard service
+tier. It never automatically escalates to Sol, Terra, Astra, or medium/high effort.
+Catalog errors, unavailable explicit overrides, and missing economical models
+stop the kick with an error. Update Codex if its catalog does not expose newer
+models. The resolved model is recorded in kick history; status displays the
+selection policy without querying providers.
+
+Spark retired on September 14, 2026. Loading configuration removes entries for
+`codex_bengalfox` and clears retired Spark model pins on ordinary Codex accounts.
+Credential homes and history are retained. Discovery ignores stale Spark buckets,
+and direct attempts to kick Spark fail before generation. This migration runs
+when the upgraded application first loads the configuration.
 
 - TokenKick reads provider usage through the Codex app-server for the configured
   `CODEX_HOME`.
@@ -101,6 +109,13 @@ CODEX_HOME=/path/to/account-home codex
 
 ## Claude Code
 
+Completion kicks use the provider's `haiku` alias, `--effort low`, thinking off,
+and fast mode off. Explicit per-account model overrides remain available; low
+cost settings still apply. Setup probes and `/usage` launches use the same Haiku
+settings. Built-in tools and configured MCP servers are disabled for these
+minimal requests. Interactive model preferences are not changed on disk.
+The alias follows the provider's Haiku updates instead of pinning a retired version.
+
 Claude direct status uses the Claude CLI `/usage` path. That path can activate
 or refresh Claude's own view of a session, so TokenKick treats it carefully:
 
@@ -155,3 +170,12 @@ This command asks for confirmation, reads all four buckets before and after one
 minimal `agy --print` request, and stores only sanitized local evidence. It is
 not a user-facing kick path and is not used by auto-kick, schedules, run, or
 orchestration.
+
+The diagnostic reads `agy models` each time. Gemini probes choose the newest
+listed Gemini Flash (Low); Claude/GPT probes choose the newest Claude Haiku (Low)
+when present, otherwise Claude Sonnet (Low). Both pass `--effort low`, plan mode,
+and a tiny fixed prompt. No Opus or GPT-OSS fallback is selected automatically.
+An explicit label must be currently listed, match the requested family, and use
+Low effort. Missing catalogs/models stop the diagnostic without sending a prompt.
+These are economical family preferences, not measured subscription quota prices.
+Antigravity remains monitor-only until before/after quota anchoring is verified.

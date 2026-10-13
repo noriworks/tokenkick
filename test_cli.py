@@ -421,7 +421,7 @@ def test_codex_usage_debug_payload_labels_codex_spark_bucket(monkeypatch):
     assert payload["selected_bucket"]["display_name"] == "GPT-5.3-Codex-Spark quota"
 
 
-def test_codex_direct_discovery_adds_spark_sibling_when_bucket_exists(monkeypatch, tmp_path):
+def test_codex_direct_discovery_ignores_retired_spark_bucket(monkeypatch, tmp_path):
     from tokenkick.discovery import _append_codex_direct_account
 
     accounts: list[AccountConfig] = []
@@ -463,15 +463,8 @@ def test_codex_direct_discovery_adds_spark_sibling_when_bucket_exists(monkeypatc
 
     _append_codex_direct_account(accounts, statuses, tmp_path / ".codex")
 
-    assert [account.codex_rate_limit_id for account in accounts] == [None, "codex_bengalfox"]
-    spark = accounts[1]
-    assert spark.label.startswith("codex-spark")
-    assert spark.auto_kick is False
-    assert spark.weekly_auto_kick is False
-    assert spark.session_auto_kick is False
-    assert spark.kick_model == "gpt-5.3-codex-spark"
-    assert spark.plan_tier == "spark"
-    assert statuses[1].codex_rate_limit_id == "codex_bengalfox"
+    assert [account.codex_rate_limit_id for account in accounts] == [None]
+    assert len(statuses) == 1
 
 
 def test_codex_direct_discovery_skips_spark_sibling_when_bucket_absent(monkeypatch, tmp_path):
@@ -1196,6 +1189,13 @@ def test_interactive_like_codex_surface_uses_account_home_with_skip_flag(tmp_pat
 
 @pytest.fixture(autouse=True)
 def isolate_status_cache(monkeypatch, tmp_path):
+    monkeypatch.setattr("tokenkick.kicker.read_codex_model_catalog", lambda _home: [
+        {"model": "gpt-6-luna", "supportedReasoningEfforts": [{"reasoningEffort": "low"}]}
+    ])
+    monkeypatch.setattr("tokenkick.cli.antigravity_cli_binary", lambda: "/fixture/agy")
+    monkeypatch.setattr("tokenkick.cli.read_antigravity_models", lambda _binary: [
+        "Gemini 3.8 Flash (Low)", "Claude Sonnet 5.5 (Low)",
+    ])
     config_dir = tmp_path / "tokenkick-state"
     monkeypatch.setattr("tokenkick.models.CONFIG_DIR", config_dir)
     monkeypatch.setattr("tokenkick.models.CONFIG_FILE", config_dir / "config.json")
@@ -5164,7 +5164,7 @@ def test_antigravity_probe_kick_claude_gpt_json_output(monkeypatch):
     assert result.exit_code == 0
     payload = json.loads(result.output)
     assert payload["family"] == "claude-gpt"
-    assert payload["model"] == "GPT-OSS 120B (Medium)"
+    assert payload["model"] == "Claude Sonnet 5.5 (Low)"
     assert payload["before"]["session"]["id"] == "antigravity-quota-summary-3p-5h"
     assert payload["after"]["session"]["used_percent"] == 1.0
     assert payload["bucket_changed"] is True
@@ -11058,7 +11058,7 @@ def test_load_account_status_pairs_merges_newly_discovered_accounts(monkeypatch)
     assert [account.label for account in new_accounts] == ["gemini (gemini)"]
 
 
-def test_load_account_status_pairs_adds_spark_for_configured_codex_home(monkeypatch):
+def test_load_account_status_pairs_ignores_retired_spark_for_configured_home(monkeypatch):
     saved_account = AccountConfig(
         label="codex (personal)",
         provider="codex",
@@ -11113,17 +11113,10 @@ def test_load_account_status_pairs_adds_spark_for_configured_codex_home(monkeypa
     )
 
     assert discovered is False
-    assert summary == "Configured 2 accounts after discovery: codex=1, codex-spark=1."
-    assert [account.label for account in accounts] == [
-        "codex (personal)",
-        "codex-spark (personal)",
-    ]
-    spark = new_accounts[0]
-    assert spark.codex_rate_limit_id == "codex_bengalfox"
-    assert spark.auto_kick is False
-    assert spark.weekly_auto_kick is False
-    assert spark.session_auto_kick is False
-    assert statuses[1].label == "codex-spark (personal)"
+    assert summary == "Configured 1 account after discovery: codex=1."
+    assert [account.label for account in accounts] == ["codex (personal)"]
+    assert new_accounts == []
+    assert len(statuses) == 1
 
 
 def test_load_account_status_pairs_does_not_duplicate_existing_spark_account(monkeypatch):
@@ -12980,6 +12973,10 @@ def test_kick_all_staggers_codex_targets_when_batch_state_passed(monkeypatch):
 
 
 def test_codex_kick_surfaces_json_error_from_stdout(monkeypatch):
+    # The catalog can advertise a model that is rejected later at request time.
+    monkeypatch.setattr("tokenkick.kicker.read_codex_model_catalog", lambda _home: [
+        {"model": "bad-model", "supportedReasoningEfforts": [{"reasoningEffort": "low"}]}
+    ])
     stdout = "\n".join(
         [
             json.dumps({"type": "thread.started", "thread_id": "abc"}),
@@ -18659,7 +18656,7 @@ def test_accounts_list_hide_and_show_manage_visibility(monkeypatch):
 
     assert listed.exit_code == 0
     assert "Kick model" in listed.output
-    assert "default" in listed.output
+    assert "auto (Luna, lowest effort)" in listed.output
     assert "codex" in listed.output
     assert "✅ visible" in listed.output
     assert "gemini" in listed.output
@@ -26308,3 +26305,34 @@ def test_init_invokes_setup_with_deprecation_message(monkeypatch):
 
     assert result.exit_code == 0
     assert "tk init is deprecated; use tk setup." in result.output
+
+
+def test_antigravity_probe_catalog_failure_sends_no_request(monkeypatch):
+    from tokenkick.model_selection import ModelSelectionError
+    account = _antigravity_probe_account()
+    monkeypatch.setattr("tokenkick.cli.Config.load", lambda: Config(accounts=[account]))
+    monkeypatch.setattr("tokenkick.cli._load_accounts", lambda _config: [account])
+    def fail(_binary):
+        raise ModelSelectionError("catalog unavailable")
+    monkeypatch.setattr("tokenkick.cli.read_antigravity_models", fail)
+    monkeypatch.setattr("tokenkick.cli._run_antigravity_probe_request", lambda **_kw: pytest.fail("must not generate"))
+    result = CliRunner().invoke(cli, ["antigravity", "probe-kick", "--family", "gemini", "--yes"])
+    assert result.exit_code == 1
+    assert "catalog unavailable" in result.output
+
+
+def test_antigravity_probe_request_overrides_interactive_effort(monkeypatch):
+    from tokenkick.cli import _run_antigravity_probe_request
+    calls = []
+    def run(command, **kwargs):
+        calls.append(command)
+        return SimpleNamespace(returncode=0, stdout="OK", stderr="")
+    monkeypatch.setattr("tokenkick.cli.subprocess.run", run)
+    result = _run_antigravity_probe_request(family="claude_gpt", model="Claude Sonnet 5.5 (Low)", timeout_seconds=30)
+    assert result["success"]
+    command = calls[0]
+    assert command[command.index("--model") + 1] == "Claude Sonnet 5.5 (Low)"
+    assert command[command.index("--effort") + 1] == "low"
+    assert command[command.index("--mode") + 1] == "plan"
+    assert command[command.index("--print") + 1] == "Reply with exactly: OK"
+    assert "--dangerously-skip-permissions" not in command

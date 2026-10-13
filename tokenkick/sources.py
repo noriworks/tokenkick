@@ -50,6 +50,7 @@ from .codexbar_source import (
     codexbar_json_cache_active,
 )
 from .claude_setup import ensure_claude_probe_ready
+from .model_selection import claude_economical_args, claude_economical_env
 from .direct import (
     CODEX_PROVIDER_USAGE_SOURCE_DETAIL,
     CODEX_PROVIDER_USAGE_TIMEOUT_SECONDS,
@@ -1370,12 +1371,13 @@ class _ClaudeUsageCaptureTimeout(TimeoutError):
 def _capture_claude_usage_pipe(binary: str) -> str:
     try:
         result = subprocess.run(
-            [binary, "--allowed-tools", ""],
+            [binary, *claude_economical_args()],
             input="/usage\n/exit\n",
             capture_output=True,
             text=True,
             timeout=CLAUDE_CLI_USAGE_TIMEOUT_SECONDS,
             cwd=_claude_probe_cwd(),
+            env=claude_economical_env(),
         )
     except subprocess.TimeoutExpired as exc:
         raise TimeoutError(f"Claude CLI /usage timed out after {CLAUDE_CLI_USAGE_TIMEOUT_SECONDS:g}s.") from exc
@@ -1434,10 +1436,10 @@ def _capture_claude_usage_pty_once(binary: str, *, timeout_seconds: float) -> st
             fcntl.ioctl(slave_fd, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 120, 0, 0))
         except OSError:
             pass
-        env = os.environ.copy()
+        env = claude_economical_env()
         env.setdefault("TERM", "xterm-256color")
         process = subprocess.Popen(
-            [binary, "--allowed-tools", ""],
+            [binary, *claude_economical_args()],
             stdin=slave_fd,
             stdout=slave_fd,
             stderr=slave_fd,

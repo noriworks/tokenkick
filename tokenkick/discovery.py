@@ -34,6 +34,7 @@ from .migrations import (
 from .models import (
     CODEX_DEFAULT_RATE_LIMIT_ID,
     CODEX_SPARK_MODEL_ID,
+    CODEX_SPARK_RATE_LIMIT_ID,
     AccountConfig,
     AccountState,
     AccountStatus,
@@ -318,7 +319,7 @@ def _append_codex_spark_account_if_available(
     codex_home: Path,
 ) -> None:
     bucket = codex_appserver_spark_bucket(codex_appserver_bucket_metadata(codex_home))
-    if bucket is None:
+    if bucket is None or (bucket.get("limit_id") or bucket.get("key")) == CODEX_SPARK_RATE_LIMIT_ID:
         return
     limit_id = str(bucket.get("limit_id") or bucket.get("key") or "").strip()
     if not limit_id or limit_id == CODEX_DEFAULT_RATE_LIMIT_ID:
@@ -338,7 +339,7 @@ def _spark_pairs_for_configured_codex_homes(
             continue
         codex_home = Path(account.provider_home or "")
         bucket = codex_appserver_spark_bucket(codex_appserver_bucket_metadata(codex_home))
-        if bucket is None:
+        if bucket is None or (bucket.get("limit_id") or bucket.get("key")) == CODEX_SPARK_RATE_LIMIT_ID:
             continue
         spark_account = _codex_spark_account_from_bucket(account, bucket)
         if _account_key(spark_account) in existing_keys:

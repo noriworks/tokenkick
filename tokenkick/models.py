@@ -957,8 +957,24 @@ class Config:
             )
         config = cls._from_payload(data)
         config._baseline = copy.deepcopy(config._data())
+        config._remove_retired_spark_entries()
         config._disable_gemini_auto_kick_if_needed()
         return config
+
+    def _remove_retired_spark_entries(self) -> None:
+        """Remove retired quota entries, retaining their homes and historical records."""
+        accounts = [
+            replace(account, kick_model=None)
+            if account.provider == "codex" and account.kick_model == CODEX_SPARK_MODEL_ID
+            else account
+            for account in self.accounts
+            if not (account.provider == "codex"
+                    and account.codex_rate_limit_id == CODEX_SPARK_RATE_LIMIT_ID)
+        ]
+        if accounts != self.accounts:
+            self.accounts = accounts
+            self.migrations = {**self.migrations, "retired_codex_spark_removed": True}
+            self.save()
 
     @classmethod
     def _from_payload(cls, data: dict) -> Config:

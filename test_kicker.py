@@ -29,6 +29,10 @@ from tokenkick.models import AccountConfig, DataSource
 @pytest.fixture(autouse=True)
 def isolate_kicker_config(monkeypatch, tmp_path):
     monkeypatch.setattr("tokenkick.kicker.CONFIG_DIR", tmp_path / "config")
+    monkeypatch.setattr("tokenkick.kicker.read_codex_model_catalog", lambda _home: [
+        {"model": name, "supportedReasoningEfforts": [{"reasoningEffort": "low"}]}
+        for name in ("gpt-6-luna", "codex-custom", "codex-stronger")
+    ])
 
 
 def test_codex_home_for_session_account_uses_session_parent():
@@ -42,32 +46,26 @@ def test_codex_home_for_session_account_uses_session_parent():
     assert codex_home_for_account(account) == Path("/tmp/codex-home")
 
 
-def test_kick_commands_do_not_request_unverified_provider_default_models(tmp_path):
-    claude_command, _env = _kick_command(AccountConfig(label="claude", provider="claude"))
-    assert claude_command == [
-        "claude",
-        "-p",
-        "1+1",
-        "--output-format",
-        "json",
-        "--tools",
-        "",
-    ]
-
+def test_kick_commands_use_economical_models_and_settings(tmp_path):
+    command, env = _kick_command(AccountConfig(label="claude", provider="claude"))
+    assert command[command.index("--model") + 1] == "haiku"
+    assert command[command.index("--effort") + 1] == "low"
+    assert command[command.index("--tools") + 1] == ""
+    assert json.loads(command[command.index("--settings") + 1]) == {
+        "alwaysThinkingEnabled": False, "effortLevel": "low", "fastMode": False,
+    }
+    assert env["MAX_THINKING_TOKENS"] == "0"
     codex_command, env = _kick_command(
         AccountConfig(label="codex", provider="codex", provider_home=str(tmp_path))
     )
-    assert codex_command[:3] == [
-        "codex",
-        "exec",
-        "--json",
-    ]
+    assert codex_command[:3] == ["codex", "exec", "--json"]
     assert "--skip-git-repo-check" not in codex_command
-    assert len(codex_command) == 4
+    assert codex_command[codex_command.index("--model") + 1] == "gpt-6-luna"
+    assert 'model_reasoning_effort="low"' in codex_command
+    assert 'service_tier="default"' in codex_command
     assert codex_command[-1].startswith(CODEX_KICK_PROMPT)
     assert "Anchor account label: codex." in codex_command[-1]
     assert "Anchor nonce:" in codex_command[-1]
-    assert env is not None
     assert env["CODEX_HOME"] == str(tmp_path)
 
 
@@ -98,19 +96,14 @@ def test_codex_kick_model_override_wins(tmp_path):
     assert command[command.index("--model") + 1] == "codex-custom"
 
 
-def test_codex_spark_bucket_uses_spark_model_by_default(tmp_path):
+def test_codex_spark_bucket_cannot_kick_after_retirement(tmp_path):
     account = AccountConfig(
-        label="codex-spark",
-        provider="codex",
-        provider_home=str(tmp_path),
+        label="codex-spark", provider="codex", provider_home=str(tmp_path),
         codex_rate_limit_id="codex_bengalfox",
     )
-
-    command, _env = _kick_command(account)
-
-    assert kick_model_for_account(account) == "gpt-5.3-codex-spark"
-    assert "--model" in command
-    assert command[command.index("--model") + 1] == "gpt-5.3-codex-spark"
+    event = kick_account(account, record=False)
+    assert not event.success
+    assert "retired" in event.error
 
 
 def test_codex_kick_default_uses_repo_workspace_without_skip(tmp_path):
@@ -213,7 +206,7 @@ def test_codex_phantom_recovery_model_does_not_affect_normal_kicks(monkeypatch, 
 
     command, _env = _kick_command(account)
 
-    assert "--model" not in command
+    assert command[command.index("--model") + 1] == "gpt-6-luna"
     assert command[-1].startswith(CODEX_KICK_PROMPT)
 
 
@@ -253,9 +246,9 @@ def test_kick_account_records_requested_reported_model_and_tokens(monkeypatch):
 
     event = kick_account(AccountConfig(label="claude", provider="claude"), record=False)
 
-    assert "--model" not in captured["command"]
+    assert captured["command"][captured["command"].index("--model") + 1] == "haiku"
     assert event.success is True
-    assert event.kick_model is None
+    assert event.kick_model == "haiku"
     assert event.reported_model == "haiku"
     assert event.input_tokens == 7
     assert event.output_tokens == 1
@@ -277,7 +270,7 @@ def test_kick_account_parses_codex_jsonl_metadata(monkeypatch):
 
     event = kick_account(AccountConfig(label="codex", provider="codex"), record=False)
 
-    assert event.kick_model is None
+    assert event.kick_model == "gpt-6-luna"
     assert event.reported_model == "gpt-5.2-codex-mini"
     assert event.input_tokens == 12
     assert event.output_tokens == 1

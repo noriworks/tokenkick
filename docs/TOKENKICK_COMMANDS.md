@@ -551,7 +551,7 @@ Useful `tk history --json-output` fields:
 
 - `success`: whether the provider command exited successfully.
 - `confirmed`: whether TokenKick believes the kick anchored the visible bucket.
-- `kick_model`: model requested for the kick; `null` means provider default.
+- `kick_model`: resolved model requested for the kick; `null` in older history means provider default. An unset account override now selects economically at request time.
 - `input_tokens` / `output_tokens`: proof the provider accepted work.
 - `codex_attribution`: whether a Codex reset-clock match was strong enough to
   teach the surface scorer (`strong`) or only timing evidence for dedupe/history.
@@ -582,17 +582,9 @@ Notes:
 - `tk codex-usage` is a status diagnostic; it does not kick.
 - The selected `codex` bucket means the main/default Codex quota. Interactive
   model labels and backend quota bucket names are not always the same.
-- If the provider exposes a separate Spark quota bucket, TokenKick saves it as a
-  sibling account such as `codex-spark (...)`, with auto-kick disabled until
-  explicitly enabled.
-- Spark is bucket-detected, not tier-inferred. If a saved Spark account no
-  longer exposes the bucket, status becomes Unknown and auto-kick is blocked
-  until the provider exposes it again.
-- `tk plan` does not use Spark from the rough `spark` tier default alone. Set a
-  measured/user-chosen `usable_session_minutes` on the Spark account before
-  allowing orchestration to schedule it.
-- If you do not want Spark in orchestration at all, use
-  `tk accounts set-role "<spark label>" excluded`.
+- Spark is retired. Config loading removes saved Spark entries and clears retired
+  Spark pins on ordinary accounts. Discovery ignores stale Spark buckets; homes
+  and historical records are retained.
 - `tk codex-surfaces` is read-only. It shows the current adaptive attempt
   order, human-readable surface labels, capped learning scores, strong
   wins/tries, issue counters, and skipped surfaces.
@@ -753,8 +745,12 @@ tk accounts clear-kick-model "<label>"
 
 Notes:
 
-- Prefer the provider default unless you are deliberately testing a
-  model-specific quota bucket.
+- Leave the override unset for economical selection: Codex queries its account's
+  live catalog, preferring GPT-6 Luna and the lowest supported effort; Claude uses
+  the current Haiku alias with low effort and thinking off.
+- Explicit Codex overrides must be advertised by that account and support an
+  economical effort. Missing models/catalogs fail clearly instead of inheriting
+  an expensive interactive default. Actual selected models appear in history.
 - `tk accounts set-kick-model` and `clear-kick-model` are legacy/advanced
   equivalents.
 

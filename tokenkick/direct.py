@@ -13,6 +13,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .model_selection import claude_economical_args, claude_economical_env
+
 CODEX_PROVIDER_USAGE_ENDPOINT = "https://chatgpt.com/backend-api/api/codex/usage"
 CODEX_PROVIDER_USAGE_SOURCE_DETAIL = "codex-provider-usage"
 LEGACY_CODEX_PROVIDER_USAGE_SOURCE_DETAIL = "codex-appserver-ratelimits"
@@ -180,6 +182,7 @@ def _request_codex_appserver_usage(
 def _read_codex_appserver_response(
     proc: subprocess.Popen[bytes],
     timeout_seconds: float,
+    request_id: int = CODEX_PROVIDER_USAGE_REQUEST_ID,
 ) -> dict[str, Any] | None:
     assert proc.stdout is not None
     selector = selectors.DefaultSelector()
@@ -204,12 +207,57 @@ def _read_codex_appserver_response(
                     continue
                 if (
                     isinstance(payload, dict)
-                    and payload.get("id") == CODEX_PROVIDER_USAGE_REQUEST_ID
+                    and payload.get("id") == request_id
                 ):
                     return payload
         return None
     finally:
         selector.close()
+
+
+def read_codex_model_catalog(codex_home: Path, *, timeout_seconds: float = 10.0) -> list[dict]:
+    """Read all live model pages for this identity without starting a model turn."""
+    proc = _start_codex_appserver(codex_home)
+    deadline = time.monotonic() + timeout_seconds
+    try:
+        assert proc.stdin is not None
+
+        def request(message: dict) -> dict:
+            proc.stdin.write(json.dumps(message).encode() + b"\n")
+            proc.stdin.flush()
+            response = _read_codex_appserver_response(
+                proc, max(0.0, deadline - time.monotonic()), message["id"]
+            )
+            if not response or "error" in response or not isinstance(response.get("result"), dict):
+                raise CodexProviderUsageError("Codex model catalog unavailable; no kick was sent.")
+            return response["result"]
+
+        request({"id": 1, "method": "initialize", "params": {
+            "clientInfo": {"name": "tokenkick", "version": "1"},
+            "capabilities": {"experimentalApi": True},
+        }})
+        proc.stdin.write(b'{"method":"notifications/initialized"}\n')
+        proc.stdin.flush()
+        models: list[dict] = []
+        cursor = None
+        seen: set[str] = set()
+        for page in range(20):
+            result = request({"id": page + 2, "method": "model/list", "params": {
+                "includeHidden": True, "cursor": cursor,
+            }})
+            data = result.get("data")
+            if not isinstance(data, list) or not all(isinstance(model, dict) for model in data):
+                raise CodexProviderUsageError("Codex returned an invalid model catalog; no kick was sent.")
+            models.extend(data)
+            cursor = result.get("nextCursor")
+            if cursor is None:
+                return models
+            if not isinstance(cursor, str) or not cursor or cursor in seen:
+                break
+            seen.add(cursor)
+        raise CodexProviderUsageError("Codex model catalog pagination failed; no kick was sent.")
+    finally:
+        _stop_codex_appserver_process(proc)
 
 
 def _stop_codex_appserver_process(proc: subprocess.Popen[bytes] | None) -> None:
@@ -346,10 +394,12 @@ def probe_claude_status() -> tuple[bool, str | None]:
                 "Reply with only the number 2: what is 1+1?",
                 "--output-format",
                 "json",
+                *claude_economical_args(),
             ],
             capture_output=True,
             text=True,
             timeout=60,
+            env=claude_economical_env(),
         )
     except FileNotFoundError:
         return False, "Claude CLI not found."

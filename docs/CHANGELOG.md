@@ -1,5 +1,16 @@
 # Changelog
 
+## v1.21.8
+
+- Select Codex kick models from each account's live catalog, preferring GPT-6 Luna
+  with the lowest supported economical effort and standard service tier. Stop on
+  missing models or catalog failures instead of falling back to expensive defaults.
+- Use Haiku, low effort, and thinking/fast mode off for Claude kicks and probes.
+- Select current Low-effort Flash or Claude Haiku/Sonnet models for Antigravity
+  diagnostics. Antigravity automatic kicking remains disabled pending validation.
+- Remove retired Spark config entries and stale model pins, preserving credentials
+  and history, and prevent rediscovery or generation against the retired bucket.
+
 ## v1.21.7
 
 - Bound the existing MCP dependency to its compatible v1 API so fresh installations cannot

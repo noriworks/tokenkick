@@ -12,6 +12,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .direct import CodexProviderUsageError, read_codex_model_catalog
+from .model_selection import (
+    ModelSelectionError, claude_economical_args, claude_economical_env, select_codex_model,
+)
+
 from .models import (
     CODEX_SPARK_MODEL_ID,
     CODEX_SPARK_RATE_LIMIT_ID,
@@ -39,7 +44,7 @@ ANTIGRAVITY_MONITOR_ONLY_MESSAGE = (
 ANTIGRAVITY_AUTO_KICK_DISABLED_MESSAGE = (
     "Antigravity is monitor-only; auto-kick cannot be enabled."
 )
-DEFAULT_KICK_MODELS: dict[str, str] = {}
+DEFAULT_KICK_MODELS: dict[str, str] = {"claude": "haiku"}
 CODEX_KICK_PROMPT = (
     "TokenKick quota anchor probe. Do not inspect files or run commands."
 )
@@ -76,6 +81,7 @@ class KickInvocation:
     env: dict[str, str] | None = None
     cwd: Path | None = None
     workspace_git_present: bool | None = None
+    model: str | None = None
 
 
 def kick_model_for_account(
@@ -210,21 +216,27 @@ def kick_account(
             append_kick_event(event)
         return event
 
-    invocation = _kick_invocation(
-        account,
-        phantom_recovery=phantom_recovery,
-        model_override=model_override,
-        codex_surface=codex_surface,
-    )
+    try:
+        invocation = _kick_invocation(
+            account,
+            phantom_recovery=phantom_recovery,
+            model_override=model_override,
+            codex_surface=codex_surface,
+        )
+    except (ModelSelectionError, CodexProviderUsageError, OSError) as exc:
+        event = KickEvent(
+            label=account.label, timestamp=time.time(), success=False,
+            error=str(exc) if isinstance(exc, (ModelSelectionError, CodexProviderUsageError))
+            else "Provider model catalog unavailable; no kick was sent.",
+        )
+        if record:
+            append_kick_event(event)
+        return event
     command = invocation.command
     env = invocation.env
     cli_name = command[0]
     prompt_text = _kick_prompt_text(account, command)
-    requested_model = kick_model_for_account(
-        account,
-        phantom_recovery=phantom_recovery,
-        model_override=model_override,
-    )
+    requested_model = invocation.model
 
     try:
         result = subprocess.run(
@@ -338,10 +350,18 @@ def _kick_invocation(
         model_override=model_override,
     )
     if account.provider == "claude":
-        command = ["claude", "-p", CLAUDE_KICK_PROMPT, "--output-format", "json", "--tools", ""]
-        if model:
-            command.extend(["--model", model])
-        return KickInvocation(command=command)
+        model = model or "haiku"
+        command = [
+            "claude", "-p", CLAUDE_KICK_PROMPT, "--output-format", "json",
+            *claude_economical_args(model),
+        ]
+        return KickInvocation(command=command, env=claude_economical_env(), model=model)
+
+    if (codex_rate_limit_id_for_account(account) == CODEX_SPARK_RATE_LIMIT_ID
+            or model == CODEX_SPARK_MODEL_ID):
+        raise ModelSelectionError("Codex Spark has retired; no kick was sent.")
+    selection = select_codex_model(read_codex_model_catalog(codex_home_for_account(account)), model)
+    model = selection.model
 
     env = os.environ.copy()
     env["CODEX_HOME"] = str(codex_home_for_account(account))
@@ -362,12 +382,15 @@ def _kick_invocation(
             command.append("--skip-git-repo-check")
     if model:
         command.extend(["--model", model])
+    command.extend(["-c", f'model_reasoning_effort="{selection.effort}"',
+                    "-c", 'service_tier="default"'])
     command.append(_codex_kick_prompt(account, phantom_recovery=phantom_recovery))
     return KickInvocation(
         command=command,
         env=env,
         cwd=cwd,
         workspace_git_present=workspace_git_present,
+        model=model,
     )
 
 

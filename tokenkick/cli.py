@@ -75,6 +75,11 @@ from .models import (
     update_kick_history,
     weekly_quota_exhausted,
 )
+from .model_selection import (
+    ModelSelectionError,
+    read_antigravity_models,
+    select_antigravity_model,
+)
 from .sources import (
     _codex_appserver_bucket_display_name as _codex_appserver_bucket_display_name,
     _codex_appserver_rate_limit_issue as _codex_appserver_rate_limit_issue,
@@ -412,10 +417,6 @@ PHANTOM_RECOVERY_FILE = CONFIG_DIR / "phantom-recovery.json"
 CODEX_PENDING_CONFIRMATIONS_FILE = CONFIG_DIR / "codex-pending-confirmations.json"
 ANTIGRAVITY_PROBE_PROMPT_ID = "tokenkick-antigravity-probe-v1"
 ANTIGRAVITY_PROBE_PROMPT = "Reply with exactly: OK"
-ANTIGRAVITY_PROBE_DEFAULT_MODELS = {
-    "gemini": "Gemini 3.5 Flash (Low)",
-    "claude_gpt": "GPT-OSS 120B (Medium)",
-}
 ANTIGRAVITY_PROBE_RESET_CHANGE_TOLERANCE_SECONDS = 30.0
 PHANTOM_SESSION_MIN_SECONDS = 20 * 60
 PHANTOM_SESSION_MAX_USED_PERCENT = 2.0
@@ -6333,7 +6334,7 @@ def _kick_model_display(account: AccountConfig) -> str:
         return "—"
     model = kick_model_for_account(account)
     if not model:
-        return "default"
+        return "auto (Luna, lowest effort)"
     if account.kick_model:
         return model
     return f"{model} (default)"
@@ -8365,7 +8366,7 @@ def accounts_set_kick_model(label: str, model: str, as_json: bool):
 @click.argument("label")
 @click.option("--json-output", "as_json", is_flag=True, help="Output result as JSON")
 def accounts_clear_kick_model(label: str, as_json: bool):
-    """Reset an account to its provider default kick model."""
+    """Reset an account to economical automatic model selection."""
     config = Config.load()
     loaded_accounts = _load_accounts(config)
     _run_account_mutation(
@@ -8401,7 +8402,7 @@ def model_set(label: str, model: str, as_json: bool):
 @click.argument("label")
 @click.option("--json-output", "as_json", is_flag=True, help="Output result as JSON")
 def model_clear(label: str, as_json: bool):
-    """Reset an account to its provider default kick model."""
+    """Reset an account to economical automatic model selection."""
     config = Config.load()
     loaded_accounts = _load_accounts(config)
     _run_account_mutation(
@@ -12127,7 +12128,15 @@ def antigravity_probe_kick(
     config = Config.load()
     account = _antigravity_probe_account_or_exit(account_label, _load_accounts(config))
     normalized_family = _normalize_antigravity_probe_family(family)
-    selected_model = model or ANTIGRAVITY_PROBE_DEFAULT_MODELS[normalized_family]
+    try:
+        binary = antigravity_cli_binary()
+        if not binary:
+            raise ModelSelectionError("agy CLI executable not found.")
+        selected_model = select_antigravity_model(
+            read_antigravity_models(binary), normalized_family, model,
+        )
+    except ModelSelectionError as exc:
+        raise click.ClickException(str(exc)) from exc
     if not yes:
         console.print(
             "[yellow]This is an active Antigravity diagnostic. It runs one agy "
@@ -12309,6 +12318,11 @@ def _run_antigravity_probe_request(
         os.devnull,
         "--model",
         model,
+        "--effort",
+        "low",
+        "--mode",
+        "plan",
+        "--disable-slash-commands",
         "--print-timeout",
         f"{timeout_seconds}s",
         "--print",
