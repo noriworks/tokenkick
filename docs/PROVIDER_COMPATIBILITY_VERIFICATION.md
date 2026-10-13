@@ -54,6 +54,22 @@ flag rejected by the native CLI. The test now models that rejection and checks
 the selected Low model, absence of the incompatible flag, plan mode, bounded
 prompt, and lack of permission bypass. No other test was changed for this patch.
 
-The single approved additional diagnostic was used to capture this error. No
-further native generation was authorized; corrected-command acceptance and
-Antigravity quota anchoring remain unverified live.
+The first approved additional diagnostic captured this error. On October 13,
+2026, the user separately approved one final request per family on the deployed
+1.21.10 release. Live catalog selection and the corrected command both succeeded:
+
+| Model | Response | Session usage change | Weekly usage change |
+| --- | --- | --- | --- |
+| Gemini 3.8 Flash (Low) | `OK`, exit 0 | +0.044310 percentage points | +0.007385 percentage points |
+| Claude Sonnet 5.5 (Low) | `OK`, exit 0 | +0.573040 percentage points | +0.286520 percentage points |
+
+Exactly one generation request was sent per family, with before/after native
+quota reads and no retries. Both diagnostics reported `proved` because quota
+usage changed. This proves request acceptance and quota consumption; it does
+not independently establish the start of a new five-hour reset window.
+
+The CLI emitted a warning that `--mode plan` has no effect while slash-command
+expansion is disabled. Both requests still completed with the fixed minimal
+prompt; the warning is recorded rather than treating plan mode as an enforced
+guarantee. Automatic Antigravity kicking remains disabled, and raw account
+evidence stays in owner-only files on the server.
