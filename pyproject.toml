@@ -5,14 +5,14 @@ build-backend = "hatchling.build"
 [project]
 name = "tokenkick"
 version = "1.23.2"
-description = "Local CLI for tracking AI coding quota windows, planning reset coverage, and optional explicit provider-native kicks."
+description = "Automatically start Codex and Claude Code 5-hour usage windows on your schedule. Tracks 5-hour and weekly limits across accounts; local-first CLI, TUI, and MCP server."
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.10"
 authors = [
     { name = "Paul Kahle" },
 ]
-keywords = ["ai-coding", "claude", "cli", "codex", "developer-tools", "mcp", "quota", "rate-limit"]
+keywords = ["ai-coding", "claude", "claude-code", "cli", "codex", "codex-cli", "5-hour-limit", "usage-limits", "developer-tools", "mcp", "quota", "rate-limit", "scheduler"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Environment :: Console",
@@ -49,9 +49,10 @@ tokenkick = "tokenkick.cli:cli"
 tk-mcp = "tokenkick.mcp_server:main"
 
 [project.urls]
-Homepage = "https://github.com/noriworks/tokenkick"
+Homepage = "https://www.tokenkick.dev"
 Documentation = "https://github.com/noriworks/tokenkick#readme"
 Repository = "https://github.com/noriworks/tokenkick"
+Changelog = "https://github.com/noriworks/tokenkick/blob/main/docs/CHANGELOG.md"
 Issues = "https://github.com/noriworks/tokenkick/issues"
 Security = "https://github.com/noriworks/tokenkick/security/policy"
 

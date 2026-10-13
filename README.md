@@ -2,11 +2,12 @@
 
 **Reset? Go.**
 
-TokenKick is a local-first CLI, TUI, beta macOS app, and agent-facing MCP
-surface for developers who juggle multiple AI coding accounts. It tracks quota
-reset windows, shows which account should be used next, and can optionally send
-a tiny provider-native request to anchor a freshly reset window after explicit
-opt-in.
+TokenKick automatically starts your Codex and Claude Code 5-hour usage windows
+on your schedule. It is a local-first CLI, TUI, beta macOS app, and agent-facing
+MCP server for developers who juggle one or more AI coding accounts: it tracks
+5-hour and weekly limits and their reset times, shows which account should be
+used next, and, after explicit opt-in, sends a tiny provider-native request (a
+"kick") to start a freshly reset window, aimed at your working hours.
 
 It does not increase quota, bypass limits, or move provider credentials into a
 TokenKick cloud. It reads the provider state you already have locally and helps
