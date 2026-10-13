@@ -8,7 +8,8 @@ import re
 import shutil
 import subprocess
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+import math
 from pathlib import Path
 from typing import Any
 
@@ -248,8 +249,17 @@ def antigravity_cli_app_dir(home: Path | None = None) -> Path:
 
 
 def read_antigravity_cli_identity(home: Path | None = None) -> str | None:
-    """Read the active Antigravity CLI Google account email without token access."""
+    """Read only identity claims; never return bearer or refresh credentials."""
     home = home or Path.home()
+    native_path = antigravity_cli_app_dir(home) / "antigravity-oauth-token"
+    if native_path.exists():
+        try:
+            native = json.loads(native_path.read_text())
+        except (json.JSONDecodeError, OSError):
+            return None
+        email = email_from_id_token(native.get("id_token")) if isinstance(native, dict) else None
+        # Native agy credentials take precedence over a separate Gemini CLI login.
+        return email if email and "@" in email else None
     path = home / ANTIGRAVITY_CLI_LOGIN_FILE
     try:
         data = json.loads(path.read_text())
@@ -407,6 +417,42 @@ def has_complete_antigravity_quota_windows(status: AccountStatus) -> bool:
         return False
     ids = {window.get("id") for window in quota_windows if isinstance(window, dict)}
     return ids == set(ANTIGRAVITY_QUOTA_WINDOW_IDS)
+
+
+def antigravity_family_status(status: AccountStatus, family: str | None) -> AccountStatus:
+    """Project a validated family onto the scheduler's weekly/session fields."""
+    if family is None or status.state == AccountState.UNKNOWN:
+        return status
+    windows = status.quota_windows or []
+    valid = (family in {"gemini", "claude_gpt"} and isinstance(windows, list)
+             and len(windows) == 4
+             and all(isinstance(w, dict) and isinstance(w.get("id"), str) for w in windows)
+             and has_complete_antigravity_quota_windows(status))
+    if not valid:
+        return replace(status, state=AccountState.UNKNOWN, error=ANTIGRAVITY_QUOTA_PARSE_ERROR)
+    for window in windows:
+        if not isinstance(window, dict):
+            valid = False
+            break
+        spec = ANTIGRAVITY_QUOTA_WINDOW_SPECS.get(window.get("id"), {})
+        valid = valid and all(window.get(key) == spec.get(key) for key in ("family", "window_kind", "window_minutes"))
+        for key in ("used_percent", "resets_at", "resets_in_seconds"):
+            value = window.get(key)
+            valid = valid and isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+        if valid:
+            valid = 0 <= window["used_percent"] <= 100
+    if not valid:
+        return replace(status, state=AccountState.UNKNOWN, error=ANTIGRAVITY_QUOTA_PARSE_ERROR)
+    selected = {w["window_kind"]: w for w in windows if w["family"] == family}
+    weekly, session = selected["weekly"], selected["session"]
+    return replace(
+        status, state=AccountState.FRESH if weekly["resets_in_seconds"] <= 0 else AccountState.ACTIVE,
+        used_percent=weekly["used_percent"], resets_at=weekly["resets_at"],
+        resets_in_seconds=weekly["resets_in_seconds"], window_minutes=weekly["window_minutes"],
+        session_used_percent=session["used_percent"], session_resets_at=session["resets_at"],
+        session_resets_in_seconds=session["resets_in_seconds"],
+        session_window_minutes=session["window_minutes"],
+    )
 
 
 def _antigravity_quota_windows_from_extra(

@@ -165,3 +165,43 @@ Force recovery also requires:
   guards and consumes a small amount of provider usage.
 - Treat `tokenkick_run_apply` as dangerous. It can execute due pending kicks and
   opportunistic auto-kicks.
+
+## Automatic kick controls
+
+- `tokenkick_auto_status()` returns saved account labels, family, identity
+  fingerprints and master/weekly/session flags.
+- `tokenkick_auto_set_preview(account="<label>", enabled=true, scope="all")`
+  returns the exact target/settings, provider disclosure and a one-use token.
+- After the user accepts the disclosure, call `tokenkick_auto_set` with the same
+  account, enabled and scope, the token, `confirm=true`, `quota_ack=true`, and
+  `accept_risk=true`. Enabling may cause future quota consumption as soon as the
+  existing daemon evaluates the account. It does not start a daemon itself.
+- To disable, preview `enabled=false` and apply with the token and `confirm=true`;
+  no quota or provider-risk acknowledgement is needed.
+
+`scope="all"` changes the master, weekly and session flags together. `weekly`
+and `session` preserve the master flag. Account identity or setting changes
+invalidate a preview. Tokens expire after ten minutes and cannot be replayed.
+Antigravity requires a native CLI family account; aggregate compatibility
+accounts cannot be enabled.
+
+### Hermes over SSH
+
+Hermes supports a stdio server in `~/.hermes/config.yaml`:
+
+```yaml
+mcp_servers:
+  tokenkick:
+    command: /usr/bin/ssh
+    args: ["-T", "-o", "BatchMode=yes", "tokenkick@your-tailscale-host", "/home/tokenkick/.local/bin/tk-mcp"]
+    connect_timeout: 30
+    timeout: 180
+```
+
+Use the existing application user's credentials and home. Keep stdout reserved
+for MCP messages; do not allocate a TTY. Restart/reload Hermes's MCP connections
+after changing this entry or upgrading the server.
+
+Example prompt: “Use TokenKick to show my auto-kick settings, then preview
+activating both Antigravity families and my Claude account. Show me the provider
+disclosures before applying. Keep my Codex settings unchanged.”

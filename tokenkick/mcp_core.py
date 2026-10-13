@@ -21,6 +21,7 @@ import subprocess
 import time
 from dataclasses import dataclass
 from typing import Any, Literal
+from .consent import auto_kick_consent_text
 
 RiskLevel = Literal[
     "cached_read",
@@ -142,6 +143,73 @@ class TokenKickMCPCore:
     # ------------------------------------------------------------------
     # Public tool methods
     # ------------------------------------------------------------------
+
+    def tokenkick_auto_status(self) -> dict[str, Any]:
+        """Read family-scoped auto-kick settings without generating requests."""
+        return self._run(["auto", "status", "--json-output"], risk="cached_read", app_mode=True)
+
+    def _auto_target(self, account: str) -> tuple[dict, dict | None]:
+        current = self.tokenkick_auto_status()
+        payload = current.get("payload")
+        accounts = payload.get("accounts", []) if isinstance(payload, dict) else []
+        matches = [item for item in accounts if isinstance(item, dict) and item.get("label") == account]
+        return current, matches[0] if current.get("ok") is True and len(matches) == 1 else None
+
+    def _auto_argv(self, account: str, enabled: bool, scope: str) -> list[str]:
+        _require_choice("scope", scope, {"all", "weekly", "session"})
+        if not isinstance(enabled, bool):
+            raise ValueError("enabled must be a boolean")
+        return ["auto", *([] if scope == "all" else [scope]),
+                "enable" if enabled else "disable", _safe_label(account), "--json-output",
+                *(["--accept-risk", "ENABLE"] if enabled else [])]
+
+    def tokenkick_auto_set_preview(self, *, account: str, enabled: bool,
+                                   scope: Literal["all", "weekly", "session"] = "all") -> dict[str, Any]:
+        argv = self._auto_argv(account, enabled, scope)
+        current, target = self._auto_target(account)
+        if current.get("ok") is not True:
+            return current
+        if target is None:
+            raise ValueError("A unique saved account is required; read tokenkick_auto_status first")
+        risk = "dangerous_quota_operational" if enabled else "low_risk_mutation"
+        result = self._preview_only(
+            tool_name="tokenkick_auto_set", argv=argv, risk=risk,
+            summary=f"{'Enable' if enabled else 'Disable'} {scope} auto-kick for {account}.",
+            context={"account": target, "scope": scope,
+                     "consent_text": auto_kick_consent_text(target["provider"]) if enabled and target.get("kickable") else None,
+                     "requires_accept_risk": enabled,
+                     "note": "all controls master, weekly and session flags; individual scopes preserve the master flag. The daemon must be running to execute automation."},
+            can_execute=bool(target.get("kickable")) or not enabled,
+            no_token_reason="This account does not support native auto-kick.",
+        )
+        # Bind the selected identity and settings, not unrelated account changes.
+        if "preview_token" in result:
+            old = result["preview_token"]["token"]
+            self.token_store.consume(old, tool_name="tokenkick_auto_set", argv=argv, risk=risk)
+            result["preview_token"] = self.token_store.create(
+                tool_name="tokenkick_auto_set", argv=argv, risk=risk,
+                expected_plan=_auto_target_fingerprint(target),
+            ).to_dict()
+        return result
+
+    def tokenkick_auto_set(self, *, account: str, enabled: bool, preview_token: str,
+                           confirm: bool, scope: Literal["all", "weekly", "session"] = "all",
+                           quota_ack: bool = False, accept_risk: bool = False) -> dict[str, Any]:
+        argv = self._auto_argv(account, enabled, scope)
+        self._require_confirm(confirm)
+        if enabled:
+            self._require_quota_ack(quota_ack)
+            if accept_risk is not True:
+                raise ValueError("accept_risk=true is required after reviewing the provider disclosure")
+        risk = "dangerous_quota_operational" if enabled else "low_risk_mutation"
+        preview = self.token_store.consume(preview_token, tool_name="tokenkick_auto_set", argv=argv, risk=risk)
+        current, target = self._auto_target(account)
+        if current.get("ok") is not True:
+            return current
+        if target is None or _auto_target_fingerprint(target) != preview.expected_plan:
+            raise ValueError("Account identity or auto-kick settings changed; create a new preview")
+        return self._run([*argv, "--expected-auto-fingerprint", preview.expected_plan],
+                         risk=risk, app_mode=True, timeout=MUTATION_TIMEOUT_SECONDS)
 
     def tokenkick_snapshot(self, *, include_paths: bool = False) -> dict[str, Any]:
         result = self._run(
@@ -1078,6 +1146,10 @@ def _error_result(
             "returncode": returncode,
         },
     }
+
+
+def _auto_target_fingerprint(target: dict) -> str:
+    return hashlib.sha256(json.dumps(target, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
 def _is_app_envelope(value: Any) -> bool:

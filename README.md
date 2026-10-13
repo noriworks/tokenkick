@@ -125,20 +125,15 @@ TK_NO_INTERACTIVE=1 tk plan --work-window 18:30-23:30 --json-output
 
 ## Provider Support
 
-Codex and Claude are kickable in this release. Gemini is monitor-only.
-Antigravity is rich monitor-only: TokenKick can show bundled Gemini and
-Claude/GPT 5-hour and weekly limits when named windows are available, but it
-does not kick them. Logged-in Antigravity CLI accounts are discovered directly;
-CodexBar remains a compatibility fallback for named quota-window data. Other
-providers are unsupported until their status shape and safe kick behavior are
-verified.
+Codex, Claude, and native Antigravity CLI quota families support kicks.
+Antigravity Gemini and Claude each have separate weekly and session controls,
+with economical Low models selected from the live catalog. New Antigravity
+automation starts disabled and requires consent. Unconfirmed requests block
+automatic retries. Standalone Gemini daily quotas and legacy Antigravity
+CodexBar-only accounts remain monitor-only.
 
-Codex-Spark is detected as a separate Codex quota bucket when the provider
-exposes it. TokenKick then shows it as a sibling account such as
-`codex-spark (...)` with its own session and weekly window. It does not infer
-Spark access from your subscription tier. `tk plan` skips Spark until you set
-an explicit `usable_session_minutes` for that account, because the rough
-placeholder is not enough evidence for orchestration decisions.
+Retired Codex Spark entries are removed during config migration; credential
+homes and historical records are retained. See [provider details](docs/PROVIDERS.md).
 
 ## macOS App
 

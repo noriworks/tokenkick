@@ -154,9 +154,14 @@ final class BundledRuntimeIntegrationTests: XCTestCase {
         let saved = try Data(contentsOf: home.appendingPathComponent(".tokenkick/config.json"))
         let config = try XCTUnwrap(JSONSerialization.jsonObject(with: saved) as? [String: Any])
         let accounts = try XCTUnwrap(config["accounts"] as? [[String: Any]])
-        XCTAssertEqual(accounts.count, 1)
-        XCTAssertEqual(accounts.first?["provider"] as? String, "antigravity")
-        XCTAssertFalse(accounts.first?["auto_kick"] as? Bool ?? true)
+        XCTAssertEqual(accounts.count, 2)
+        XCTAssertEqual(Set(accounts.compactMap { $0["antigravity_family"] as? String }),
+                       Set(["gemini", "claude_gpt"]))
+        XCTAssertEqual(Set(accounts.compactMap { $0["label"] as? String }).count, 2)
+        for account in accounts {
+            XCTAssertEqual(account["provider"] as? String, "antigravity")
+            XCTAssertFalse(account["auto_kick"] as? Bool ?? true)
+        }
         XCTAssertEqual(exit.exitCode, 0)
     }
 }

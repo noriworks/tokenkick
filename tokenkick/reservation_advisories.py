@@ -6,7 +6,7 @@ import json
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
-from .kicker import KICKABLE_PROVIDERS
+from .kicker import account_is_kickable
 from .models import (
     CONFIG_DIR,
     AccountConfig,
@@ -205,7 +205,7 @@ def _reservation_suggestion(
             continue
         if account.orchestration_role == "excluded":
             continue
-        if not account.visible or account.provider not in KICKABLE_PROVIDERS:
+        if not account.visible or not account_is_kickable(account):
             continue
         status = statuses_by_key.get(account_key_string(account))
         if status is None or status.stale or status.state == AccountState.UNKNOWN:

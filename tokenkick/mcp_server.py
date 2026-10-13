@@ -13,6 +13,36 @@ _core = TokenKickMCPCore()
 
 
 @mcp.tool()
+def tokenkick_auto_status() -> dict:
+    """Read automatic kick controls for each provider/quota family. No generation."""
+    return _core.tokenkick_auto_status()
+
+
+@mcp.tool()
+def tokenkick_auto_set_preview(account: str, enabled: bool,
+                              scope: Literal["all", "weekly", "session"] = "all") -> dict:
+    """Preview auto-kick settings and provider consent. Enabling schedules future quota use.
+
+    Review the returned disclosure with the user before applying. all sets master,
+    weekly and session together; individual scopes preserve the master flag.
+    """
+    return _core.tokenkick_auto_set_preview(account=account, enabled=enabled, scope=scope)
+
+
+@mcp.tool()
+def tokenkick_auto_set(account: str, enabled: bool, preview_token: str, confirm: bool,
+                      scope: Literal["all", "weekly", "session"] = "all",
+                      quota_ack: bool = False, accept_risk: bool = False) -> dict:
+    """Apply a reviewed one-use preview. Enabling requires explicit user consent to
+    the preview's provider disclosure, confirm, quota_ack and accept_risk. Disabling
+    requires preview_token and confirm only. Does not start the daemon.
+    """
+    return _core.tokenkick_auto_set(account=account, enabled=enabled, scope=scope,
+                                  preview_token=preview_token, confirm=confirm,
+                                  quota_ack=quota_ack, accept_risk=accept_risk)
+
+
+@mcp.tool()
 def tokenkick_snapshot(include_paths: bool = False) -> dict:
     """Return a TokenKick app snapshot. Risk: diagnostic_read; paths redacted by default."""
     return _core.tokenkick_snapshot(include_paths=include_paths)

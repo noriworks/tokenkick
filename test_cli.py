@@ -2536,7 +2536,8 @@ def test_discover_direct_accounts_reads_antigravity_cli_identity(tmp_path, monke
 
     accounts, statuses = _discover_direct_accounts()
 
-    assert [account.provider for account in accounts] == ["antigravity"]
+    assert [account.provider for account in accounts] == ["antigravity", "antigravity"]
+    assert [account.antigravity_family for account in accounts] == ["gemini", "claude_gpt"]
     assert accounts[0].source == DataSource.ANTIGRAVITY_CLI
     assert accounts[0].identity_email == "dev@example.test"
     assert accounts[0].provider_home == str(app_dir)
@@ -2561,7 +2562,8 @@ def test_discover_direct_accounts_adds_antigravity_cli_without_identity(tmp_path
 
     accounts, statuses = _discover_direct_accounts()
 
-    assert [account.provider for account in accounts] == ["antigravity"]
+    assert [account.provider for account in accounts] == ["antigravity", "antigravity"]
+    assert [account.antigravity_family for account in accounts] == ["gemini", "claude_gpt"]
     assert accounts[0].label == "antigravity"
     assert accounts[0].source == DataSource.ANTIGRAVITY_CLI
     assert accounts[0].identity_email is None
@@ -18678,7 +18680,7 @@ def test_kick_enable_rejects_non_kickable_accounts(monkeypatch):
     result = CliRunner().invoke(cli, ["kick", "--enable", "openrouter"])
 
     assert result.exit_code == 0
-    assert "only Codex and Claude accounts support" in result.output
+    assert "only native Codex, Claude and Antigravity family accounts support" in result.output
     assert "auto-kick" in result.output
     assert saved == []
 

@@ -763,6 +763,10 @@ def _provider_first_label_migration_accounts(
 
 
 def _provider_first_label(account: AccountConfig) -> str | None:
+    if account.provider == "antigravity" and account.antigravity_family:
+        family = "Gemini" if account.antigravity_family == "gemini" else "Claude"
+        component = _provider_first_account_component(account)
+        return f"antigravity ({component}, {family})" if component else f"antigravity ({family})"
     component = _provider_first_account_component(account)
     if not component:
         return None

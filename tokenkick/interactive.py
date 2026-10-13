@@ -19,7 +19,7 @@ from typing import Any, Iterator, Sequence
 
 import click
 
-from .kicker import KICKABLE_PROVIDERS
+from .kicker import account_is_kickable
 from .models import AccountConfig, AccountState, AccountStatus, Config, DataSource, account_key_string
 from .orchestration import effective_orchestration_role, usable_session_minutes_for_account
 from .scheduling import cancel_orchestrated_pending_kicks, local_timezone, parse_work_window
@@ -508,7 +508,7 @@ def _kick_menu(ctx: click.Context) -> None:
         account = _account_by_label(accounts, action)
         if account is None:
             continue
-        if account.provider not in KICKABLE_PROVIDERS:
+        if not account_is_kickable(account):
             click.echo(f'"{account.label}" is monitor-only and cannot be kicked.')
             continue
         if _confirm(f'Kick "{account.label}" now if eligible?', default=False):
@@ -947,7 +947,7 @@ def _account_planning_defaults_menu(ctx: click.Context) -> None:
         accounts = [
             account
             for account in config.accounts
-            if account.visible and account.provider in KICKABLE_PROVIDERS
+            if account.visible and account_is_kickable(account)
         ]
         if not accounts:
             click.echo("No visible kickable accounts found.")
@@ -1224,7 +1224,7 @@ def _edit_account_weekly_reserve_threshold(
 
 
 def _account_auto_session_label(account: AccountConfig) -> str:
-    if account.provider not in KICKABLE_PROVIDERS:
+    if not account_is_kickable(account):
         return "monitor-only"
     auto = "yes" if account.auto_kick else "no"
     session = "yes" if account.session_auto_kick else "no"
@@ -1247,7 +1247,7 @@ def _auto_menu(ctx: click.Context) -> None:
 
     while True:
         config = Config.load()
-        accounts = [account for account in config.accounts if account.provider in KICKABLE_PROVIDERS]
+        accounts = [account for account in config.accounts if account_is_kickable(account)]
         visible_accounts = [account for account in accounts if account.visible]
         status_by_label = _auto_menu_status_by_label(config, cli_module)
         if not accounts:
@@ -1950,7 +1950,7 @@ def _orchestration_usage_accounts(config: Config) -> list[AccountConfig]:
         account
         for account in config.accounts
         if account.visible
-        and account.provider in KICKABLE_PROVIDERS
+        and account_is_kickable(account)
         and account.auto_kick
         and account.session_auto_kick
     ]
@@ -3213,9 +3213,9 @@ def _select_account(
 def _account_menu_choices(accounts: list[AccountConfig], *, only_kickable: bool) -> list[MenuChoice]:
     result = []
     for account in accounts:
-        if only_kickable and account.provider not in KICKABLE_PROVIDERS:
+        if only_kickable and not account_is_kickable(account):
             continue
-        marker = "kickable" if account.provider in KICKABLE_PROVIDERS else "monitor-only"
+        marker = "kickable" if account_is_kickable(account) else "monitor-only"
         source = _account_source_label(account)
         result.append(MenuChoice(f"{account.label} ({account.provider}, {marker}, {source})", account.label))
     return result

@@ -106,7 +106,7 @@ def _load_account_status_pairs_cached(
                     account,
                     status,
                 )
-        if account.provider == "antigravity" and account.source == DataSource.ANTIGRAVITY_CLI:
+        if account.provider == "antigravity" and account.source == DataSource.ANTIGRAVITY_CLI and not account.antigravity_family:
             discovered_by_key[("codexbar-cli", "antigravity", "antigravity")] = (
                 account,
                 status,
@@ -172,6 +172,8 @@ def _discover_accounts_and_statuses(
         if accounts:
             for account, status in zip(accounts, statuses, strict=False):
                 if account.provider == "claude" and "claude" in direct_providers:
+                    continue
+                if account.provider == "antigravity" and "antigravity" in direct_providers:
                     continue
                 discovered.append((account, status))
 
@@ -444,9 +446,13 @@ def _append_antigravity_cli_account(
         codexbar_account=email,
         label_origin="auto",
     )
-    accounts.append(account)
     _cli()._setup_progress("Reading provider status")
-    statuses.append(_cli().fetch_status(account))
+    from .antigravity import antigravity_family_status
+    status = _cli().fetch_status(account)
+    for family in ("gemini", "claude_gpt"):
+        child = replace(account, antigravity_family=family)
+        accounts.append(child)
+        statuses.append(antigravity_family_status(status, family))
 
 
 def _discover_codex_session_accounts() -> tuple[list[AccountConfig], list[AccountStatus]]:
@@ -716,7 +722,7 @@ def _discovery_identity_aliases(
             aliases[("codexbar-cli", "claude", "claude")] = canonical
             if account.identity_email:
                 aliases[("codexbar-cli", "claude", account.identity_email.lower())] = canonical
-        if account.provider == "antigravity" and account.source == DataSource.ANTIGRAVITY_CLI:
+        if account.provider == "antigravity" and account.source == DataSource.ANTIGRAVITY_CLI and not account.antigravity_family:
             aliases[("codexbar-cli", "antigravity", "antigravity")] = canonical
             if account.identity_email:
                 aliases[("codexbar-cli", "antigravity", account.identity_email.lower())] = canonical
@@ -836,6 +842,15 @@ def _pair_for_configured_account(
     config: Config | None = None,
 ) -> tuple[AccountConfig, AccountStatus]:
     discovered = discovered_by_key.get(_account_key(account))
+    if (discovered is None and account.provider == "antigravity"
+            and account.source == DataSource.ANTIGRAVITY_CLI and account.antigravity_family
+            and not account.identity_email and not account.codexbar_account):
+        candidates = [pair for pair in discovered_by_key.values()
+                      if pair[0].provider == "antigravity" and pair[0].source == DataSource.ANTIGRAVITY_CLI
+                      and pair[0].antigravity_family == account.antigravity_family
+                      and pair[0].provider_home == account.provider_home]
+        if len(candidates) == 1:
+            discovered = candidates[0]
     if discovered is not None:
         discovered_account, discovered_status = discovered
         merged_account = merge_discovered_account(account, discovered_account)

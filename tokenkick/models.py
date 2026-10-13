@@ -190,6 +190,7 @@ class AccountConfig:
     codex_rate_limit_id: Optional[str] = None
     codex_rate_limit_name: Optional[str] = None
     kick_model: Optional[str] = None
+    antigravity_family: Optional[str] = None
     plan_tier: Optional[str] = None
     usable_session_minutes: Optional[int] = None
     orchestration_role: str = DEFAULT_ORCHESTRATION_ROLE
@@ -204,6 +205,8 @@ class AccountConfig:
     codex_surface_force_prune: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
+        if self.antigravity_family not in {None, "gemini", "claude_gpt"}:
+            raise ValueError("antigravity_family must be gemini or claude_gpt")
         if self.weekly_auto_kick is None:
             self.weekly_auto_kick = self.auto_kick
         if self.session_auto_kick is None:
@@ -286,6 +289,9 @@ class AccountConfig:
 
 def account_key(account: AccountConfig) -> tuple[str, str, str]:
     """Return the stable identity tuple used for persisted account state."""
+    if account.provider == "antigravity" and account.antigravity_family:
+        base = account_key(replace(account, antigravity_family=None))
+        return (base[0], base[1], f"{base[2]}#{account.antigravity_family}")
     if account.provider == "codex" and account.source == DataSource.CODEX_DIRECT:
         rate_limit_id = codex_rate_limit_id_for_account(account)
         bucket_suffix = "" if rate_limit_id == CODEX_DEFAULT_RATE_LIMIT_ID else f"#{rate_limit_id}"
@@ -350,6 +356,7 @@ ACCOUNT_DISCOVERY_OWNED_FIELDS = frozenset(
         "identity_org_id",
         "codex_rate_limit_id",
         "codex_rate_limit_name",
+        "antigravity_family",
     }
 )
 
@@ -958,8 +965,48 @@ class Config:
         config = cls._from_payload(data)
         config._baseline = copy.deepcopy(config._data())
         config._remove_retired_spark_entries()
+        config._split_antigravity_families()
         config._disable_gemini_auto_kick_if_needed()
         return config
+
+    def _split_antigravity_families(self) -> None:
+        """Keep the legacy label for Gemini; add a separately opted-in Claude family."""
+        accounts = []
+        labels = {a.label for a in self.accounts}
+        keys = {account_key(a) for a in self.accounts if a.antigravity_family}
+        changed = False
+        for account in self.accounts:
+            if (account.provider != "antigravity"
+                    or account.source != DataSource.ANTIGRAVITY_CLI
+                    or account.antigravity_family):
+                accounts.append(account)
+                continue
+            changed = True
+            from .antigravity import read_antigravity_cli_identity
+            identity_email = account.identity_email or account.codexbar_account or read_antigravity_cli_identity()
+            for family in ("gemini", "claude_gpt"):
+                child = replace(account, antigravity_family=family, auto_kick=False,
+                                weekly_auto_kick=False, session_auto_kick=False,
+                                kick_model=None, label_origin="user", identity_email=identity_email)
+                if account_key(child) in keys:
+                    continue
+                if family == "claude_gpt":
+                    base = f"{account.label} (Claude)"
+                    label = base
+                    suffix = 2
+                    while label in labels:
+                        label = f"{base} {suffix}"
+                        suffix += 1
+                    child = replace(child, label=label)
+                    if account.label in self.schedule.accounts:
+                        self.schedule.accounts[label] = copy.deepcopy(self.schedule.accounts[account.label])
+                labels.add(child.label)
+                keys.add(account_key(child))
+                accounts.append(child)
+        if changed:
+            self.accounts = accounts
+            self.migrations = {**self.migrations, "antigravity_quota_families": True}
+            self.save()
 
     def _remove_retired_spark_entries(self) -> None:
         """Remove retired quota entries, retaining their homes and historical records."""

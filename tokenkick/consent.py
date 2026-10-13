@@ -7,11 +7,16 @@ AUTO_KICK_CONSENT_TOKEN = "ENABLE"
 AUTO_KICK_CONSENT_ERROR = "auto_kick_consent_required"
 
 _PROVIDER_NAMES = {
+    "antigravity": "Antigravity",
     "claude": "Claude",
     "codex": "Codex",
 }
 
 _PROVIDER_FACTS = {
+    "antigravity": (
+        "These requests consume your Antigravity quota. Provider acceptance and quota "
+        "consumption alone do not prove that a reset window was anchored."
+    ),
     "claude": (
         "Anthropic's Consumer Terms restrict automated or scripted access to Claude.ai "
         "and Claude Pro outside of the API. Enabling this is very likely a breach of "

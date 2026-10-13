@@ -90,6 +90,7 @@ from .sources import (
     fetch_status as fetch_status,
 )
 from .action_state import account_action, UncertainActionError
+from . import antigravity_automation
 from .versioning import installed_version, read_daemon_pidfile, write_daemon_pidfile, pidfile_process_matches
 from .telegram_remote import (
     TelegramRemoteClient,
@@ -123,6 +124,7 @@ from .kicker import (
     GEMINI_AUTO_KICK_DISABLED_MESSAGE,
     GEMINI_MONITOR_ONLY_MESSAGE,
     KICKABLE_PROVIDERS,
+    account_is_kickable,
     MONITOR_ONLY_PROVIDERS,
     codex_phantom_recovery_model_ladder,
     kick_account,
@@ -1001,11 +1003,16 @@ def _codex_accounts(accounts: list[AccountConfig]) -> list[AccountConfig]:
 
 
 def _kickable_accounts(accounts: list[AccountConfig]) -> list[AccountConfig]:
-    return [account for account in accounts if account.provider in KICKABLE_PROVIDERS]
+    return [account for account in accounts if account_is_kickable(account)]
 
 
 def _is_monitor_only_provider(provider: str) -> bool:
     return provider in MONITOR_ONLY_PROVIDERS
+
+
+def _is_monitor_only_account(account: AccountConfig) -> bool:
+    return (_is_monitor_only_provider(account.provider)
+            or (account.provider == "antigravity" and not account_is_kickable(account)))
 
 
 def _monitor_only_message(provider: str) -> str:
@@ -1344,12 +1351,12 @@ def _set_auto_kick(
     if account is None:
         console.print(f'[red]Account "{label}" not found.[/red]')
         return None
-    if _is_monitor_only_provider(account.provider):
+    if enabled and _is_monitor_only_account(account):
         console.print(f"[red]{_monitor_only_auto_kick_message(account.provider)}[/red]")
         raise click.exceptions.Exit(1)
-    if account.provider not in KICKABLE_PROVIDERS:
+    if enabled and not account_is_kickable(account):
         console.print(
-            f'[yellow]Skipping "{label}": only Codex and Claude accounts support auto-kick.[/yellow]'
+            f'[yellow]Skipping "{label}": only native Codex, Claude and Antigravity family accounts support auto-kick.[/yellow]'
         )
         return None
     if enabled and not _ensure_auto_kick_consent(
@@ -1389,12 +1396,12 @@ def _set_session_auto_kick(
     if account is None:
         console.print(f'[red]Account "{label}" not found.[/red]')
         return None
-    if _is_monitor_only_provider(account.provider):
+    if enabled and _is_monitor_only_account(account):
         console.print(f"[red]{_monitor_only_auto_kick_message(account.provider)}[/red]")
         raise click.exceptions.Exit(1)
-    if account.provider not in KICKABLE_PROVIDERS:
+    if enabled and not account_is_kickable(account):
         console.print(
-            f'[yellow]Skipping "{label}": only Codex and Claude accounts support session auto-kick.[/yellow]'
+            f'[yellow]Skipping "{label}": only native Codex, Claude and Antigravity family accounts support session auto-kick.[/yellow]'
         )
         return None
     if enabled and not _ensure_auto_kick_consent(
@@ -1429,12 +1436,12 @@ def _set_weekly_auto_kick(
     if account is None:
         console.print(f'[red]Account "{label}" not found.[/red]')
         return None
-    if _is_monitor_only_provider(account.provider):
+    if enabled and _is_monitor_only_account(account):
         console.print(f"[red]{_monitor_only_auto_kick_message(account.provider)}[/red]")
         raise click.exceptions.Exit(1)
-    if account.provider not in KICKABLE_PROVIDERS:
+    if enabled and not account_is_kickable(account):
         console.print(
-            f'[yellow]Skipping "{label}": only Codex and Claude accounts support weekly auto-kick.[/yellow]'
+            f'[yellow]Skipping "{label}": only native Codex, Claude and Antigravity family accounts support weekly auto-kick.[/yellow]'
         )
         return None
     if enabled and not _ensure_auto_kick_consent(
@@ -1496,7 +1503,7 @@ def _set_direct_usage(
     if account is None:
         console.print(f'[red]Account "{label}" not found.[/red]')
         return None
-    if _is_monitor_only_provider(account.provider):
+    if _is_monitor_only_account(account):
         console.print(f"[red]{_monitor_only_auto_kick_message(account.provider)}[/red]")
         raise click.exceptions.Exit(1)
     if account.provider != "claude":
@@ -1535,12 +1542,12 @@ def _set_kick_model(
     if account is None:
         console.print(f'[red]Account "{label}" not found.[/red]')
         return None
-    if _is_monitor_only_provider(account.provider):
+    if _is_monitor_only_account(account):
         console.print(f"[red]{_monitor_only_auto_kick_message(account.provider)}[/red]")
         raise click.exceptions.Exit(1)
-    if account.provider not in KICKABLE_PROVIDERS:
+    if not account_is_kickable(account):
         console.print(
-            f'[yellow]Skipping "{label}": only Codex and Claude accounts support kick models.[/yellow]'
+            f'[yellow]Skipping "{label}": only native Codex, Claude and Antigravity family accounts support kick models.[/yellow]'
         )
         return None
 
@@ -1796,6 +1803,24 @@ def _kick_eligibility(
         return KickEligibility(False, reason="predicted_status_requires_refresh")
     if resolved_provider not in KICKABLE_PROVIDERS:
         return KickEligibility(False, reason="provider_not_kickable")
+    if resolved_provider == "antigravity":
+        if pending_kick is not None:
+            return KickEligibility(False, reason="pending_kick")
+        if account is None or not account_is_kickable(account):
+            return KickEligibility(False, reason="antigravity_family_required")
+        if not antigravity_automation.usable_status(account, status):
+            return KickEligibility(False, reason="antigravity_live_quota_required")
+        if antigravity_automation.attempt_blocked(CONFIG_DIR, account, status):
+            return KickEligibility(False, reason="antigravity_attempt_already_sent")
+        if status.used_percent >= 100 and status.resets_in_seconds > 0:
+            return KickEligibility(False, reason="weekly_exhausted")
+        if status.session_used_percent >= 100 and status.session_resets_in_seconds > 0:
+            return KickEligibility(False, reason="session_exhausted")
+        if status.resets_in_seconds <= 0:
+            return KickEligibility(True, kick_type="kick")
+        if status.session_resets_in_seconds <= 0:
+            return KickEligibility(True, kick_type="session")
+        return KickEligibility(False, reason="active")
     if status.state != AccountState.FRESH and _weekly_quota_exhausted(status):
         return KickEligibility(False, reason="weekly_exhausted")
     if _session_quota_exhausted(status):
@@ -1979,6 +2004,9 @@ def _session_kick_eligible(
     allow_stale: bool = False,
 ) -> bool:
     resolved_provider = provider or (account.provider if account is not None else None)
+    if resolved_provider == "antigravity":
+        eligibility = _kick_eligibility(account, status, resolved_provider)
+        return eligibility.kickable and eligibility.kick_type == "session"
     if resolved_provider not in KICKABLE_PROVIDERS:
         return False
     if status.state in {AccountState.FRESH, AccountState.UNKNOWN}:
@@ -3156,8 +3184,12 @@ def _run_evaluate_account(
             ),
             False,
         )
-    if account.provider not in KICKABLE_PROVIDERS:
+    if not account_is_kickable(account):
         return "skipped", _run_skip(account, "not kickable (monitor-only)"), False
+    if account.provider == "antigravity":
+        eligibility = _kick_eligibility(account, status)
+        if not eligibility.kickable:
+            return "skipped", _run_skip(account, eligibility.reason), False
     if status.stale:
         return "skipped", _run_skip(account, _stale_status_reason(status)), False
     if _auto_kick_blocked_by_codexbar_fallback(account, status):
@@ -3173,7 +3205,7 @@ def _run_evaluate_account(
 
     weekly_reset_ready = _weekly_reset_ready(status)
     long_ready = _long_kick_eligible(status)
-    phantom_session = not weekly_reset_ready and _is_phantom_session_candidate(status)
+    phantom_session = account.provider != "antigravity" and not weekly_reset_ready and _is_phantom_session_candidate(status)
     if phantom_session and _was_kicked_in_current_session_window(account, status, history):
         if _phantom_session_ready(account, status, record_observation=False):
             return "skipped", _run_skip(account, "provider status unchanged after session kick"), False
@@ -3290,6 +3322,8 @@ def _run_evaluate_account(
         else:
             record_pending_kick_failure(account, event.error, now)
     if event.success:
+        if account.provider == "antigravity" and not event.confirmed:
+            success_reason = "request sent; reset anchor unconfirmed and automatic retry suppressed"
         return "kicked", _run_kicked(account, success_reason, dry_run=False), False
     return "skipped", _run_skip(account, f"kick failed: {event.error or 'unknown error'}"), True
 
@@ -4503,8 +4537,11 @@ def _kick_and_notify(
             # Recheck after waiting for ownership. Predictions alone never authorize
             # a request. Ordinary paths use the same policy as the displayed status.
             status = pre_status
-            if status is None or is_synthetic_status(status):
+            if status is None or is_synthetic_status(status) or account.provider == "antigravity":
                 status = _fetch_status(account, config)
+            if account.provider == "antigravity" and not antigravity_automation.usable_status(account, status):
+                return KickEvent(label=account.label, success=False, confirmed=False,
+                                 error="Fresh complete Antigravity quota data is required.")
             if not force:
                 history = load_kick_history(limit=300)
                 if recovery_history is not None:
@@ -4540,7 +4577,7 @@ def _kick_and_notify_owned(
     _stagger_codex_kick_if_needed(account, stagger_state, daemon_log=daemon_log)
     if not daemon_log:
         console.print(f'[bold]Kicking "{account.label}"...[/bold]', end=" ")
-    phantom_recovery = pre_status is not None and _is_phantom_session_candidate(pre_status)
+    phantom_recovery = account.provider != "antigravity" and pre_status is not None and _is_phantom_session_candidate(pre_status)
 
     if (
         account.provider == "codex"
@@ -4852,6 +4889,11 @@ def _run_kick_attempt(
         }
         if account.provider == "codex":
             kwargs["codex_surface"] = codex_surface or CODEX_KICK_SURFACE_REPO
+        if account.provider == "antigravity":
+            if pre_status is None or not antigravity_automation.usable_status(account, pre_status):
+                return KickEvent(label=account.label, success=False, confirmed=False,
+                                 error="Fresh complete Antigravity quota data is required.")
+            kwargs["before_send"] = lambda: antigravity_automation.record_attempt(CONFIG_DIR, account, pre_status)
         attempt_started_at = time.time()
         event = kick_account(account, **kwargs)
         attempt_finished_at = event.timestamp or time.time()
@@ -4862,7 +4904,23 @@ def _run_kick_attempt(
         event.codex_max_attempts = max_attempts
         event.codex_attempt_started_at = attempt_started_at
         event.codex_attempt_finished_at = attempt_finished_at
-    if event.success and phantom_recovery:
+    if event.success and account.provider == "antigravity":
+        event.confirmed = False
+        event.post_kick_status = "pending"
+        try:
+            after = _fetch_status(account, config)
+            if (event.evidence_response and antigravity_automation.usable_status(account, after)
+                    and antigravity_automation.anchor_confirmed(pre_status, after, session=kick_type == "session")):
+                antigravity_automation.record_confirmation(CONFIG_DIR, account, after)
+                event.confirmed = True
+                event.evidence_provider_moved = True
+                event.post_kick_status = "confirmed"
+                event.error = None
+        except Exception:
+            pass  # Persist the attempt even when the post-request read fails.
+        if not event.confirmed:
+            event.error = "Antigravity request sent, but a new reset anchor was not observed; automatic retry suppressed."
+    elif event.success and phantom_recovery:
         event = _verify_phantom_kick(account, event, config, daemon_log=daemon_log)
     elif event.success and account.provider == "codex" and kick_type == "session" and verify_codex:
         event = _verify_codex_session_anchor(
@@ -6118,11 +6176,11 @@ def _render_auto_status_table(accounts: list[AccountConfig]) -> None:
     table.add_column("Session")
 
     for account in accounts:
-        if _is_monitor_only_provider(account.provider):
+        if _is_monitor_only_account(account):
             state = "❌ monitor-only"
             weekly_state = "❌ monitor-only"
             session_state = "❌ monitor-only"
-        elif account.provider not in KICKABLE_PROVIDERS:
+        elif not account_is_kickable(account):
             state = "❌ disabled (not kickable)"
             weekly_state = "❌ disabled (not kickable)"
             session_state = "❌ disabled (not kickable)"
@@ -6149,9 +6207,9 @@ def _render_accounts_table(config: Config, accounts: list[AccountConfig]) -> Non
     for account in accounts:
         visible = "✅ visible" if account.visible else "❌ hidden"
         notifications = _notification_route_display(account, config.notifications)
-        if _is_monitor_only_provider(account.provider):
+        if _is_monitor_only_account(account):
             auto_kick = "❌ monitor-only"
-        elif account.provider not in KICKABLE_PROVIDERS:
+        elif not account_is_kickable(account):
             auto_kick = "❌ disabled (not kickable)"
         elif account.auto_kick:
             auto_kick = "✅ enabled"
@@ -6236,7 +6294,7 @@ def _render_account_planning_table(config: Config, accounts: list[AccountConfig]
 
 
 def _account_auto_session_display(account: AccountConfig) -> str:
-    if account.provider not in KICKABLE_PROVIDERS:
+    if not account_is_kickable(account):
         return "monitor-only"
     auto = "✅" if account.auto_kick else "❌"
     session = "✅" if account.session_auto_kick else "❌"
@@ -6281,8 +6339,8 @@ def _account_by_label_or_exit(label: str, accounts: list[AccountConfig]) -> Acco
 def _account_detail_payload(account: AccountConfig) -> dict:
     payload = account.to_dict()
     payload["notifications_enabled"] = account.notifications_enabled
-    payload["kickable"] = account.provider in KICKABLE_PROVIDERS
-    payload["monitor_only"] = _is_monitor_only_provider(account.provider)
+    payload["kickable"] = account_is_kickable(account)
+    payload["monitor_only"] = _is_monitor_only_account(account)
     payload["kick_model_effective"] = None if not payload["kickable"] else kick_model_for_account(account)
     return payload
 
@@ -6328,9 +6386,9 @@ def _render_account_detail(account: AccountConfig) -> None:
 
 
 def _kick_model_display(account: AccountConfig) -> str:
-    if _is_monitor_only_provider(account.provider):
+    if _is_monitor_only_account(account):
         return "—"
-    if account.provider not in KICKABLE_PROVIDERS:
+    if not account_is_kickable(account):
         return "—"
     model = kick_model_for_account(account)
     if not model:
@@ -6410,8 +6468,8 @@ def _accounts_list_payload(config: Config, accounts: list[AccountConfig]) -> lis
             "label": account.label,
             "provider": account.provider,
             "visible": account.visible,
-            "kickable": account.provider in KICKABLE_PROVIDERS,
-            "monitor_only": _is_monitor_only_provider(account.provider),
+            "kickable": account_is_kickable(account),
+            "monitor_only": _is_monitor_only_account(account),
             "auto_kick": account.auto_kick,
             "weekly_auto_kick": account.weekly_auto_kick,
             "session_auto_kick": account.session_auto_kick,
@@ -6477,15 +6535,27 @@ def _auto_status_payload(accounts: list[AccountConfig]) -> list[dict]:
         {
             "label": account.label,
             "provider": account.provider,
+            "antigravity_family": account.antigravity_family,
+            "account_fingerprint": hashlib.sha256(account_key_string(account).encode()).hexdigest(),
             "visible": account.visible,
-            "kickable": account.provider in KICKABLE_PROVIDERS,
-            "monitor_only": _is_monitor_only_provider(account.provider),
+            "kickable": account_is_kickable(account),
+            "monitor_only": _is_monitor_only_account(account),
             "auto_kick": account.auto_kick,
             "weekly_auto_kick": account.weekly_auto_kick,
             "session_auto_kick": account.session_auto_kick,
         }
         for account in accounts
     ]
+
+
+def _require_auto_preview_fingerprint(accounts: list[AccountConfig], label: str, expected: str | None) -> None:
+    if expected is None:
+        return
+    rows = [row for row in _auto_status_payload(accounts) if row["label"] == label]
+    actual = hashlib.sha256(json.dumps(rows[0], sort_keys=True, separators=(",", ":")).encode()).hexdigest() if len(rows) == 1 else None
+    if actual != expected:
+        emit_app_error("stale_preview", "Account identity or auto-kick settings changed; create a new preview.")
+        raise click.exceptions.Exit(1)
 
 
 def _pending_kicks_payload(
@@ -8474,7 +8544,7 @@ def _resolve_single_kick_target(
             cli_markup=f'[red]Account "{label}" not found.[/red]',
             failure=True,
         )
-    if _is_monitor_only_provider(account.provider):
+    if _is_monitor_only_account(account):
         message = _monitor_only_message(account.provider)
         raise _SingleKickStopped(
             "monitor_only",
@@ -8483,7 +8553,7 @@ def _resolve_single_kick_target(
             failure=True,
             exit_code=1,
         )
-    if account.provider not in KICKABLE_PROVIDERS:
+    if not account_is_kickable(account):
         raise _SingleKickStopped(
             "not_kickable",
             f'Skipping "{label}": only Codex and Claude accounts can be kicked.',
@@ -8885,10 +8955,10 @@ def wake(label: str):
     if account is None:
         console.print(f'[red]Account "{label}" not found.[/red]')
         return
-    if _is_monitor_only_provider(account.provider):
+    if _is_monitor_only_account(account):
         console.print(f"[red]{_monitor_only_message(account.provider)}[/red]")
         raise click.exceptions.Exit(1)
-    if account.provider not in KICKABLE_PROVIDERS:
+    if not account_is_kickable(account):
         console.print(
             f'[yellow]Skipping "{label}": only Codex and Claude accounts can be woken.[/yellow]'
         )
@@ -8937,10 +9007,12 @@ def auto_status(as_json: bool):
 @click.argument("label")
 @click.option("--json-output", "as_json", is_flag=True, help="Output result as JSON")
 @click.option("--accept-risk", "consent_token", metavar="ENABLE", hidden=True)
-def auto_enable(label: str, as_json: bool, consent_token: str | None):
+@click.option("--expected-auto-fingerprint", hidden=True)
+def auto_enable(label: str, as_json: bool, consent_token: str | None, expected_auto_fingerprint: str | None = None):
     """Enable auto-kick for an account."""
     config = Config.load()
     accounts = _load_accounts(config)
+    _require_auto_preview_fingerprint(accounts, label, expected_auto_fingerprint)
     _run_account_mutation(
         as_json,
         lambda: _set_auto_kick(
@@ -8957,10 +9029,12 @@ def auto_enable(label: str, as_json: bool, consent_token: str | None):
 @auto.command("disable")
 @click.argument("label")
 @click.option("--json-output", "as_json", is_flag=True, help="Output result as JSON")
-def auto_disable(label: str, as_json: bool):
+@click.option("--expected-auto-fingerprint", hidden=True)
+def auto_disable(label: str, as_json: bool, expected_auto_fingerprint: str | None = None):
     """Disable auto-kick for an account."""
     config = Config.load()
     accounts = _load_accounts(config)
+    _require_auto_preview_fingerprint(accounts, label, expected_auto_fingerprint)
     _run_account_mutation(
         as_json,
         lambda: _set_auto_kick(label, enabled=False, config=config, accounts=accounts),
@@ -8976,10 +9050,12 @@ def auto_session():
 @click.argument("label")
 @click.option("--json-output", "as_json", is_flag=True, help="Output result as JSON")
 @click.option("--accept-risk", "consent_token", metavar="ENABLE", hidden=True)
-def auto_session_enable(label: str, as_json: bool, consent_token: str | None):
+@click.option("--expected-auto-fingerprint", hidden=True)
+def auto_session_enable(label: str, as_json: bool, consent_token: str | None, expected_auto_fingerprint: str | None = None):
     """Enable session auto-kick for an account."""
     config = Config.load()
     accounts = _load_accounts(config)
+    _require_auto_preview_fingerprint(accounts, label, expected_auto_fingerprint)
     _run_account_mutation(
         as_json,
         lambda: _set_session_auto_kick(
@@ -8996,10 +9072,12 @@ def auto_session_enable(label: str, as_json: bool, consent_token: str | None):
 @auto_session.command("disable")
 @click.argument("label")
 @click.option("--json-output", "as_json", is_flag=True, help="Output result as JSON")
-def auto_session_disable(label: str, as_json: bool):
+@click.option("--expected-auto-fingerprint", hidden=True)
+def auto_session_disable(label: str, as_json: bool, expected_auto_fingerprint: str | None = None):
     """Disable session auto-kick for an account."""
     config = Config.load()
     accounts = _load_accounts(config)
+    _require_auto_preview_fingerprint(accounts, label, expected_auto_fingerprint)
     _run_account_mutation(
         as_json,
         lambda: _set_session_auto_kick(label, enabled=False, config=config, accounts=accounts),
@@ -9015,10 +9093,12 @@ def auto_weekly():
 @click.argument("label")
 @click.option("--json-output", "as_json", is_flag=True, help="Output result as JSON")
 @click.option("--accept-risk", "consent_token", metavar="ENABLE", hidden=True)
-def auto_weekly_enable(label: str, as_json: bool, consent_token: str | None):
+@click.option("--expected-auto-fingerprint", hidden=True)
+def auto_weekly_enable(label: str, as_json: bool, consent_token: str | None, expected_auto_fingerprint: str | None = None):
     """Enable weekly auto-kick for an account."""
     config = Config.load()
     accounts = _load_accounts(config)
+    _require_auto_preview_fingerprint(accounts, label, expected_auto_fingerprint)
     _run_account_mutation(
         as_json,
         lambda: _set_weekly_auto_kick(
@@ -9035,10 +9115,12 @@ def auto_weekly_enable(label: str, as_json: bool, consent_token: str | None):
 @auto_weekly.command("disable")
 @click.argument("label")
 @click.option("--json-output", "as_json", is_flag=True, help="Output result as JSON")
-def auto_weekly_disable(label: str, as_json: bool):
+@click.option("--expected-auto-fingerprint", hidden=True)
+def auto_weekly_disable(label: str, as_json: bool, expected_auto_fingerprint: str | None = None):
     """Disable weekly auto-kick for an account."""
     config = Config.load()
     accounts = _load_accounts(config)
+    _require_auto_preview_fingerprint(accounts, label, expected_auto_fingerprint)
     _run_account_mutation(
         as_json,
         lambda: _set_weekly_auto_kick(label, enabled=False, config=config, accounts=accounts),

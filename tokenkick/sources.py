@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from .antigravity import (
+    antigravity_family_status,
     ANTIGRAVITY_CLI_SOURCE_DETAIL,
     antigravity_cli_binary,
     antigravity_status_from_extra_rate_windows,
@@ -273,7 +274,7 @@ def fetch_status(
             )
         if account.source == DataSource.ANTIGRAVITY_CLI:
             return _ensure_status_metadata(
-                _fetch_antigravity_cli(account),
+                antigravity_family_status(_fetch_antigravity_cli(account), account.antigravity_family),
                 ANTIGRAVITY_CLI_SOURCE_DETAIL,
             )
         if account.source == DataSource.CODEX_SESSION_FILE:

@@ -309,6 +309,34 @@ final class AccountsViewModelTests: XCTestCase {
         XCTAssertEqual(refreshCount, 2)
     }
 
+    func testAntigravityFamiliesKeepSeparateConsentTargets() async throws {
+        let service = StubAccountConfigurator()
+        let labels = ["antigravity (Gemini)", "antigravity (Claude)"]
+        service.listAccounts = labels.map {
+            StubAccountConfigurator.listAccount(label: $0, provider: "antigravity")
+        }
+        let (model, _) = makeModel(service: service)
+        await model.load()
+        for label in labels {
+            service.mutationResult = .success(
+                try StubAccountConfigurator.envelope(
+                    json: ["consent": ["provider": "antigravity", "version": 1,
+                                       "confirmation": "ENABLE", "text": "Antigravity disclosure"]],
+                    ok: false, errorCode: "auto_kick_consent_required"
+                )
+            )
+            await model.apply(.setAutoKick(true), to: label)
+            XCTAssertEqual(model.pendingAutoKickConsent?.provider, "antigravity")
+            service.mutationResult = .success(
+                try StubAccountConfigurator.envelope(json: ["account": ["label": label]])
+            )
+            await model.confirmAutoKickConsent()
+            XCTAssertEqual(service.mutationArguments.last,
+                           ["auto", "enable", label, "--accept-risk", "ENABLE", "--json-output"])
+            XCTAssertNil(model.pendingAutoKickConsent)
+        }
+    }
+
     func testCancellingAutoKickConsentDoesNotRetry() async throws {
         let service = StubAccountConfigurator()
         service.mutationResult = .success(

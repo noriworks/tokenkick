@@ -14,7 +14,7 @@ restrictions.
 |---|---|---:|---|---|
 | OpenAI Codex CLI / ChatGPT Codex | Codex app-server provider usage through the account's configured `CODEX_HOME`; local Codex session JSONL as fallback/override for ambiguous stale shapes | Yes | 5h session + weekly, first-use anchored | Each account needs its own Codex home. Interactive Codex model labels and provider quota bucket names are not always the same. Retired Spark entries are removed during config loading; historical quota records remain readable. |
 | Claude Code | Claude CLI `/usage` when direct usage is enabled; passive fallback/cache otherwise | Yes | 5h session + weekly, first-use anchored | `/usage` is useful but not purely passive. Daemon background refresh avoids silently running it; due session anchors are tracked as kick-history events. |
-| Antigravity | Antigravity CLI login state plus local backend named quota windows; CodexBar named quota windows as compatibility fallback | Monitor-only today | Gemini 5h + weekly, Claude/GPT 5h + weekly | The CLI currently has no documented non-interactive quota command. Kicking is not implemented in this release. |
+| Antigravity | Antigravity CLI login state plus local backend named quota windows; CodexBar named quota windows as compatibility fallback | Native CLI Gemini and Claude family kicks | Gemini 5h + weekly, Claude/GPT 5h + weekly | Separate opt-in automation per quota family; complete fresh quota data and native identity required. |
 | Gemini CLI | Optional CodexBar monitoring data where configured | No | Daily RPD, fixed midnight PT reset | Monitor-only. Not first-use anchored, so a kick does not start a useful rolling window. |
 | Cursor / Copilot / other coding tools | Not directly verified in this release | Monitor-only or unsupported | Provider dependent | Add only after a stable identity source, readable status, and legitimate tiny anchor request are verified. |
 
@@ -145,37 +145,41 @@ not want to see them in status views.
 
 ## Antigravity
 
-Antigravity is rich monitor-only in this release. TokenKick can read the
-logged-in Antigravity CLI account on Linux and macOS without CodexBar. Rich
-quota display first uses the `agy` CLI's local HTTPS quota endpoint, then falls
-back to local Antigravity backend or CodexBar compatibility data that exposes
-named quota buckets:
+Antigravity CLI accounts on Linux and macOS expose separate Gemini and Claude
+accounts, each with its own 5-hour and weekly controls. Legacy aggregate CLI
+accounts migrate once: the original label becomes Gemini, and a `(Claude)`
+sibling is added. Both start with automation off; other providers and their
+settings are preserved. Existing schedules are copied to the new sibling.
 
-- Gemini models 5-hour limit
-- Gemini models weekly limit
-- Claude/GPT models 5-hour limit
-- Claude/GPT models weekly limit
+Native quota reads validate all four named buckets and the logged-in identity.
+Each family uses only its own weekly and session data. Legacy CodexBar-only
+accounts remain monitor-only until native CLI family accounts are discovered.
 
-Antigravity accounts are never kickable and are rejected by manual kick, run,
-schedule, and auto-kick paths.
+Each kick reads `agy models` and selects the newest Gemini Flash (Low), or Claude
+Haiku (Low) when available, otherwise Sonnet (Low). There is no automatic Opus
+or GPT-OSS fallback. Explicit overrides must be listed Low models from the
+selected family. Low effort is encoded by the model label; `--effort` must not
+be passed with these labels. These are economical preferences, not measured
+subscription quota prices.
 
-TokenKick includes a hidden, explicit evidence diagnostic:
+Requests run with `--sandbox`, disabled slash-command expansion, closed stdin,
+a dedicated workspace, a fixed no-tools prompt, a 45-second provider deadline
+and a 60-second process timeout. Sandbox terminal restrictions do not imply
+that every provider tool is disabled. Permission bypass is never enabled.
 
-```bash
-tk antigravity probe-kick --family gemini
-tk antigravity probe-kick --family claude-gpt
-```
+A successful exit or usage increase alone does not confirm an anchor. TokenKick
+requires a fresh, advanced reset clock for the requested window. A persistent
+family-scoped attempt record prevents retries after errors, timeouts, or missing
+confirmation, even if history rotates or an account is renamed. Inspect provider
+status and history before explicit `tk kick "<label>" --force` recovery. Confirmed
+requests cannot run again until the observed session has reset and at least five
+hours have elapsed.
 
-This command asks for confirmation, reads all four buckets before and after one
-minimal `agy --print` request, and stores only sanitized local evidence. It is
-not a user-facing kick path and is not used by auto-kick, schedules, run, or
-orchestration.
+Enable controls with `tk auto enable "<label>"`, or preview/apply them through
+[MCP](MCP.md). Weekly and session scopes can be toggled separately. Auto-kick
+requires provider risk consent, is off by default, and needs a running daemon.
+Standalone Gemini daily quotas remain monitor-only.
 
-The diagnostic reads `agy models` each time. Gemini probes choose the newest
-listed Gemini Flash (Low); Claude/GPT probes choose the newest Claude Haiku (Low)
-when present, otherwise Claude Sonnet (Low). Both pass `--effort low`, plan mode,
-and a tiny fixed prompt. No Opus or GPT-OSS fallback is selected automatically.
-An explicit label must be currently listed, match the requested family, and use
-Low effort. Missing catalogs/models stop the diagnostic without sending a prompt.
-These are economical family preferences, not measured subscription quota prices.
-Antigravity remains monitor-only until before/after quota anchoring is verified.
+The hidden `tk antigravity probe-kick --family gemini|claude-gpt --account "<label>"`
+diagnostic remains an explicit, quota-consuming investigation tool; automatic
+kicks use the guarded normal kick path described above.

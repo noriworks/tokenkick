@@ -24,11 +24,10 @@ Your job is to translate the user's intent into safe, existing `tk` commands.
   kicks when the user explicitly approves `--apply`.
 - TokenKick still has no one-shot direct-fire scheduler and no full autonomous
   mode. Due kicks execute later through the normal daemon/scheduler guardrails.
-- Codex-Spark is a detected Codex quota bucket, not a subscription assumption.
-  If `codex-spark (...)` appears in status, treat it as a separate account/window.
-  If it does not appear, do not invent Spark plans. Do not rely on Spark in
-  `tk plan` unless that account has explicit `usable_session_minutes`; the rough
-  placeholder is intentionally skipped by orchestration.
+- Retired Spark entries are removed automatically; do not invent Spark plans.
+- Antigravity CLI exposes separate Gemini and Claude quota families. Enable only
+  the intended family labels. A request without a confirmed reset anchor blocks
+  further automated attempts; surface that outcome for operator review.
 
 ## Hard Safety Constraints
 
@@ -55,8 +54,10 @@ preview tokens before mutations or quota-consuming actions.
 
 Read [MCP.md](MCP.md) for setup commands, supported clients, tool names, risk
 levels, preview-token execution, and the exact safety contract. Do not hand-edit
-MCP client files unless the user explicitly asks; use TokenKick's `tk mcp`
-install/repair/status commands from that document.
+MCP client files unless the user authorizes setup; use TokenKick's `tk mcp`
+install/repair/status commands for supported clients. Hermes uses the documented
+stdio configuration in MCP.md. Read `tokenkick_auto_status`, then preview and
+apply `tokenkick_auto_set` only after the provider disclosure is accepted.
 
 ## Setup And Onboarding
 

@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 from rich.table import Table
 from rich.text import Text
 
-from .kicker import KICKABLE_PROVIDERS
+from .kicker import KICKABLE_PROVIDERS, account_is_kickable
 from .models import (
     AccountConfig,
     AccountState,
@@ -344,7 +344,8 @@ def _status_rows_as_dict(
             row["auto_kick"] = account.auto_kick
             row["weekly_auto_kick"] = bool(account.weekly_auto_kick)
             row["session_auto_kick"] = bool(account.session_auto_kick)
-            row["monitor_only"] = _cli()._is_monitor_only_provider(account.provider)
+            row["monitor_only"] = not account_is_kickable(account)
+            row["antigravity_family"] = account.antigravity_family
             row["visible"] = account.visible
             schedule = schedule_for_account(config.schedule, account.label) if config is not None else None
             row["schedule_enabled"] = bool(schedule and schedule.enabled)
@@ -352,6 +353,8 @@ def _status_rows_as_dict(
             row["schedule_weekends"] = schedule.weekends if schedule is not None else None
             if account.provider == "antigravity":
                 quota_targets = _antigravity_quota_targets(status)
+                if account.antigravity_family:
+                    quota_targets = [target for target in quota_targets if target["family"] == account.antigravity_family]
                 if quota_targets:
                     row["quota_targets"] = quota_targets
         if isinstance(row.get("used_percent"), (int, float)):
@@ -520,7 +523,7 @@ def _render_status_table(
             codex_unconfirmed_session=codex_unconfirmed_session,
             cached_refresh_unavailable=claude_cached_refresh_unavailable,
         )
-        if provider == "antigravity" and (quota_targets := _antigravity_quota_targets(s)):
+        if provider == "antigravity" and not (account and account.antigravity_family) and (quota_targets := _antigravity_quota_targets(s)):
             row = [
                 s.label,
                 state_display,
@@ -920,6 +923,10 @@ def _status_action(
         return "Provider unchanged"
     if eligibility.reason == "weekly_exhausted":
         return "Weekly exhausted"
+    if eligibility.reason == "antigravity_attempt_already_sent":
+        return "Request already sent"
+    if eligibility.reason == "antigravity_live_quota_required":
+        return "Refresh required"
     if eligibility.reason == "session_exhausted":
         return "Wait for session"
     if eligibility.cooldown_remaining is not None:
@@ -932,7 +939,7 @@ def _status_action(
         return "Kick session"
     if eligibility.kickable:
         return status.state.action
-    if _cli()._is_monitor_only_provider(provider) and status.state != AccountState.UNKNOWN:
+    if (_cli()._is_monitor_only_provider(provider) or (provider == "antigravity" and (account is None or not account_is_kickable(account)))) and status.state != AccountState.UNKNOWN:
         return "Monitor only"
     if (
         status.state == AccountState.FRESH
@@ -960,7 +967,7 @@ def _status_table_action(
     if refresh_failed:
         if account is not None and account.provider == "claude":
             return "Cached Claude status"
-        if account is not None and _cli()._is_monitor_only_provider(account.provider):
+        if account is not None and not account_is_kickable(account):
             return "Monitor stale"
         return "Refresh failed"
     return _status_action(status, providers_by_label, account)
@@ -973,7 +980,7 @@ def _refresh_failure_blocks_auto_kicks(
 ) -> bool:
     return (
         account is not None
-        and account.provider in KICKABLE_PROVIDERS
+        and account_is_kickable(account)
         and account.provider != "claude"
         and cache_entry is not None
         and bool(cache_entry.get("refresh_error"))
@@ -1114,7 +1121,7 @@ def _status_state_display(
         display = "🟡 Codex unconfirmed"
     elif (
         (provider is None or provider in KICKABLE_PROVIDERS)
-        and provider != "claude"
+        and provider not in {"claude", "antigravity"}
         and _status_has_unanchored_session_artifact(status)
     ):
         display = "🟢 Session ready"

@@ -8,7 +8,7 @@ import json
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
-from .kicker import KICKABLE_PROVIDERS
+from .kicker import account_is_kickable
 from .models import (
     AccountConfig,
     AccountState,
@@ -697,7 +697,7 @@ def _skip_reason(
 ) -> str | None:
     if not account.visible:
         return "hidden"
-    if account.provider not in KICKABLE_PROVIDERS:
+    if not account_is_kickable(account):
         return "provider_not_kickable"
     if not account.auto_kick:
         return "auto_kick_disabled"

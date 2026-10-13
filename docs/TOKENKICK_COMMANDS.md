@@ -58,8 +58,9 @@ way:
 tk kick "<label>" --force
 ```
 
-Gemini and Antigravity are monitor-only; kick and auto-kick commands reject
-those accounts.
+Standalone Gemini and legacy aggregate Antigravity accounts remain monitor-only.
+Native Antigravity CLI Gemini and Claude families have separate auto-kick controls.
+Unconfirmed Antigravity requests block retries until explicit operator recovery.
 
 `tk plan` estimates usable coverage from per-account `usable_session_minutes`.
 If that is unset, `plan_tier` and `schedule.usable_session_tier_defaults` provide

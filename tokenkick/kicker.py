@@ -10,18 +10,21 @@ import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from .direct import CodexProviderUsageError, read_codex_model_catalog
 from .model_selection import (
     ModelSelectionError, claude_economical_args, claude_economical_env, select_codex_model,
+    read_antigravity_models, select_antigravity_model,
 )
+from .antigravity import antigravity_cli_binary, read_antigravity_cli_identity
 
 from .models import (
     CODEX_SPARK_MODEL_ID,
     CODEX_SPARK_RATE_LIMIT_ID,
     CONFIG_DIR,
     AccountConfig,
+    DataSource,
     KickEvent,
     account_key_string,
     append_kick_event,
@@ -29,21 +32,29 @@ from .models import (
 )
 
 
-KICKABLE_PROVIDERS = {"codex", "claude"}
-MONITOR_ONLY_PROVIDERS = {"gemini", "antigravity"}
+KICKABLE_PROVIDERS = {"codex", "claude", "antigravity"}
+MONITOR_ONLY_PROVIDERS = {"gemini"}
 GEMINI_MONITOR_ONLY_MESSAGE = (
     "Gemini is monitor-only: its quota uses daily reset at midnight Pacific time, "
     "not first-use-anchored windows. Kicking has no effect. See docs/PROVIDERS.md for details."
 )
 GEMINI_AUTO_KICK_DISABLED_MESSAGE = "Gemini is monitor-only; auto-kick cannot be enabled."
 ANTIGRAVITY_MONITOR_ONLY_MESSAGE = (
-    "Antigravity is monitor-only: TokenKick can read bundled quota windows, but a safe "
-    "provider-native anchor request has not been verified. Kicking is disabled. "
-    "See docs/PROVIDERS.md for details."
+    "Antigravity is monitor-only for this account. Kicking is disabled. "
+    "Run tk setup to discover native CLI Gemini and Claude quota families."
 )
 ANTIGRAVITY_AUTO_KICK_DISABLED_MESSAGE = (
-    "Antigravity is monitor-only; auto-kick cannot be enabled."
+    "Antigravity is monitor-only; auto-kick cannot be enabled. Select a native CLI quota family first."
 )
+ANTIGRAVITY_KICK_PROMPT = "Reply with exactly: OK. Use no tools, inspect no files, and run no commands."
+
+
+def account_is_kickable(account: AccountConfig) -> bool:
+    if account.provider == "antigravity":
+        return account.source == DataSource.ANTIGRAVITY_CLI and account.antigravity_family in {"gemini", "claude_gpt"}
+    return account.provider in KICKABLE_PROVIDERS
+
+
 DEFAULT_KICK_MODELS: dict[str, str] = {"claude": "haiku"}
 CODEX_KICK_PROMPT = (
     "TokenKick quota anchor probe. Do not inspect files or run commands."
@@ -193,13 +204,14 @@ def kick_account(
     phantom_recovery: bool = False,
     model_override: str | None = None,
     codex_surface: str = CODEX_KICK_SURFACE_DEFAULT,
+    before_send: Callable[[], None] | None = None,
 ) -> KickEvent:
     """Send a minimal request to start the quota window.
 
     Uses the provider CLI in non-interactive mode to send a trivial prompt.
     This is the lightest possible touch: a single tiny completion.
     """
-    if account.provider not in KICKABLE_PROVIDERS:
+    if not account_is_kickable(account):
         if account.provider == "gemini":
             error = GEMINI_MONITOR_ONLY_MESSAGE
         elif account.provider == "antigravity":
@@ -226,6 +238,7 @@ def kick_account(
     except (ModelSelectionError, CodexProviderUsageError, OSError) as exc:
         event = KickEvent(
             label=account.label, timestamp=time.time(), success=False,
+            confirmed=False,
             error=str(exc) if isinstance(exc, (ModelSelectionError, CodexProviderUsageError))
             else "Provider model catalog unavailable; no kick was sent.",
         )
@@ -239,6 +252,8 @@ def kick_account(
     requested_model = invocation.model
 
     try:
+        if before_send is not None:
+            before_send()
         result = subprocess.run(
             command,
             stdin=subprocess.DEVNULL,
@@ -252,6 +267,16 @@ def kick_account(
         success = result.returncode == 0
         error = None if success else _kick_error_message(cli_name, result)
         metadata = _kick_output_metadata(result.stdout)
+        if account.provider == "antigravity":
+            # Plain output is deliberately bounded and never interpreted as instructions.
+            response_ok = bool(re.fullmatch(r"OK[.!]?", result.stdout.strip(), re.IGNORECASE))
+            metadata = {"response_text": "OK" if response_ok else None,
+                        "evidence_response": response_ok,
+                        "post_kick_status": "not_checked"}
+            if success and not metadata["evidence_response"]:
+                error = "Antigravity completed without the expected minimal response."
+            if not success:
+                error = f"agy kick exited with code {result.returncode}; inspect native CLI diagnostics."
         if account.provider == "codex":
             metadata["codex_surface"] = codex_surface
             metadata["evidence_response"] = bool(metadata.get("response_text"))
@@ -267,7 +292,7 @@ def kick_account(
             label=account.label,
             timestamp=time.time(),
             success=success,
-            confirmed=success and not (account.provider == "codex" and error),
+            confirmed=success and account.provider != "antigravity" and not (account.provider == "codex" and error),
             error=error,
             kick_model=requested_model,
             prompt_text=prompt_text,
@@ -297,7 +322,7 @@ def kick_account(
             label=account.label,
             timestamp=time.time(),
             success=False,
-            error=str(e),
+            error="Antigravity request failed; inspect native CLI diagnostics." if account.provider == "antigravity" else str(e),
             kick_model=requested_model,
             prompt_text=prompt_text,
         )
@@ -349,6 +374,23 @@ def _kick_invocation(
         phantom_recovery=phantom_recovery,
         model_override=model_override,
     )
+    if account.provider == "antigravity":
+        if not account_is_kickable(account):
+            raise ModelSelectionError(ANTIGRAVITY_MONITOR_ONLY_MESSAGE)
+        identity = read_antigravity_cli_identity()
+        expected = account.identity_email or account.codexbar_account
+        if not expected or not identity or identity.lower() != expected.lower():
+            raise ModelSelectionError("Antigravity identity is missing or changed; no kick was sent.")
+        binary = antigravity_cli_binary()
+        if not binary:
+            raise ModelSelectionError("Antigravity CLI not found; no kick was sent.")
+        model = select_antigravity_model(read_antigravity_models(binary), account.antigravity_family, model)
+        workspace = CONFIG_DIR / "antigravity-kick-workspace"
+        workspace.mkdir(parents=True, exist_ok=True)
+        return KickInvocation(command=[
+            binary, "--log-file", os.devnull, "--model", model, "--sandbox", "--output-format", "text",
+            "--disable-slash-commands", "--print-timeout", "45s", "--print", ANTIGRAVITY_KICK_PROMPT,
+        ], cwd=workspace, model=model)
     if account.provider == "claude":
         model = model or "haiku"
         command = [
@@ -395,7 +437,7 @@ def _kick_invocation(
 
 
 def _kick_prompt_text(account: AccountConfig, command: list[str]) -> str | None:
-    if account.provider == "codex":
+    if account.provider in {"codex", "antigravity"}:
         return command[-1] if command else None
     if account.provider == "claude":
         try:
