@@ -3,6 +3,7 @@
 import json
 import signal
 import subprocess
+import sys
 import threading
 import warnings
 
@@ -332,7 +333,7 @@ def test_find_running_antigravity_cli_session_reuses_matching_binary(monkeypatch
         "tokenkick.sources.subprocess.run",
         lambda *_args, **_kwargs: SimpleNamespace(
             stdout=(
-                f"123 {binary} --some-flag\n"
+                f"123 {binary} --csrf_token test-session-token\n"
                 "456 /Applications/Antigravity.app/Contents/MacOS/Antigravity\n"
             )
         ),
@@ -350,7 +351,44 @@ def test_find_running_antigravity_cli_session_reuses_matching_binary(monkeypatch
     assert session.process.pid == 123
     assert session.master_fd is None
     assert session.owned is False
+    assert session.csrf_token == "test-session-token"
+    assert "test-session-token" not in repr(session)
     assert calls == [123]
+
+
+def test_antigravity_private_probe_when_interactive_session_has_no_csrf(monkeypatch):
+    import tokenkick.sources as sources
+
+    monkeypatch.setattr(sources.subprocess, "run", lambda *_a, **_k: SimpleNamespace(
+        stdout="123 /usr/bin/agy\n"
+    ))
+    monkeypatch.setattr(sources, "listening_ports_for_pid_with_method",
+                        lambda *_a, **_k: pytest.fail("cannot reuse unauthenticated session"))
+    private = object()
+    monkeypatch.setattr(sources, "_start_antigravity_cli_session", lambda _binary: private)
+    assert sources._open_antigravity_cli_session("/usr/bin/agy") is private
+
+
+def test_antigravity_owned_sessions_have_unique_csrf_tokens(monkeypatch):
+    import tokenkick.sources as sources
+
+    calls = []
+    monkeypatch.setattr(sources.subprocess, "Popen", lambda command, **_kw: (
+        calls.append(command) or SimpleNamespace(pid=123, args=command)
+    ))
+    sessions = []
+    try:
+        for _ in range(2):
+            sessions.append(sources._start_antigravity_cli_session("/usr/bin/agy"))
+        assert len({session.csrf_token for session in sessions}) == 2
+        for session, command in zip(sessions, calls):
+            assert len(session.csrf_token) == 64
+            assert command == ["/usr/bin/agy", "--csrf_token", session.csrf_token]
+            assert session.csrf_token not in repr(session)
+            assert session.owned
+    finally:
+        for session in sessions:
+            sources.os.close(session.master_fd)
 
 
 def test_stop_antigravity_cli_session_does_not_kill_reused_process(monkeypatch):
@@ -585,13 +623,15 @@ def test_fetch_antigravity_cli_prefers_https_quota_source(monkeypatch):
     assert status is quota_status
 
 
-def test_fetch_antigravity_cli_https_uses_quota_summary_first(monkeypatch):
+@pytest.mark.parametrize("csrf_token", ["", "test-session-token"])
+def test_fetch_antigravity_cli_https_uses_quota_summary_first(monkeypatch, csrf_token):
     monkeypatch.setattr("tokenkick.antigravity.time.time", lambda: _epoch("2026-05-23T04:18:33Z"))
     session = SimpleNamespace(
         binary="/usr/bin/agy",
         process=SimpleNamespace(pid=123, poll=lambda: None),
         master_fd=-1,
         output=bytearray(),
+        csrf_token=csrf_token,
     )
     calls = []
     monkeypatch.setattr("tokenkick.sources._drain_antigravity_cli_output", lambda _session: None)
@@ -600,9 +640,10 @@ def test_fetch_antigravity_cli_https_uses_quota_summary_first(monkeypatch):
         lambda *_args, **_kwargs: ([4567], "lsof"),
     )
 
-    def fake_request(_scheme, _port, path, _body, csrf_token):
-        calls.append((path, csrf_token))
-        assert csrf_token == ""
+    def fake_request(scheme, _port, path, _body, request_token):
+        calls.append((path, request_token))
+        assert scheme == "https"
+        assert request_token == csrf_token
         return _antigravity_quota_summary_response()
 
     monkeypatch.setattr("tokenkick.sources._antigravity_request_json", fake_request)
@@ -620,9 +661,11 @@ def test_fetch_antigravity_cli_https_uses_quota_summary_first(monkeypatch):
     assert calls == [
         (
             "/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary",
-            "",
+            csrf_token,
         )
     ]
+    if csrf_token:
+        assert csrf_token not in str(status.source_diagnostics)
 
 
 def test_fetch_antigravity_cli_https_verifies_summary_with_cli_identity(monkeypatch):
@@ -659,6 +702,43 @@ def test_fetch_antigravity_cli_https_verifies_summary_with_cli_identity(monkeypa
     assert status.state == AccountState.ACTIVE
     assert status.quota_windows is not None
     assert getattr(status, "_antigravity_identity_email") == "dev@example.test"
+
+
+def test_antigravity_waits_for_quota_buckets_after_server_starts(monkeypatch):
+    import tokenkick.sources as sources
+
+    session = SimpleNamespace(binary="agy", process=SimpleNamespace(pid=123, poll=lambda: None))
+    incomplete = AccountStatus(label="antigravity", state=AccountState.ACTIVE)
+    complete = sources._parse_antigravity_quota_summary(
+        "antigravity", _antigravity_quota_summary_response()
+    )
+    replies = iter([incomplete, complete])
+    monkeypatch.setattr(sources, "_drain_antigravity_cli_output", lambda _session: None)
+    monkeypatch.setattr(sources, "listening_ports_for_pid_with_method", lambda *_a, **_k: ([1234], "proc"))
+    monkeypatch.setattr(sources, "_fetch_antigravity_cli_quota_from_port", lambda *_a: next(replies))
+    monkeypatch.setattr(sources.time, "sleep", lambda _seconds: None)
+    status = sources._fetch_antigravity_cli_https_status(
+        AccountConfig(label="antigravity", provider="antigravity"), session
+    )
+    assert sources.has_complete_antigravity_quota_windows(status)
+
+
+def test_antigravity_incomplete_startup_never_reports_ready(monkeypatch):
+    import tokenkick.sources as sources
+
+    session = SimpleNamespace(binary="agy", process=SimpleNamespace(pid=123, poll=lambda: None))
+    clock = iter([0, 1, 100])
+    monkeypatch.setattr(sources.time, "monotonic", lambda: next(clock))
+    monkeypatch.setattr(sources.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(sources, "_drain_antigravity_cli_output", lambda _session: None)
+    monkeypatch.setattr(sources, "listening_ports_for_pid_with_method", lambda *_a, **_k: ([1234], "proc"))
+    monkeypatch.setattr(sources, "_fetch_antigravity_cli_quota_from_port", lambda *_a: AccountStatus(
+        label="antigravity", state=AccountState.ACTIVE
+    ))
+    with pytest.raises(sources._AntigravityProbeError, match="buckets are not ready"):
+        sources._fetch_antigravity_cli_https_status(
+            AccountConfig(label="antigravity", provider="antigravity"), session
+        )
 
 
 def test_fetch_antigravity_cli_https_fails_closed_on_incomplete_summary(monkeypatch):
@@ -1864,6 +1944,38 @@ def test_claude_usage_pty_retries_loading_only_capture(monkeypatch):
 
     assert "Current session" in raw
     assert calls == [5.0, 10.0]
+
+
+@pytest.mark.parametrize("transport", ["pipe", "pty"])
+def test_claude_usage_transport_keeps_builtin_commands_enabled(monkeypatch, tmp_path, transport):
+    import tokenkick.sources as sources
+
+    if transport == "pty" and sources.pty is None:
+        pytest.skip("PTY unavailable on this platform")
+    binary = tmp_path / "claude"
+    binary.write_text(
+        f"#!{sys.executable}\nimport sys\n"
+        "if '--disable-slash-commands' in sys.argv:\n"
+        " print('Unknown command: /usage', flush=True)\n"
+        "else:\n"
+        " print('Current session\\n3% used\\nResets in 1h\\n"
+        "Current week\\n20% used\\nResets in 5h', flush=True)\n"
+    )
+    binary.chmod(0o755)
+    monkeypatch.setattr(sources, "_claude_probe_cwd", lambda: tmp_path)
+    if transport == "pipe":
+        raw = sources._capture_claude_usage_pipe(str(binary))
+    else:
+        raw = sources._capture_claude_usage_pty_once(str(binary), timeout_seconds=2)
+    assert sources._claude_usage_capture_has_complete_window_data(raw)
+
+
+def test_claude_unknown_usage_command_is_terminal_error():
+    from tokenkick.sources import _extract_claude_usage_error
+
+    error = _extract_claude_usage_error("● Unknown command: /usage")
+    assert error is not None
+    assert "does not expose `/usage`" in error
 
 
 def test_claude_usage_pty_reuses_valid_panel_from_timeout(monkeypatch):

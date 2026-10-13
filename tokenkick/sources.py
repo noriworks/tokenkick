@@ -7,6 +7,7 @@ import json
 import math
 import os
 import re
+import secrets
 import shlex
 import selectors
 import shutil
@@ -20,7 +21,7 @@ import urllib.error
 import urllib.request
 from collections.abc import Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from pathlib import Path
@@ -146,10 +147,11 @@ class _AntigravityProcessInfo:
 @dataclass
 class _AntigravityCliSession:
     binary: str
-    process: Any
+    process: Any = field(repr=False)
     master_fd: int | None
-    output: bytearray
+    output: bytearray = field(repr=False)
     owned: bool
+    csrf_token: str = field(default="", repr=False)
 
 
 class _AntigravityProbeError(Exception):
@@ -1371,7 +1373,7 @@ class _ClaudeUsageCaptureTimeout(TimeoutError):
 def _capture_claude_usage_pipe(binary: str) -> str:
     try:
         result = subprocess.run(
-            [binary, *claude_economical_args()],
+            [binary, *claude_economical_args(usage_commands=True)],
             input="/usage\n/exit\n",
             capture_output=True,
             text=True,
@@ -1439,7 +1441,7 @@ def _capture_claude_usage_pty_once(binary: str, *, timeout_seconds: float) -> st
         env = claude_economical_env()
         env.setdefault("TERM", "xterm-256color")
         process = subprocess.Popen(
-            [binary, *claude_economical_args()],
+            [binary, *claude_economical_args(usage_commands=True)],
             stdin=slave_fd,
             stdout=slave_fd,
             stderr=slave_fd,
@@ -1914,6 +1916,8 @@ def _claude_usage_waiting_for_trust(text: str) -> bool:
 def _extract_claude_usage_error(text: str) -> str | None:
     lower = text.lower()
     compact = "".join(lower.split())
+    if "unknowncommand:/usage" in compact:
+        return "Claude CLI does not expose `/usage`. Check CLI command settings and version."
     if "token_expired" in lower or "token has expired" in lower:
         return "Claude CLI token expired. Run `claude auth login --claudeai` to refresh."
     if "authentication_error" in lower or "not authenticated" in lower:
@@ -2162,6 +2166,12 @@ def _find_running_antigravity_cli_session(binary: str) -> _AntigravityCliSession
         pid, command = match
         if pid == os.getpid() or not _is_matching_antigravity_cli_command(command, target):
             continue
+        # Current CLI quota servers require this session's CSRF token. A normal
+        # interactive session generates its own token that we cannot safely read.
+        # Leave it alone and open a private, authenticated probe instead.
+        csrf_token = _extract_antigravity_flag(command, "--csrf_token")
+        if not csrf_token:
+            continue
         ports, _method = listening_ports_for_pid_with_method(pid, timeout_seconds=0.5)
         if ports:
             return _AntigravityCliSession(
@@ -2170,6 +2180,7 @@ def _find_running_antigravity_cli_session(binary: str) -> _AntigravityCliSession
                 master_fd=None,
                 output=bytearray(),
                 owned=False,
+                csrf_token=csrf_token,
             )
     return None
 
@@ -2204,9 +2215,10 @@ def _start_antigravity_cli_session(binary: str) -> _AntigravityCliSession:
         master_fd, slave_fd = pty.openpty()
     except OSError as exc:
         raise _AntigravityProbeError(f"Could not create PTY for agy CLI: {exc}.") from exc
+    csrf_token = secrets.token_hex(32)
     try:
         process = subprocess.Popen(
-            [binary],
+            [binary, "--csrf_token", csrf_token],
             stdin=slave_fd,
             stdout=slave_fd,
             stderr=slave_fd,
@@ -2228,6 +2240,7 @@ def _start_antigravity_cli_session(binary: str) -> _AntigravityCliSession:
         master_fd=master_fd,
         output=bytearray(),
         owned=True,
+        csrf_token=csrf_token,
     )
 
 
@@ -2245,7 +2258,11 @@ def _fetch_antigravity_cli_https_status(
         )
         for port in ports:
             try:
-                status = _fetch_antigravity_cli_quota_from_port(account.label, port)
+                status = _fetch_antigravity_cli_quota_from_port(
+                    account.label, port, getattr(session, "csrf_token", "")
+                )
+                if not has_complete_antigravity_quota_windows(status):
+                    raise _AntigravityProbeError("agy CLI quota buckets are not ready yet.")
             except _AntigravityQuotaSummaryParseError:
                 raise
             except _AntigravityProbeError as exc:
@@ -2270,7 +2287,9 @@ def _fetch_antigravity_cli_https_status(
     raise _AntigravityProbeError(last_error)
 
 
-def _fetch_antigravity_cli_quota_from_port(label: str, port: int) -> AccountStatus:
+def _fetch_antigravity_cli_quota_from_port(
+    label: str, port: int, csrf_token: str = ""
+) -> AccountStatus:
     last_error: str | None = None
     for endpoint_name, path in ANTIGRAVITY_CLI_QUOTA_ENDPOINTS:
         try:
@@ -2279,7 +2298,7 @@ def _fetch_antigravity_cli_quota_from_port(label: str, port: int) -> AccountStat
                 port,
                 path,
                 _antigravity_default_request_body(),
-                "",
+                csrf_token,
             )
             if endpoint_name == "RetrieveUserQuotaSummary":
                 status = _parse_antigravity_quota_summary(label, data)

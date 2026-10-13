@@ -22,13 +22,13 @@ class ModelSelection:
     effort: str
 
 
-def claude_economical_args(model: str = "haiku") -> list[str]:
+def claude_economical_args(model: str = "haiku", *, usage_commands: bool = False) -> list[str]:
     """Use the live Haiku alias and override interactive cost/tool settings."""
     return [
         "--tools", "", "--effort", "low", "--settings",
         '{"alwaysThinkingEnabled":false,"effortLevel":"low","fastMode":false}',
         "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}',
-        "--disable-slash-commands", "--model", model,
+        *([] if usage_commands else ["--disable-slash-commands"]), "--model", model,
     ]
 
 

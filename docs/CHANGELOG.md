@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.21.9
+
+- Keep Claude's built-in `/usage` command enabled for quota reads while preserving
+  Haiku, low effort, disabled thinking, and empty tool/MCP settings. Report an
+  unavailable usage command immediately instead of repeatedly submitting it.
+- Authenticate private Antigravity quota sessions with a fresh CSRF token. Leave
+  interactive sessions without an available token untouched; retain HTTPS and
+  identity/completeness checks before accepting quota data. Wait for all four
+  quota buckets during CLI startup instead of accepting an empty account status.
+
 ## v1.21.8
 
 - Select Codex kick models from each account's live catalog, preferring GPT-6 Luna

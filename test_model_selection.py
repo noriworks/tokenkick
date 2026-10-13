@@ -228,3 +228,4 @@ def test_all_claude_probe_paths_apply_cost_controls(monkeypatch, tmp_path, path)
     assert command[command.index("--model") + 1] == "haiku"
     assert command[command.index("--effort") + 1] == "low"
     assert kwargs["env"]["MAX_THINKING_TOKENS"] == "0"
+    assert ("--disable-slash-commands" in command) is (path == "probe")
