@@ -373,3 +373,105 @@ def test_repeated_refreshes_reload_backoff_then_recover(isolated, monkeypatch):
     assert final["last_direct_probe_error"] is None
     assert final["refresh_error"] is None
     assert final["provider_observed_at"] == "2026-10-13T10:15:00Z"
+
+
+@pytest.fixture
+def discovery_refresh(isolated, monkeypatch):
+    """Use the actual discovery/merge/cache pipeline, mocking only providers."""
+    from tokenkick import discovery
+    from tokenkick.direct import DirectIdentity
+
+    candidate = replace(account(), identity_email='test@example.test', identity_provider_id='claude-test')
+    config = Config(accounts=[candidate])
+    monkeypatch.setattr(cli, 'read_claude_identity', lambda: DirectIdentity(
+        provider='claude', email=candidate.identity_email, provider_account_id=candidate.identity_provider_id))
+    monkeypatch.setattr(discovery, '_append_codex_direct_accounts', lambda *_: None)
+    monkeypatch.setattr(discovery, '_append_antigravity_cli_account', lambda *_: None)
+    monkeypatch.setattr(discovery.shutil, 'which', lambda name: '/fake/claude' if name == 'claude' else None)
+    monkeypatch.setattr(cli, '_discover_codex_session_accounts', lambda: ([], []))
+    monkeypatch.setattr(cli, 'Config', type('ConfigLoader', (), {'load': staticmethod(lambda: config)}))
+    for name in ('_migrate_v04_direct_sources_if_needed', '_migrate_provider_first_labels_if_needed',
+                 '_migrate_codex_home_keys_if_needed', '_repair_codex_home_identity_drift_if_needed'):
+        monkeypatch.setattr(cli, name, lambda config, **_: config)
+    monkeypatch.setattr(cli, '_supervise_telegram_remote', lambda _: None)
+    monkeypatch.setattr('tokenkick.stagger.daemon_step', lambda *_, **__: None)
+    return candidate, config
+
+
+def test_background_refreshes_refresh_claude_and_keep_failures_through_discovery(discovery_refresh, monkeypatch):
+    from click.testing import CliRunner
+
+    candidate, config = discovery_refresh
+    key = account_key_string(candidate)
+    attempts = []
+
+    def capture(_):
+        attempts.append(Clock.current)
+        if len(attempts) in (2, 3):
+            raise RuntimeError('HTTP 429 Too many requests')
+        return 'usage fixture'
+
+    monkeypatch.setattr(sources, '_capture_claude_usage', capture)
+    monkeypatch.setattr(sources, '_parse_claude_usage_output', lambda label, _: replace(
+        direct_status(), label=label, observed_at=Clock.current.strftime('%Y-%m-%dT%H:%M:%SZ')))
+
+    def refresh():
+        result = CliRunner().invoke(cli.cli, ['refresh-cache'])
+        assert result.exit_code == 0, result.output
+        return cli._load_status_cache_entries()[key]
+
+    first = refresh()
+    assert first['last_direct_success_at'] == STAMP
+    Clock.current += timedelta(minutes=10)
+    failure = refresh()
+    assert len(attempts) == 2
+    assert failure['last_direct_probe_error'].category == Category.RATE_LIMITED
+    assert failure['direct_rate_limit_failures'] == 1
+    assert failure['provider_observed_at'] == STAMP
+    assert failure['refresh_error'] is not None
+    assert 'rate-limited' in diagnostic_text(failure)
+    Clock.current += timedelta(minutes=1)
+    assert refresh()['direct_rate_limit_failures'] == 1
+    assert len(attempts) == 2
+    Clock.current += timedelta(minutes=4)
+    assert refresh()['direct_rate_limit_failures'] == 2
+    Clock.current += timedelta(minutes=10)
+    recovered = refresh()
+    assert len(attempts) == 4
+    assert recovered['last_direct_probe_error'] is None
+    assert recovered['direct_rate_limit_failures'] == 0
+    assert recovered['refresh_error'] is None
+    assert recovered['provider_observed_at'] == '2026-10-13T10:25:00Z'
+
+
+def test_daemon_poll_obtains_claude_read_before_automation(discovery_refresh, monkeypatch):
+    candidate, config = discovery_refresh
+    calls = []
+    monkeypatch.setattr(sources, '_capture_claude_usage', lambda _: calls.append('usage') or 'fixture')
+    monkeypatch.setattr(sources, '_parse_claude_usage_output', lambda label, _: replace(direct_status(), label=label))
+
+    def stop_after_refresh(*_, **__):
+        entry = cli._load_status_cache_entries()[account_key_string(candidate)]
+        assert entry['last_direct_success_at'] == STAMP
+        assert calls == ['usage']
+        raise RuntimeError('verified refreshed cache before automation')
+
+    monkeypatch.setattr('tokenkick.status_rendering.notify_dormant_accounts', stop_after_refresh)
+    with pytest.raises(RuntimeError, match='verified refreshed cache before automation'):
+        cli._daemon_poll_once({}, False)
+
+
+@pytest.mark.parametrize('scope', ['global', 'account'])
+def test_background_discovery_honors_claude_monitoring_opt_out(discovery_refresh, monkeypatch, scope):
+    from click.testing import CliRunner
+
+    candidate, config = discovery_refresh
+    if scope == 'global':
+        config.claude.direct_usage_enabled = False
+    else:
+        config.accounts = [replace(candidate, direct_usage_enabled=False)]
+    result = CliRunner().invoke(cli.cli, ['refresh-cache'])
+    assert result.exit_code == 0, result.output
+    entry = cli._load_status_cache_entries()[account_key_string(candidate)]
+    assert entry['last_direct_probe_error'].category == Category.DISABLED
+    assert entry['last_direct_probe_at'] is None

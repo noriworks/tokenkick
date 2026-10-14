@@ -12584,7 +12584,7 @@ def refresh_cache():
         config = _migrate_provider_first_labels_if_needed(config, emit_notice=False)
         config = _migrate_codex_home_keys_if_needed(config, emit_notice=False)
         config = _repair_codex_home_identity_drift_if_needed(config, emit_notice=False)
-        _refresh_status_cache(config, daemon_log=True)
+        _refresh_status_cache(config, daemon_log=True, allow_claude_usage=True)
     finally:
         _release_status_refresh_lock()
 
@@ -15037,7 +15037,9 @@ def _daemon_poll_once(
         stagger.daemon_step(loop_config, directory=CONFIG_DIR)
     except Exception as exc:
         _daemon_log("stagger_error", error=_daemon_poll_error_text(exc))
-    refresh_accounts, refresh_statuses = _refresh_status_cache(loop_config, daemon_log=True)
+    refresh_accounts, refresh_statuses = _refresh_status_cache(
+        loop_config, daemon_log=True, allow_claude_usage=True,
+    )
     statuses_by_key = _cache_statuses_by_key_from_pairs(refresh_accounts, refresh_statuses)
     from .status_rendering import notify_dormant_accounts
     notify_dormant_accounts(refresh_statuses, {a.label: a for a in accounts}, loop_config)

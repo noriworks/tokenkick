@@ -70,3 +70,39 @@ Codex-limit, notification, and selection-menu work. No commit, tag, push,
 publication, deployment, credential change, or live generation request was made.
 The provider can still return rate limits; this change handles and reports them
 truthfully. Mac CodexBar's separate credential-scope issue remains unresolved.
+
+## 2026-10-14: unattended refresh integration repair
+
+Live evidence on Hetzner: the cached direct observation and last successful probe
+were both 08:06 CEST, while daemon/helper passes rewrote the cache after 10:30.
+No persisted probe error explained the age. One guarded direct read succeeded at
+10:42 CEST without logging in or generating a completion.
+
+Acceptance criteria for this repair:
+
+1. Daemon polling and the detached `refresh-cache` helper explicitly permit guarded
+   Claude `/usage` monitoring. Merely rendering cached status remains passive.
+2. Discovery must not classify a failed/disabled/throttled direct read as an
+   identity-only result and replace it with cached success. Persist the probe error,
+   attempt time and backoff while retaining the previous observation separately.
+3. Honor saved per-account monitoring opt-outs before discovery reads, as well as
+   the global setting. Preserve existing minimum intervals and rate-limit backoff.
+4. Exercise the actual discovery/merge/cache path with mocked provider boundaries:
+   successful unattended refresh, failure, suppressed retry, increasing backoff,
+   recovery and global/account opt-outs; verify the daemon refreshes before it
+   evaluates automation.
+
+Implementation changes are confined to `tokenkick/cli.py` and
+`tokenkick/discovery.py`. Four regression cases were added to
+`test_claude_monitoring.py`; no existing tests or assertions were changed.
+All four fail against the released implementation and pass with the repair.
+Full Python suite: **1,906 passed**. Ruff and diff checks passed.
+
+This fixes TokenKick's unattended refresh and lost-diagnostic paths. Provider
+outages/rate limits can still cause stale data; freshness safeguards stay in place.
+The code repair is verified locally; a new package release/server deployment is
+required to make it permanent on Hetzner. The live read only refreshed current data.
+
+Separate orchestration finding: confirmed stagger requests ran overnight, but a
+native unverified-reset result near a deadline led to a skipped cycle. The daemon
+recovered and scheduled subsequent work. This repair does not change stagger policy.

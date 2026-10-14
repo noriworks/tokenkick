@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Restore unattended Claude usage refresh in daemon and detached helper passes.
+- Preserve failed direct-probe metadata through discovery so rate-limit backoff
+  and diagnostics survive cached-data fallback.
+- Honor saved per-account monitoring opt-outs before discovery performs a read.
+- Add four discovery/cache integration regression cases; existing tests unchanged.
+
 ## v1.23.2
 
 - Make the kick/cache regression deterministic across second boundaries using

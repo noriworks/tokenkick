@@ -413,7 +413,15 @@ def _append_claude_direct_account(
     )
     accounts.append(account)
     _cli()._setup_progress("Reading provider status")
-    status = _cli()._fetch_status(account, config) if config is not None else _cli().fetch_status(account)
+    # Discovery must honor a saved monitoring opt-out before it performs a read,
+    # not only later when presentation merges the configured account.
+    probe_account = account
+    if config is not None:
+        saved = [a for a in config.accounts if _account_key(a) == _account_key(account)]
+        if len(saved) == 1:
+            probe_account = merge_discovered_account(saved[0], account)
+    status = (_cli()._fetch_status(probe_account, config)
+              if config is not None else _cli().fetch_status(account))
     statuses.append(status)
 
 
@@ -865,6 +873,11 @@ def _claude_identity_only_discovery_status(
     account: AccountConfig,
     status: AccountStatus,
 ) -> bool:
+    context = getattr(status, "_claude_probe_context", None)
+    if context is not None and context.last_direct_probe_error is not None:
+        # A failed/disabled/throttled read is not identity-only discovery. Keep
+        # its context so cache persistence retains the error and retry deadline.
+        return False
     return (
         account.provider == "claude"
         and account.source == DataSource.CLAUDE_DIRECT
