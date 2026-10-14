@@ -144,7 +144,7 @@ def test_account_labels_are_concise_keep_identity_and_explain_families():
     )
     auto = ui._auto_account_menu_choices(accounts)
     assert any(
-        "Auto-kick on" in c.name and "Weekly on" in c.name and "Session on" in c.name for c in auto
+        "Auto-kick on" in c.name and "Weekly enabled" in c.name and "Session enabled" in c.name for c in auto
     )
     assert [a.to_dict() for a in accounts] == before
 
@@ -162,10 +162,10 @@ def test_auto_review_describes_exact_switch_transitions(scope, enabled):
     changes = ui._auto_selection_changes([a], [a.label], scope, enabled)
     row = changes[0]
     assert "Test" in row
-    assert f"Master off → {'on' if scope == 'all' and enabled else 'off'}" in row
-    assert f"Weekly on → {'on' if enabled or scope == 'session' else 'off'}" in row
-    assert f"Session off → {'on' if enabled and scope in {'all', 'session'} else 'off'}" in row
-    assert ("automation stays blocked" in row) == (enabled and scope != "all")
+    assert f"Master off → {'on' if enabled else 'off'}" in row
+    assert f"Weekly on → {'off' if scope == 'weekly' and not enabled else 'on'}" in row
+    assert f"Session off → {'on' if enabled and scope == 'session' else 'off'}" in row
+    assert ("automation paused" in row) == (not enabled)
 
 
 @pytest.fixture

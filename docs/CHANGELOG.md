@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Auto-kick window enablement now resumes master. Master pause/resume preserves saved weekly/session
+  choices, including weekly-only setups. Paused preferences and empty selections are explicit in
+  terminal and macOS UI; MCP previews show exact changes and reject previews from the old policy.
+
 ## v1.23.3
 
 - Recover scheduled Antigravity stagger slots after inconclusive native reset

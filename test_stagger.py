@@ -37,6 +37,28 @@ def activate():
     return stagger.apply("enable", "gemini", "claude_gpt", expected=plan["fingerprint"], accept_risk=True)
 
 
+@pytest.mark.parametrize("scope", ["all", "weekly", "session"])
+def test_account_window_enable_does_not_resume_paused_stagger(env, scope):
+    activate()
+    plan = stagger.preview("pause")
+    stagger.apply("pause", expected=plan["fingerprint"])
+    result = CliRunner().invoke(cli.cli, [
+        "auto", *([] if scope == "all" else [scope]), "enable", "gemini",
+        "--accept-risk", "ENABLE", "--json-output",
+    ])
+    assert result.exit_code == 0, result.output
+    assert Config.load().accounts[0].auto_kick
+    assert stagger.load()["group"]["mode"] == "paused"
+    provider = Provider()
+    assert provider.tick()["mode"] == "paused"
+    assert provider.sent == []
+    assert stagger.ownership(Config.load().accounts[0]) == "stagger paused"
+    row = cli._auto_status_payload(Config.load().accounts)[0]
+    assert not row["weekly_effective"] and not row["session_effective"]
+    row = cli._accounts_list_payload(Config.load(), Config.load().accounts)[0]
+    assert not row["weekly_effective"] and not row["session_effective"]
+
+
 class Provider:
     def __init__(self, at=T, anchors=None):
         self.now = at

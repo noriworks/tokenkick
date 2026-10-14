@@ -4727,7 +4727,7 @@ def test_status_summary_suggests_session_auto_enable_when_manual_session_ready(m
 
     assert result.exit_code == 0
     assert "Kick-ready windows: active" in result.output
-    assert 'tk auto enable "active"' in result.output
+    assert 'tk auto session enable "active"' in result.output
 
 
 def test_status_table_keeps_used_column_readable_with_session_actions(monkeypatch):
@@ -18316,8 +18316,8 @@ def test_kick_enable_and_disable_toggle_codex_auto_kick(monkeypatch):
 def test_auto_enable_and_disable_toggle_auto_kick(monkeypatch):
     saved: list[Config] = []
     accounts = [
-        AccountConfig(label="codex", provider="codex", auto_kick=False),
-        AccountConfig(label="claude", provider="claude", auto_kick=False),
+        AccountConfig(label="codex", provider="codex", auto_kick=False, weekly_auto_kick=True, session_auto_kick=False),
+        AccountConfig(label="claude", provider="claude", auto_kick=True, weekly_auto_kick=True, session_auto_kick=False),
     ]
 
     monkeypatch.setattr(
@@ -18334,9 +18334,9 @@ def test_auto_enable_and_disable_toggle_auto_kick(monkeypatch):
     assert disabled.exit_code == 0
     assert saved[0].accounts[0].auto_kick is True
     assert saved[0].accounts[0].weekly_auto_kick is True
-    assert saved[0].accounts[0].session_auto_kick is True
+    assert saved[0].accounts[0].session_auto_kick is False
     assert saved[1].accounts[1].auto_kick is False
-    assert saved[1].accounts[1].weekly_auto_kick is False
+    assert saved[1].accounts[1].weekly_auto_kick is True
     assert saved[1].accounts[1].session_auto_kick is False
     assert saved[0].poll_interval_minutes == 13
 
@@ -18489,7 +18489,7 @@ def test_auto_session_enable_and_disable_toggle_session_auto_kick(monkeypatch):
     assert disabled.exit_code == 0
     assert saved[0].accounts[0].session_auto_kick is True
     assert saved[1].accounts[1].session_auto_kick is False
-    assert saved[0].accounts[0].auto_kick is False
+    assert saved[0].accounts[0].auto_kick is True
     assert saved[1].accounts[1].auto_kick is False
 
 
@@ -18513,7 +18513,7 @@ def test_auto_weekly_enable_and_disable_toggle_weekly_auto_kick(monkeypatch):
     assert disabled.exit_code == 0
     assert saved[0].accounts[0].weekly_auto_kick is True
     assert saved[1].accounts[1].weekly_auto_kick is False
-    assert saved[0].accounts[0].auto_kick is False
+    assert saved[0].accounts[0].auto_kick is True
     assert saved[1].accounts[1].auto_kick is True
 
 
@@ -20585,8 +20585,8 @@ def test_interactive_auto_menu_saves_auto_kick(monkeypatch):
 
     assert result.exit_code == 0
     assert saved[0].accounts[0].auto_kick is True
-    assert saved[0].accounts[0].weekly_auto_kick is True
-    assert saved[0].accounts[0].session_auto_kick is True
+    assert saved[0].accounts[0].weekly_auto_kick is False
+    assert saved[0].accounts[0].session_auto_kick is False
 
 
 def test_interactive_configure_menu_splits_accounts_and_auto_kick(monkeypatch):
@@ -21248,8 +21248,8 @@ def test_interactive_auto_menu_disable_selected_includes_hidden_accounts(monkeyp
     assert any("codex-spark" in label and "[hidden]" in label for label in checkbox_labels[0])
     assert saved[-1].accounts[0].auto_kick is True
     assert saved[-1].accounts[1].auto_kick is False
-    assert saved[-1].accounts[1].weekly_auto_kick is False
-    assert saved[-1].accounts[1].session_auto_kick is False
+    assert saved[-1].accounts[1].weekly_auto_kick is True
+    assert saved[-1].accounts[1].session_auto_kick is True
 
 
 def test_interactive_auto_menu_disable_all_includes_hidden_accounts(monkeypatch):
@@ -21287,11 +21287,11 @@ def test_interactive_auto_menu_disable_all_includes_hidden_accounts(monkeypatch)
     assert result.exit_code == 0
     assert len(saved) == 2
     assert saved[0].accounts[0].auto_kick is False
-    assert saved[0].accounts[0].weekly_auto_kick is False
-    assert saved[0].accounts[0].session_auto_kick is False
+    assert saved[0].accounts[0].weekly_auto_kick is True
+    assert saved[0].accounts[0].session_auto_kick is True
     assert saved[1].accounts[1].auto_kick is False
-    assert saved[1].accounts[1].weekly_auto_kick is False
-    assert saved[1].accounts[1].session_auto_kick is False
+    assert saved[1].accounts[1].weekly_auto_kick is True
+    assert saved[1].accounts[1].session_auto_kick is True
 
 
 def test_interactive_auto_menu_enable_all_skips_unusable_accounts(monkeypatch):
@@ -21336,8 +21336,8 @@ def test_interactive_auto_menu_enable_all_skips_unusable_accounts(monkeypatch):
 
     assert result.exit_code == 0
     assert [account.auto_kick for account in saved[-1].accounts] == [True, False, False]
-    assert [account.weekly_auto_kick for account in saved[-1].accounts] == [True, False, False]
-    assert [account.session_auto_kick for account in saved[-1].accounts] == [True, False, False]
+    assert [account.weekly_auto_kick for account in saved[-1].accounts] == [False, False, False]
+    assert [account.session_auto_kick for account in saved[-1].accounts] == [False, False, False]
     assert "Skipped auto-kick enable for accounts that are not currently usable" in result.output
     assert "codex-stale" in result.output
     assert "claude-expired: auth expired" in result.output

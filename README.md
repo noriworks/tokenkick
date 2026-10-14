@@ -43,7 +43,7 @@ For a manual CLI setup:
 ```bash
 tk setup
 tk status --refresh
-tk auto enable "<label>"
+tk auto weekly enable "<label>"  # Enable weekly automation and its master switch.
 tk notify --ntfy tokenkick-yourname
 tk daemon --background
 ```

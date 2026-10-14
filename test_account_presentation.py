@@ -91,8 +91,10 @@ def test_settings_table_and_json_distinguish_all_auto_switches(
     result = CliRunner().invoke(cli_mod.cli, ["accounts", "list"])
     assert result.exit_code == 0, result.output
     assert "TokenKick Account Settings" in result.output
-    for label, value in [("Master", master), ("Weekly", weekly), ("Session", session)]:
-        assert f"{label}: {'on' if value else 'off'}" in result.output
+    assert f"Master: {'on' if master else 'paused'}" in result.output
+    for label, value in [("Weekly", weekly), ("Session", session)]:
+        state = "disabled" if not value else "enabled" if master else "paused"
+        assert f"{label}: {state}" in result.output
     result = CliRunner().invoke(cli_mod.cli, ["accounts", "list", "--json-output"])
     assert result.exit_code == 0, result.output
     row = json.loads(result.output)["payload"]["accounts"][0]

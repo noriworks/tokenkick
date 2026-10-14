@@ -690,13 +690,9 @@ def _render_status_table(
             account = accounts_by_label.get(label)
             provider = _cli()._status_provider(fresh[0], providers_by_label)
             if _cli()._session_kick_eligible(account, fresh[0], provider):
-                auto_command = (
-                    "auto session enable" if account is not None and account.auto_kick else "auto enable"
-                )
-            elif account is not None and account.auto_kick and not account.weekly_auto_kick:
-                auto_command = "auto weekly enable"
+                auto_command = "auto session enable"
             else:
-                auto_command = "auto enable"
+                auto_command = "auto weekly enable"
             _cli().console.print(
                 f'  Run [bold]tk kick "{escape(label)}"[/bold] now, or '
                 f'[bold]tk {auto_command} "{escape(label)}"[/bold] for automatic kicks.'

@@ -148,7 +148,7 @@ public struct AccountsScreen: View {
 
     private func subtitle(_ row: AccountConfigRow) -> String {
         if row.list.monitorOnly { return "\(row.list.provider) · monitor-only" }
-        let auto = row.list.autoKick ? "auto-kick on" : "auto-kick off"
+        let auto = row.list.automationSummary
         return "\(row.list.provider) · \(auto)"
     }
 }
@@ -223,21 +223,28 @@ struct AccountInspectorView: View {
             }
 
             Section("Automation") {
-                Toggle("Auto-kick", isOn: binding(
+                Toggle("Run selected auto-kick windows", isOn: binding(
                     get: { row.list.autoKick },
                     mutation: { .setAutoKick($0) }
                 ))
                 .disabled(row.list.monitorOnly)
-                Toggle("Session (5 h) auto-kick", isOn: binding(
+                Toggle("Session auto-kick — \(row.list.sessionAutomationState)", isOn: binding(
                     get: { row.list.sessionAutoKick },
                     mutation: { .setSessionAutoKick($0) }
                 ))
                 .disabled(row.list.monitorOnly)
-                Toggle("Weekly auto-kick", isOn: binding(
+                Toggle("Weekly auto-kick — \(row.list.weeklyAutomationState)", isOn: binding(
                     get: { row.list.weeklyAutoKick },
                     mutation: { .setWeeklyAutoKick($0) }
                 ))
                 .disabled(row.list.monitorOnly)
+                Text("Pausing preserves window choices. Enabling a window resumes automation. Stagger group controls still apply.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                if row.list.autoKick && !row.list.weeklyAutoKick && !row.list.sessionAutoKick {
+                    Text("No windows selected; enable Weekly or Session. Nothing will run.")
+                        .font(.caption)
+                }
                 if row.list.monitorOnly {
                     Text("This provider is monitor-only; it can't be kicked.")
                         .font(.caption)

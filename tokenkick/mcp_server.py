@@ -23,8 +23,9 @@ def tokenkick_auto_set_preview(account: str, enabled: bool,
                               scope: Literal["all", "weekly", "session"] = "all") -> dict:
     """Preview auto-kick settings and provider consent. Enabling schedules future quota use.
 
-    Review the returned disclosure with the user before applying. all sets master,
-    weekly and session together; individual scopes preserve the master flag.
+    Review the returned disclosure with the user before applying. all pauses/resumes master,
+    preserving window choices. Enabling a window also enables master; disabling
+    a window preserves master. No selected windows means nothing runs.
     """
     return _core.tokenkick_auto_set_preview(account=account, enabled=enabled, scope=scope)
 

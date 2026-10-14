@@ -27,6 +27,7 @@ from rich.console import Console
 from rich.table import Table
 from rich.text import Text
 
+from . import auto_controls
 from .antigravity import (
     antigravity_cli_binary,
     has_complete_antigravity_quota_windows,
@@ -1396,19 +1397,18 @@ def _set_auto_kick(
     ):
         return None
 
-    updated = replace(
-        account,
-        auto_kick=enabled,
-        weekly_auto_kick=enabled,
-        session_auto_kick=enabled,
-    )
+    updated = replace(account, **auto_controls.transition(account, "all", enabled))
     updated_accounts = [
         updated if candidate.label == label else candidate
         for candidate in accounts
     ]
     _save_config_like(config, accounts=updated_accounts)
-    state = "enabled" if enabled else "disabled"
-    console.print(f'[green]Auto-kick {state} for "{label}".[/green]')
+    state = "resumed" if enabled else "paused"
+    console.print(f'[green]Auto-kick {state} for "{label}"; window choices preserved.[/green]')
+    if enabled and not (updated.weekly_auto_kick or updated.session_auto_kick):
+        console.print(Text("No windows selected; enable Weekly or Session. Nothing will run.", style="yellow"))
+    if updated.stagger_group_id:
+        console.print(Text("Timing is controlled by ongoing stagger; see tk stagger status."))
     return updated
 
 
@@ -1441,7 +1441,7 @@ def _set_session_auto_kick(
     ):
         return None
 
-    updated = replace(account, session_auto_kick=enabled)
+    updated = replace(account, **auto_controls.transition(account, "session", enabled))
     updated_accounts = [
         updated if candidate.label == label else candidate
         for candidate in accounts
@@ -1449,8 +1449,6 @@ def _set_session_auto_kick(
     _save_config_like(config, accounts=updated_accounts)
     state = "enabled" if enabled else "disabled"
     console.print(f'[green]Session auto-kick {state} for "{label}".[/green]')
-    if enabled and not updated.auto_kick:
-        console.print(Text("Saved preference; automation remains inactive because the master switch is off.", style="yellow"))
     if updated.stagger_group_id:
         console.print(Text("Timing is controlled by ongoing stagger; see tk stagger status."))
     return updated
@@ -1485,7 +1483,7 @@ def _set_weekly_auto_kick(
     ):
         return None
 
-    updated = replace(account, weekly_auto_kick=enabled)
+    updated = replace(account, **auto_controls.transition(account, "weekly", enabled))
     updated_accounts = [
         updated if candidate.label == label else candidate
         for candidate in accounts
@@ -1493,8 +1491,6 @@ def _set_weekly_auto_kick(
     _save_config_like(config, accounts=updated_accounts)
     state = "enabled" if enabled else "disabled"
     console.print(f'[green]Weekly auto-kick {state} for "{label}".[/green]')
-    if enabled and not updated.auto_kick:
-        console.print(Text("Saved preference; automation remains inactive because the master switch is off.", style="yellow"))
     if updated.stagger_group_id:
         console.print(Text("Timing is controlled by ongoing stagger; see tk stagger status."))
     return updated
@@ -6335,18 +6331,17 @@ def _render_auto_status_table(accounts: list[AccountConfig]) -> None:
             weekly_state = "❌ disabled (not kickable)"
             session_state = "❌ disabled (not kickable)"
         else:
-            state = "✅ enabled" if account.auto_kick else "❌ disabled"
-            weekly_state = "✅ enabled" if account.weekly_auto_kick else "❌ disabled"
-            session_state = "✅ enabled" if account.session_auto_kick else "❌ disabled"
-            if not account.auto_kick:
-                if account.weekly_auto_kick:
-                    weekly_state = "saved on; master off"
-                if account.session_auto_kick:
-                    session_state = "saved on; master off"
+            state = "✅ enabled" if account.auto_kick else "paused"
+            if account.auto_kick and not (account.weekly_auto_kick or account.session_auto_kick):
+                state = "inactive (no windows selected)"
+            weekly_state = auto_controls.window_state(account.auto_kick, account.weekly_auto_kick)
+            session_state = auto_controls.window_state(account.auto_kick, account.session_auto_kick)
         if stagger.owns(account, CONFIG_DIR):
             state = stagger.ownership(account, CONFIG_DIR)
+            if state != "stagger-managed" and account.weekly_auto_kick:
+                weekly_state = state
             weekly_state += " (group slots)"
-            session_state = "group slots"
+            session_state = "group slots" if state == "stagger-managed" else state
         visible = "visible" if account.visible else "hidden"
         table.add_row(account.label, account.provider, visible, state, weekly_state, session_state)
 
@@ -6372,14 +6367,13 @@ def _render_accounts_table(config: Config, accounts: list[AccountConfig]) -> Non
         elif not account_is_kickable(account):
             auto_kick = "❌ disabled (not kickable)"
         else:
-            auto_kick = "\n".join(
-                f"{name}: {'on' if enabled else 'off'}"
-                for name, enabled in (
-                    ("Master", account.auto_kick),
-                    ("Weekly", account.weekly_auto_kick),
-                    ("Session", account.session_auto_kick),
-                )
+            auto_kick = (
+                f"Master: {'on' if account.auto_kick else 'paused'}\n"
+                f"Weekly: {auto_controls.window_state(account.auto_kick, account.weekly_auto_kick)}\n"
+                f"Session: {auto_controls.window_state(account.auto_kick, account.session_auto_kick)}"
             )
+            if account.auto_kick and not (account.weekly_auto_kick or account.session_auto_kick):
+                auto_kick += "\nNo windows selected"
         if stagger.owns(account, CONFIG_DIR):
             auto_kick = stagger.ownership(account, CONFIG_DIR)
         kick_model = _kick_model_display(account)
@@ -6782,6 +6776,15 @@ def _account_mutation_json(mutator: Callable[[], AccountConfig | None]) -> None:
     _run_mutation_json(mutator, lambda account: {"account": _account_detail_payload(account)})
 
 
+def _window_control_effective(account: AccountConfig, scope: str) -> bool:
+    """Saved control permission, including group pause; not live kick eligibility."""
+    return bool(
+        account.auto_kick and getattr(account, f"{scope}_auto_kick")
+        and account_is_kickable(account)
+        and stagger.ownership(account, CONFIG_DIR) in {"independent", "stagger-managed"}
+    )
+
+
 def _accounts_list_payload(config: Config, accounts: list[AccountConfig]) -> list[dict]:
     return [
         {
@@ -6796,8 +6799,8 @@ def _accounts_list_payload(config: Config, accounts: list[AccountConfig]) -> lis
             "automation_owner": stagger.ownership(account, CONFIG_DIR),
             "weekly_auto_kick": account.weekly_auto_kick,
             "session_auto_kick": account.session_auto_kick,
-            "weekly_effective": account.auto_kick and account.weekly_auto_kick,
-            "session_effective": account.auto_kick and account.session_auto_kick,
+            "weekly_effective": _window_control_effective(account, "weekly"),
+            "session_effective": _window_control_effective(account, "session"),
             "notifications_enabled": account.notifications_enabled,
             "notifications_route": _notification_route_display(account, config.notifications),
             "kick_model": _kick_model_display(account),
@@ -6872,8 +6875,8 @@ def _auto_status_payload(accounts: list[AccountConfig]) -> list[dict]:
             "auto_kick": account.auto_kick,
             "weekly_auto_kick": account.weekly_auto_kick,
             "session_auto_kick": account.session_auto_kick,
-            "weekly_effective": account.auto_kick and account.weekly_auto_kick,
-            "session_effective": account.auto_kick and account.session_auto_kick,
+            "weekly_effective": _window_control_effective(account, "weekly"),
+            "session_effective": _window_control_effective(account, "session"),
         }
         for account in accounts
     ]
@@ -6883,7 +6886,7 @@ def _require_auto_preview_fingerprint(accounts: list[AccountConfig], label: str,
     if expected is None:
         return
     rows = [row for row in _auto_status_payload(accounts) if row["label"] == label]
-    actual = hashlib.sha256(json.dumps(rows[0], sort_keys=True, separators=(",", ":")).encode()).hexdigest() if len(rows) == 1 else None
+    actual = auto_controls.fingerprint(rows[0]) if len(rows) == 1 else None
     if actual != expected:
         emit_app_error("stale_preview", "Account identity or auto-kick settings changed; create a new preview.")
         raise click.exceptions.Exit(1)
@@ -9427,7 +9430,7 @@ def auto_status(as_json: bool):
 @click.option("--consent-version", type=int, hidden=True)
 @click.option("--expected-auto-fingerprint", hidden=True)
 def auto_enable(label: str, as_json: bool, consent_token: str | None, expected_auto_fingerprint: str | None = None, consent_version: int | None = None):
-    """Enable auto-kick for an account."""
+    """Resume saved auto-kick windows without changing their selection."""
     from .consent import AUTO_KICK_CONSENT_VERSION
     if consent_version is not None and consent_version != AUTO_KICK_CONSENT_VERSION:
         raise click.UsageError("Consent disclosure changed; review it again before enabling.")
@@ -9452,7 +9455,7 @@ def auto_enable(label: str, as_json: bool, consent_token: str | None, expected_a
 @click.option("--json-output", "as_json", is_flag=True, help="Output result as JSON")
 @click.option("--expected-auto-fingerprint", hidden=True)
 def auto_disable(label: str, as_json: bool, expected_auto_fingerprint: str | None = None):
-    """Disable auto-kick for an account."""
+    """Pause auto-kick, preserving saved weekly and session choices."""
     config = Config.load()
     accounts = _load_accounts(config)
     _require_auto_preview_fingerprint(accounts, label, expected_auto_fingerprint)

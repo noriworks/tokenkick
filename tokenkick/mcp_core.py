@@ -22,6 +22,7 @@ import subprocess
 import time
 from dataclasses import dataclass
 from typing import Any, Literal
+from . import auto_controls
 from .consent import auto_kick_consent_text
 
 RiskLevel = Literal[
@@ -175,11 +176,13 @@ class TokenKickMCPCore:
         risk = "dangerous_quota_operational" if enabled else "low_risk_mutation"
         result = self._preview_only(
             tool_name="tokenkick_auto_set", argv=argv, risk=risk,
-            summary=f"{'Enable' if enabled else 'Disable'} {scope} auto-kick for {account}.",
+            summary=(f"{'Resume saved windows' if enabled else 'Pause automation'} for {account}." if scope == "all" else f"{'Enable' if enabled else 'Disable'} {scope} auto-kick for {account}."),
             context={"account": target, "scope": scope,
+                     "before": auto_controls.controls(target),
+                     "after": auto_controls.transition(target, scope, enabled),
                      "consent_text": auto_kick_consent_text(target["provider"]) if enabled and target.get("kickable") else None,
                      "requires_accept_risk": enabled,
-                     "note": "all controls master, weekly and session flags; individual scopes preserve the master flag. The daemon must be running to execute automation."},
+                     "note": "all pauses/resumes master and preserves window choices. Enabling a window also enables master; disabling one preserves master and the other window. No selected windows means nothing runs. Stagger group controls still apply. The daemon must be running to execute automation."},
             can_execute=bool(target.get("kickable")) or not enabled,
             no_token_reason="This account does not support native auto-kick.",
         )
@@ -1226,7 +1229,7 @@ def _error_result(
 
 
 def _auto_target_fingerprint(target: dict) -> str:
-    return hashlib.sha256(json.dumps(target, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    return auto_controls.fingerprint(target)
 
 
 def _is_app_envelope(value: Any) -> bool:

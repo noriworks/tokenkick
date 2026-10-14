@@ -91,6 +91,37 @@ final class BundledRuntimeIntegrationTests: XCTestCase {
         XCTAssertFalse(daemon.running)
     }
 
+    func testWeeklyOnlyPauseResumeThroughBundledRuntime() async throws {
+        let runtime = try bundledRuntime()
+        let home = try isolatedHome()
+        let directory = home.appendingPathComponent(".tokenkick")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let config: [String: Any] = ["accounts": [[
+            "label": "fixture", "provider": "codex", "source": "manual",
+            "auto_kick": false, "weekly_auto_kick": false, "session_auto_kick": false,
+        ]]]
+        try JSONSerialization.data(withJSONObject: config).write(to: directory.appendingPathComponent("config.json"))
+        let client = TKClient(
+            runtime: runtime,
+            environment: TKEnvironment.subprocessEnvironment(home: home.path),
+            timeout: 120
+        )
+        for command in [
+            ["auto", "weekly", "enable"], ["auto", "disable"], ["auto", "enable"],
+        ] {
+            let enabled = command.last == "enable"
+            let result = try await client.envelope(TKJSONValue.self, arguments:
+                command + ["fixture", "--json-output"] + (enabled ? ["--accept-risk", "ENABLE"] : []))
+            XCTAssertTrue(result.ok, result.message ?? "Mutation failed")
+            let envelope = try await client.accountsList()
+            let account = try XCTUnwrap(envelope.payload?.accounts.first)
+            XCTAssertEqual(account.autoKick, enabled)
+            XCTAssertTrue(account.weeklyAutoKick)
+            XCTAssertFalse(account.sessionAutoKick)
+            XCTAssertEqual(account.weeklyAutomationState, enabled ? "enabled" : "paused")
+        }
+    }
+
     func testErrorEnvelopeThroughBundledRuntime() async throws {
         let runtime = try bundledRuntime()
         let home = try isolatedHome()

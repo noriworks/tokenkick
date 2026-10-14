@@ -236,6 +236,7 @@ public struct TKAccountsListPayload: Decodable, Equatable, Sendable {
         public let kickable: Bool
         public let monitorOnly: Bool
         public let autoKick: Bool
+        public let automationOwner: String?
         public let weeklyAutoKick: Bool
         public let sessionAutoKick: Bool
         public let notificationsEnabled: Bool
@@ -244,6 +245,25 @@ public struct TKAccountsListPayload: Decodable, Equatable, Sendable {
         public let statusProbeEnabled: Bool
         public let directUsageEnabled: Bool?
 
+        private func windowState(selected: Bool) -> String {
+            guard selected else { return "disabled" }
+            if let owner = automationOwner, owner.contains("paused") || owner.contains("blocked") {
+                return owner
+            }
+            return autoKick ? "enabled" : "paused"
+        }
+
+        public var weeklyAutomationState: String { windowState(selected: weeklyAutoKick) }
+        public var sessionAutomationState: String { windowState(selected: sessionAutoKick) }
+
+        public var automationSummary: String {
+            if let owner = automationOwner, owner != "independent" && owner != "off" {
+                return owner
+            }
+            guard autoKick else { return "auto-kick paused" }
+            return weeklyAutoKick || sessionAutoKick ? "auto-kick on" : "inactive: no windows selected"
+        }
+
         enum CodingKeys: String, CodingKey {
             case label
             case provider
@@ -251,6 +271,7 @@ public struct TKAccountsListPayload: Decodable, Equatable, Sendable {
             case kickable
             case monitorOnly = "monitor_only"
             case autoKick = "auto_kick"
+            case automationOwner = "automation_owner"
             case weeklyAutoKick = "weekly_auto_kick"
             case sessionAutoKick = "session_auto_kick"
             case notificationsEnabled = "notifications_enabled"

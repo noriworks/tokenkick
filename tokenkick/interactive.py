@@ -19,6 +19,7 @@ from typing import Any, Iterator, Sequence
 
 import click
 
+from . import auto_controls
 from .kicker import account_is_kickable
 from .models import AccountConfig, AccountState, AccountStatus, Config, account_key_string
 from .orchestration import effective_orchestration_role, usable_session_minutes_for_account
@@ -1412,16 +1413,17 @@ def _auto_menu(ctx: click.Context) -> None:
         scope = _select(
             "Window scope",
             [
-                MenuChoice("All windows", "all"),
-                MenuChoice("Weekly only", "weekly"),
-                MenuChoice("Session only", "session"),
+                MenuChoice("Resume saved windows" if enabled else "Pause all automation", "all"),
+                MenuChoice("Weekly window", "weekly"),
+                MenuChoice("Session window", "session"),
                 MenuChoice("Back", MENU_EXIT),
             ],
         )
         if scope == MENU_EXIT:
             continue
         operation = "enable" if enabled else "disable"
-        summary = f"{operation} {scope} auto-kick for {len(selected)} account(s)?"
+        action_label = ("resume saved windows" if enabled else "pause automation") if scope == "all" else f"{operation} {scope} auto-kick"
+        summary = f"{action_label} for {len(selected)} account(s)?"
         if not _confirm_selection(summary, _auto_selection_changes(accounts, selected, scope, enabled)):
             continue
         for label in selected:
@@ -1448,8 +1450,8 @@ def _auto_account_menu_choices(accounts: list[AccountConfig]) -> list[MenuChoice
     return [
         MenuChoice(
             f"{_account_choice_label(account)} · Auto-kick {'on' if account.auto_kick else 'off'}"
-            f" · Weekly {'on' if account.weekly_auto_kick else 'off'}"
-            f" · Session {'on' if account.session_auto_kick else 'off'}"
+            f" · Weekly {auto_controls.window_state(account.auto_kick, account.weekly_auto_kick)}"
+            f" · Session {auto_controls.window_state(account.auto_kick, account.session_auto_kick)}"
             + (" [hidden]" if not account.visible else ""),
             account.label,
         )
@@ -1466,17 +1468,22 @@ def _auto_selection_changes(
     for label in selected:
         account = by_label[label]
         switches = []
+        updated = auto_controls.transition(account, scope, enabled)
         for title, field, window in (
             ("Master", "auto_kick", "master"),
             ("Weekly", "weekly_auto_kick", "weekly"),
             ("Session", "session_auto_kick", "session"),
         ):
             before = bool(getattr(account, field))
-            after = enabled if scope == "all" or scope == window else before
+            after = updated[field]
             switches.append(f"{title} {'on' if before else 'off'} → {'on' if after else 'off'}")
         change = f"{_account_choice_label(account)}: " + ", ".join(switches)
-        if scope != "all" and enabled and not account.auto_kick:
-            change += "; master remains off, so automation stays blocked"
+        if not updated["auto_kick"]:
+            change += "; automation paused; window choices saved"
+        elif not (updated["weekly_auto_kick"] or updated["session_auto_kick"]):
+            change += "; no windows selected; nothing will run"
+        if account.stagger_group_id:
+            change += "; stagger group controls still apply (see tk stagger status)"
         changes.append(change)
     return changes
 

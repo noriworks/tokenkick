@@ -15,6 +15,49 @@ final class DecodingTests: XCTestCase {
         return try Data(contentsOf: url)
     }
 
+    func testAutoKickPresentationDistinguishesPausedPreferencesAndEmptySelection() throws {
+        let data = try fixture("accounts_list.json")
+        let root = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let payload = try XCTUnwrap(root["payload"] as? [String: Any])
+        let accounts = try XCTUnwrap(payload["accounts"] as? [[String: Any]])
+        for master in [false, true] {
+            for weekly in [false, true] {
+                for session in [false, true] {
+                    var account = accounts[0]
+                    account["auto_kick"] = master
+                    account["weekly_auto_kick"] = weekly
+                    account["session_auto_kick"] = session
+                    let decoded = try JSONDecoder().decode(
+                        TKAccountsListPayload.Account.self,
+                        from: JSONSerialization.data(withJSONObject: account)
+                    )
+                    XCTAssertEqual(decoded.weeklyAutomationState, weekly ? (master ? "enabled" : "paused") : "disabled")
+                    XCTAssertEqual(decoded.sessionAutomationState, session ? (master ? "enabled" : "paused") : "disabled")
+                    XCTAssertEqual(decoded.automationSummary, !master ? "auto-kick paused" :
+                        (weekly || session ? "auto-kick on" : "inactive: no windows selected"))
+                }
+            }
+        }
+    }
+
+    func testPausedStaggerOverridesEnabledAccountSwitches() throws {
+        let root = try XCTUnwrap(JSONSerialization.jsonObject(with: fixture("accounts_list.json")) as? [String: Any])
+        let payload = try XCTUnwrap(root["payload"] as? [String: Any])
+        let accounts = try XCTUnwrap(payload["accounts"] as? [[String: Any]])
+        var account = accounts[0]
+        account["auto_kick"] = true
+        account["weekly_auto_kick"] = true
+        account["session_auto_kick"] = true
+        account["automation_owner"] = "stagger paused"
+        let decoded = try JSONDecoder().decode(
+            TKAccountsListPayload.Account.self,
+            from: JSONSerialization.data(withJSONObject: account)
+        )
+        XCTAssertEqual(decoded.automationSummary, "stagger paused")
+        XCTAssertEqual(decoded.weeklyAutomationState, "stagger paused")
+        XCTAssertEqual(decoded.sessionAutomationState, "stagger paused")
+    }
+
     func testUsageErrorEnvelope() throws {
         let envelope = try TKJSONDecoding.envelope(TKJSONValue.self, from: fixture("usage_error.json"))
         XCTAssertEqual(envelope.schemaVersion, 1)

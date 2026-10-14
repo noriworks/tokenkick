@@ -241,6 +241,7 @@ effective active set after demotion, force-prune, and force-keep are applied.
 Enable or disable auto-kick:
 
 ```bash
+# Resume saved windows; to select a window use auto weekly/session enable.
 TK_NO_INTERACTIVE=1 tk auto enable "codex (personal)" --json-output
 TK_NO_INTERACTIVE=1 tk auto disable "codex (personal)" --json-output
 TK_NO_INTERACTIVE=1 tk auto session enable "codex (personal)" --json-output

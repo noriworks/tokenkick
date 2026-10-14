@@ -74,7 +74,7 @@ without changing saved account calibration.
 ```
 tk setup                       # Auto-discover and save config.
 tk auto status                 # Show auto-kick settings.
-tk auto enable "<label>"       # Enable master, weekly, and session auto-kick.
+tk auto enable "<label>"       # Resume saved weekly/session choices.
 tk accounts planning           # Show account planning defaults and roles.
 tk accounts set-usable "<label>" 150
                                 # Set measured usable planning minutes.
@@ -281,9 +281,16 @@ tk auto session disable "<label>"
 
 Notes:
 
-- `tk auto enable` enables the master switch plus weekly and session kicks.
-- Use `tk auto weekly disable` for session-only automation.
-- Use `tk auto session disable` for weekly-only automation.
+- `tk auto enable` resumes master without changing saved weekly/session choices.
+- `tk auto disable` pauses master, preserving window choices; selected windows display as paused.
+- `tk auto weekly enable` enables Weekly and master, preserving Session.
+- `tk auto session enable` enables Session and master, preserving Weekly.
+- Disabling a window preserves master and the other window. If neither window is selected,
+  nothing runs; enabling master alone does not select a window.
+- For weekly-only automation: enable Weekly, then disable Session. Reverse for session-only.
+- MCP `scope="all"` controls master (pause/resume), not window selection. Previews show
+  exact before/after flags and expire when the control policy or account settings change.
+- Per-account controls do not resume a paused stagger group; use the stagger controls.
 - The TUI supports all-account and selected-account auto-kick actions under
   `Configure` -> `Auto-kick`.
 
