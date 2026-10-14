@@ -1074,6 +1074,24 @@ anchor. External activity can supersede a pending correction. Terminal and MCP s
 the pending corrections and `last_anchor_correction`; alignment is reported only from both
 current native windows. Ordinary expiration and missed slots do not trigger this path.
 
+A zero-use deadline advancing a known anchor by whole five-hour periods is provisional,
+even if two reads six seconds apart appear fixed. Status shows `verifying_rollover`,
+`provisional_rollovers` and a separate `next_check_at`; it does not claim alignment or
+replace the previous phase. Read-only checks run every minute for five minutes, then
+every two minutes until a fixed 45-minute cutoff. The original cutoff survives restarts
+and repeated rollovers. Afterward normal polling continues without renewing the fast
+check budget. Positive native usage or a distinct non-rollover anchor can establish
+activity; verified sliding idle evidence enters the correction path. No elapsed-time
+threshold authorizes a kick. Unknown evidence, outages or provider delays can still
+prevent exact 150-minute spacing; actual confirmed starts determine safe realignment.
+
+Continuous staggering can consume significant weekly quota, especially for Claude/GPT.
+At one percentage point per kick, 168/5 kicks would use about 34% weekly. Actual metering
+varies; this is an estimate, not a fixed per-request price. Model selection already
+prefers an available Haiku Low before Sonnet Low. Pause the group when continuous
+automation is unnecessary; work-period orchestration and automatic kick budgets are
+not currently part of this controller.
+
 A failed/unconfirmed generation does not automatically retry. After inspecting
 history, `--action recover` performs native read-only reconciliation after a full
 five-hour cooldown and leaves the group paused. Explicit resume is then required.

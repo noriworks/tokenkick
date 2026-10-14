@@ -377,6 +377,15 @@ use the persistent stagger tools, not a work-window plan or an agent scheduler:
    confirmed alignment. Do not claim alignment from planned times or sliding
    reset clocks. Resolve conflicting schedules rather than bypassing them.
 
+`verifying_rollover` means a zero-use periodic reset is provisional, not a new
+confirmed window. `provisional_rollovers` and `next_check_at` describe the daemon's
+bounded read-only verification. Do not force a kick, launch another polling job,
+or treat the displayed candidate as alignment. The daemon retains quota and
+dispatch guards and corrects the phase only after sufficient native evidence.
+Continuous Claude/GPT kicks can consume substantial weekly quota; discuss the
+cost before recommending 24/7 operation. Work-period orchestration and automatic
+kick budgets are proposals, not currently supported stagger controls.
+
 Pause/resume/disable use the same preview/apply tools without labels. Recovery is
 an explicit action after inspecting an uncertain attempt; it waits a full native
 window, only reads provider state, and leaves automation paused. Do not force a

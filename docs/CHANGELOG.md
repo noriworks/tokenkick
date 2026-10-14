@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.23.5
+
+- Treat zero-use Antigravity deadlines that roll forward by whole five-hour periods
+  as provisional. Preserve the previous phase, avoid false alignment reports, and
+  persist bounded read-only checks across restarts. Verified idle evidence enters
+  the existing correction path without bypassing request cooldowns or permissions.
+  Terminal and MCP status distinguish provisional windows from confirmed requests.
+
 ## v1.23.4
 
 - Correct adopted Antigravity anchors when fresh paired native reads prove the window is

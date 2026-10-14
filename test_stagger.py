@@ -1259,3 +1259,274 @@ def test_pending_correction_retains_confirmed_runtime_attempt_cooldown(env):
         result = p.tick()
     gemini = next(at for f, at in p.sent if f == "gemini")
     assert gemini >= attempt_at + stagger.PERIOD
+
+
+class RolloverProvider(Provider):
+    """A native zero-use rollover can stay fixed across a six-second pair."""
+    provisional = None
+
+    def fetch(self, account, config):
+        status = super().fetch(account, config)
+        for window in status.quota_windows:
+            if window['family'] == self.provisional and window['window_kind'] == 'session':
+                window['used_percent'] = 0
+        return antigravity_family_status(status, account.antigravity_family)
+
+    def send(self, *args, **kwargs):
+        self.provisional = None
+        return super().send(*args, **kwargs)
+
+
+def start_provisional_rollover(family='gemini'):
+    activate()
+    peer = next(f for f in stagger.FAMILIES if f != family)
+    p = RolloverProvider(T + 17000, {family: T, peer: T + 9000})
+    p.tick()
+    original = stagger.load()['runtime']
+    p.now = T + 18010
+    p.anchors[family] = T + 18000
+    p.provisional = family
+    return p, peer, original
+
+
+@pytest.mark.parametrize('family', stagger.FAMILIES)
+def test_zero_use_rollover_does_not_adopt_anchor_or_claim_alignment(env, family):
+    p, _, original = start_provisional_rollover(family)
+    result = p.tick()
+    assert result['state'] == 'verifying_rollover'
+    assert not result['operational']
+    assert result['observed_offset_seconds'] is None
+    runtime = stagger.load()['runtime']
+    assert runtime['anchors'] == original['anchors']
+    assert runtime['phase'] == original['phase']
+    assert result['next_check_at'] == p.now + 60
+    assert not p.sent
+
+
+def test_provisional_reads_survive_restart_and_budget_does_not_renew(env):
+    p, _, _ = start_provisional_rollover()
+    result = p.tick()
+    candidate = result['provisional_rollovers']['gemini'].copy()
+    checks = 0
+    while result['next_check_at'] is not None:
+        checks += 1
+        assert checks <= 26
+        p.now = result['next_check_at']
+        result = p.tick()
+        assert result['provisional_rollovers']['gemini'] == candidate
+    assert result['next_check_at'] is None
+    assert result['state'] == 'verifying_rollover'
+    assert not p.sent
+    p.now += 600
+    assert p.tick()['provisional_rollovers']['gemini'] == candidate
+    assert not p.sent
+
+
+@pytest.mark.parametrize('family', stagger.FAMILIES)
+def test_provisional_to_verified_idle_recovers_and_recurs(env, family):
+    p, peer, _ = start_provisional_rollover(family)
+    result = p.tick()
+    p.anchors.pop(family)
+    p.now = result['next_check_at']
+    result = p.tick()
+    assert len(p.sent) == 1
+    assert result['last_anchor_correction']['outcome'] == 'reanchored'
+    assert not result['provisional_rollovers']
+    assert result['next_family'] == peer
+    assert result['next_at'] == p.sent[0][1] + stagger.OFFSET
+    for _ in range(5):
+        p.now = result['next_at']
+        result = p.tick()
+    assert [f for f, _ in p.sent] == [family, peer] * 3
+    for earlier, later in zip(p.sent, p.sent[1:]):
+        assert stagger.OFFSET <= later[1] - earlier[1] <= stagger.OFFSET + 20
+    for earlier, later in zip(p.sent, p.sent[2:]):
+        assert later[1] - earlier[1] >= stagger.PERIOD
+
+
+def test_provisional_correction_keeps_real_dispatch_cooldown(env, monkeypatch):
+    from tokenkick import antigravity_automation
+    p, _, _ = start_provisional_rollover()
+    p.tick()
+    p.anchors.pop('gemini')
+    allowed = p.now + 300
+    monkeypatch.setattr(antigravity_automation, 'attempt_retry_at',
+                        lambda directory, a: allowed if a.antigravity_family == 'gemini' else None)
+    result = p.tick()
+    assert not p.sent
+    assert result['next_at'] == allowed
+    p.now = allowed
+    p.tick()
+    assert p.sent[0][1] >= allowed
+
+
+@pytest.mark.parametrize('activity', ['usage', 'different_anchor'])
+def test_external_activity_supersedes_provisional_rollover(env, activity):
+    p, _, _ = start_provisional_rollover()
+    p.tick()
+    if activity == 'usage':
+        p.provisional = None
+    else:
+        p.now += 100
+        p.anchors['gemini'] = p.now - 40
+    result = p.tick()
+    assert not result['provisional_rollovers']
+    assert stagger.load()['runtime']['anchors']['gemini'] == p.anchors['gemini']
+    assert not p.sent
+
+
+@pytest.mark.parametrize('blocker', ['paused', 'permission', 'unknown_dispatch', 'quota'])
+def test_provisional_correction_does_not_bypass_controls(env, monkeypatch, blocker):
+    from tokenkick import antigravity_automation
+    p, _, _ = start_provisional_rollover()
+    p.tick()
+    p.anchors.pop('gemini')
+    if blocker == 'paused':
+        data = stagger.load()
+        data['group']['mode'] = 'paused'
+        stagger.save(data)
+    elif blocker == 'permission':
+        config = Config.load()
+        config.accounts[0].session_auto_kick = False
+        config.save()
+    elif blocker == 'unknown_dispatch':
+        monkeypatch.setattr(antigravity_automation, 'attempt_retry_at',
+                            lambda *_: (_ for _ in ()).throw(ValueError('unconfirmed')))
+    else:
+        p.weekly['gemini'] = 100
+    p.tick()
+    assert not p.sent
+
+
+def test_unknown_evidence_cannot_clear_provisional_guard(env):
+    p, _, _ = start_provisional_rollover()
+    p.tick()
+    candidate = stagger.load()['runtime']['provisional_rollovers'].copy()
+    fetch = p.fetch
+    def unknown(a, c):
+        result = fetch(a, c)
+        result.stale = True
+        return result
+    result = stagger.tick(fetch=unknown, send=p.send, now=lambda: p.now, sleep=p.sleep)
+    assert result['state'] == 'blocked'
+    assert result['provisional_rollovers'] == candidate
+    assert not p.sent
+
+
+def test_provisional_clock_rollback_cannot_dispatch_or_renew_budget(env):
+    p, _, _ = start_provisional_rollover()
+    result = p.tick()
+    candidate = result['provisional_rollovers'].copy()
+    p.anchors.pop('gemini')
+    p.now -= 600
+    result = p.tick()
+    assert result['provisional_rollovers'] == candidate
+    assert not p.sent
+
+
+@pytest.mark.parametrize('corrupt', ['family', 'nan', 'expiry', 'check', 'empty'])
+def test_provisional_persisted_state_validation(env, corrupt):
+    p, _, _ = start_provisional_rollover()
+    p.tick()
+    data = stagger.load()
+    r = data['runtime']
+    c = r['provisional_rollovers']['gemini']
+    if corrupt == 'family':
+        r['provisional_rollovers']['other'] = c
+    elif corrupt == 'nan':
+        c['anchor'] = 'nan'
+    elif corrupt == 'expiry':
+        c['expires_at'] += 1
+    elif corrupt == 'check':
+        r['rollover_check_at'] = c['expires_at'] + 1
+    else:
+        r['provisional_rollovers'] = {}
+    stagger.save(data)
+    with pytest.raises(stagger.StaggerError):
+        stagger.load()
+
+
+def test_provisional_status_is_visible_through_terminal_and_mcp(env):
+    p, _, _ = start_provisional_rollover()
+    result = p.tick()
+    stream = io.StringIO()
+    stagger.render(Console(file=stream, width=150), result)
+    assert 'zero use; no new request confirmed' in stream.getvalue()
+    assert 'Read-only rollover check' in stream.getvalue()
+    def run(argv, **kwargs):
+        response = CliRunner().invoke(cli.cli, argv)
+        assert response.exit_code == 0, response.output
+        return json.loads(response.output)
+    core = TokenKickMCPCore()
+    env.monkeypatch.setattr(core, '_run', run)
+    assert core.tokenkick_stagger_status()['payload']['provisional_rollovers'] == result['provisional_rollovers']
+
+
+def test_rollover_checks_wake_daemon_before_normal_poll(env, monkeypatch):
+    p, _, _ = start_provisional_rollover()
+    result = p.tick()
+    monkeypatch.setattr(stagger.time, 'time', lambda: p.now)
+    assert stagger.wake_seconds(600, now=p.now) == 60
+    calls = []
+    monkeypatch.setattr(stagger, 'tick', lambda **_: calls.append(p.now) or result)
+    stagger.daemon_step(Config.load())
+    assert not calls
+    p.now = result['next_check_at']
+    stagger.daemon_step(Config.load())
+    assert calls == [p.now]
+
+
+@pytest.mark.parametrize('plateau_seconds', [34 * 60, 42 * 60])
+def test_production_length_plateau_is_never_aligned_and_idle_is_detected_promptly(env, plateau_seconds):
+    p, _, _ = start_provisional_rollover()
+    result = p.tick()
+    began = p.now
+    evidence_available = began + plateau_seconds
+    checks = 0
+    while p.now < evidence_available:
+        assert result['state'] == 'verifying_rollover'
+        assert not p.sent
+        next_check = result['next_check_at']
+        assert next_check is not None
+        p.now = next_check
+        if p.now >= evidence_available:
+            p.anchors.pop('gemini')
+        result = p.tick()
+        checks += 1
+        assert checks <= 26
+    assert len(p.sent) == 1
+    assert p.sent[0][1] - evidence_available <= 126
+    assert result['last_anchor_correction']['outcome'] == 'reanchored'
+
+
+def test_both_zero_use_rollovers_never_dispatch_together(env):
+    activate()
+    p = RolloverProvider(T + 17000, {'gemini': T, 'claude_gpt': T})
+    p.tick()
+    p.now = T + 18010
+    p.anchors = {'gemini': T + 18000, 'claude_gpt': T + 18000}
+    fetch = p.fetch
+    def zero(a, c):
+        s = fetch(a, c)
+        for w in s.quota_windows:
+            if w['window_kind'] == 'session':
+                w['used_percent'] = 0
+        return antigravity_family_status(s, a.antigravity_family)
+    result = stagger.tick(fetch=zero, send=p.send, now=lambda: p.now, sleep=p.sleep)
+    assert set(result['provisional_rollovers']) == set(stagger.FAMILIES)
+    p.anchors = {}
+    result = p.tick()
+    assert len(p.sent) == 1
+    assert result['next_at'] >= p.sent[0][1] + stagger.OFFSET
+
+
+def test_changed_periodic_candidate_does_not_extend_read_budget(env):
+    p, _, _ = start_provisional_rollover()
+    result = p.tick()
+    expires = result['provisional_rollovers']['gemini']['expires_at']
+    p.now += stagger.PERIOD
+    p.anchors['gemini'] += stagger.PERIOD
+    result = p.tick()
+    assert result['provisional_rollovers']['gemini']['expires_at'] == expires
+    assert result['next_check_at'] is None
+    assert not p.sent

@@ -28,6 +28,8 @@ OFFSET = 9000
 TOLERANCE = 120
 RECOVERY_GRACE = 300
 EVIDENCE_RETRY_DELAYS = (30, 60, 120)
+ROLLOVER_CHECK_INTERVAL = 60
+ROLLOVER_CHECK_BUDGET = 2700
 
 
 class StaggerError(ValueError):
@@ -84,6 +86,17 @@ def load(directory: Path | None = None):
             _validate(len(set(group["members"].values())) == 2)
             _validate(isinstance(group["identity"], str) and group["identity"])
         runtime = data["runtime"]
+        rollovers = runtime.get("provisional_rollovers", {})
+        _validate(isinstance(rollovers, dict))
+        for family, candidate in rollovers.items():
+            _validate(family in FAMILIES and isinstance(candidate, dict))
+            _validate(all(_number(candidate[k]) for k in ("anchor", "detected_at", "expires_at")))
+            _validate(candidate["anchor"] <= candidate["detected_at"] < candidate["anchor"] + PERIOD)
+            _validate(candidate["expires_at"] == candidate["detected_at"] + ROLLOVER_CHECK_BUDGET)
+        _validate(runtime.get("rollover_check_at") is None or (
+            _number(runtime["rollover_check_at"]) and bool(rollovers)
+            and runtime["rollover_check_at"] <= min(c["expires_at"] for c in rollovers.values())))
+        _validate(runtime.get("state") != "verifying_rollover" or bool(rollovers))
         for key in ("phase", "evaluated_at", "next_at"):
             _validate(runtime.get(key) is None or _number(runtime[key]))
         _validate(isinstance(runtime.get("anchors", {}), dict))
@@ -457,6 +470,56 @@ def decide(runtime, observations, now):
             "reason": blockers or None, "evaluated_at": now}
 
 
+def _verify_rollovers(runtime, observations, statuses, now):
+    """Do not turn a provider's zero-use periodic rollover into an activity anchor.
+
+    Stable paired reads alone are insufficient for this known ambiguous case.
+    Waiting never authorizes a request; only the existing native idle proof can.
+    """
+    pending = runtime.setdefault("provisional_rollovers", {})
+    for family, info in observations.items():
+        anchor = info["anchor"]
+        prior = runtime.get("anchors", {}).get(family)
+        candidate = pending.get(family)
+        used = native_window(statuses[family], family)["used_percent"]
+        if candidate and now < candidate["detected_at"]:
+            continue  # Clock rollback must not clear or renew the evidence guard.
+        if candidate and anchor is None:
+            # observation() admits None only with verified native sliding proof.
+            if candidate["anchor"] <= now < candidate["anchor"] + PERIOD:
+                runtime.setdefault("anchor_corrections", {})[family] = {
+                    "anchor": candidate["anchor"], "detected_at": now,
+                }
+                runtime.get("anchors", {}).pop(family, None)
+            del pending[family]
+            continue
+        periodic = (anchor is not None and prior is not None
+                    and anchor - prior >= PERIOD - 1
+                    and abs((anchor - prior + PERIOD / 2) % PERIOD - PERIOD / 2) <= 1)
+        if candidate and (used > 0 or anchor is not None
+                          and abs(anchor - candidate["anchor"]) > 1 and not periodic):
+            del pending[family]  # Independent activity supersedes the idle hypothesis.
+            candidate = None
+        if used == 0 and periodic and anchor <= now < anchor + PERIOD:
+            if candidate is None:
+                pending[family] = {"anchor": anchor, "detected_at": now,
+                                   "expires_at": now + ROLLOVER_CHECK_BUDGET}
+            # Repeated/changed periodic rollovers never renew the fast-read budget.
+    if not pending:
+        runtime.pop("rollover_check_at", None)
+        return False
+    deadline = min(c["expires_at"] for c in pending.values())
+    first_detection = min(c["detected_at"] for c in pending.values())
+    interval = ROLLOVER_CHECK_INTERVAL if now < first_detection + 300 else 2 * ROLLOVER_CHECK_INTERVAL
+    next_check = min(max(now, first_detection) + interval, deadline) if now < deadline else None
+    runtime.update(state="verifying_rollover", next_at=None, next_family=None,
+                   observed_offset_seconds=None,
+                   rollover_check_at=next_check,
+                   evaluated_at=now,
+                   reason="Zero-use rollover is provisional; waiting for native activity or verified idle evidence.")
+    return True
+
+
 def status(*, directory=None, daemon_running=None):
     try:
         data = load(directory)
@@ -497,13 +560,15 @@ def status(*, directory=None, daemon_running=None):
             "last_recovery": runtime.get("last_recovery"),
             "anchor_corrections": runtime.get("anchor_corrections", {}),
             "last_anchor_correction": runtime.get("last_anchor_correction"),
+            "provisional_rollovers": runtime.get("provisional_rollovers", {}),
             "next_check_at": (runtime.get("verification_retry", {}).get("retry_at")
-                              if state == "rechecking" else None),
+                              if state == "rechecking" else runtime.get("rollover_check_at")
+                              if state == "verifying_rollover" else None),
             "observation_age_seconds": age,
             "evidence_fresh": age is not None and -30 <= age <= max_age,
             "operational": mode == "enabled" and daemon_running is True
             and age is not None and -30 <= age <= max_age
-            and state not in {"blocked", "paused", "awaiting_evidence", "rechecking"}}
+            and state not in {"blocked", "paused", "awaiting_evidence", "rechecking", "verifying_rollover"}}
 
 
 def send_guard(account, *, automatic, controller=False, directory=None, status=None):
@@ -604,6 +669,9 @@ def tick(*, directory=None, fetch=None, send=None, now=None, sleep=None):
             observations = _observations(accounts, statuses, clock())
             for family, account in accounts.items():
                 observations[family]["not_before"] = retry_limits[family]
+            if _verify_rollovers(runtime, observations, statuses, clock()):
+                save(data, directory)
+                return status(directory=directory)
             runtime = decide(runtime, observations, clock())
             data["runtime"] = runtime
             save(data, directory)
@@ -656,7 +724,8 @@ def tick(*, directory=None, fetch=None, send=None, now=None, sleep=None):
                 if recovering:
                     runtime["last_recovery"].update(outcome="recovered", reason="anchor_confirmed",
                                                     finished_at=clock(), anchor=observations[f]["anchor"])
-                runtime = decide(runtime, observations, clock())
+                if not _verify_rollovers(runtime, observations, verified, clock()):
+                    runtime = decide(runtime, observations, clock())
             data["runtime"] = runtime
         except Exception as exc:
             # Once a request has been claimed, no evidence retry may turn into
@@ -733,6 +802,7 @@ def daemon_step(config, *, directory=None):
     cli._daemon_log("stagger", state=result["state"], next_at=result.get("next_at"), reason=result.get("reason"),
                     next_check_at=result.get("next_check_at"), verification_retry=result.get("verification_retry"),
                     last_recovery=result.get("last_recovery"), anchor_corrections=result.get("anchor_corrections"),
+                    provisional_rollovers=result.get("provisional_rollovers"),
                     last_anchor_correction=result.get("last_anchor_correction"))
     return result
 
@@ -766,6 +836,14 @@ def render(console, payload):
     correction = payload.get("last_anchor_correction")
     if correction:
         lines.append(f"Last anchor correction: {correction['family']} · {correction['outcome']}")
+    for family in payload.get("provisional_rollovers", {}):
+        lines.append(f"Verifying {family} rollover: zero use; no new request confirmed.")
+    if payload.get("provisional_rollovers"):
+        if payload.get("next_check_at"):
+            when = datetime.fromtimestamp(payload["next_check_at"], timezone.utc).astimezone().strftime("%H:%M:%S %Z")
+            lines.append(f"Read-only rollover check: {when}")
+        else:
+            lines.append("Fast rollover checks exhausted; continuing normal polling.")
     if payload.get("reason"):
         lines.append("Waiting: " + str(payload["reason"]))
     if payload.get("evaluated_at") and payload.get("evidence_fresh") is False:
