@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v1.23.4
 
 - Correct adopted Antigravity anchors when fresh paired native reads prove the window is
   unused again. Persist a safe new start, retain request cooldowns and peer spacing, and
