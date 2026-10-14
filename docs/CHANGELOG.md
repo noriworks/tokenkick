@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v1.23.3
 
 - Recover scheduled Antigravity stagger slots after inconclusive native reset
   observations with up to three bounded read retries and a five-minute deadline.
