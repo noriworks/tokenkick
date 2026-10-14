@@ -88,6 +88,17 @@ def load(directory: Path | None = None):
             _validate(runtime.get(key) is None or _number(runtime[key]))
         _validate(isinstance(runtime.get("anchors", {}), dict))
         _validate(all(k in FAMILIES and _number(v) for k, v in runtime.get("anchors", {}).items()))
+        corrections = runtime.get("anchor_corrections", {})
+        _validate(isinstance(corrections, dict))
+        for family, correction in corrections.items():
+            _validate(family in FAMILIES and isinstance(correction, dict))
+            _validate(_number(correction["anchor"]) and _number(correction["detected_at"]))
+            _validate(correction["anchor"] <= correction["detected_at"] < correction["anchor"] + PERIOD)
+        last_correction = runtime.get("last_anchor_correction")
+        if last_correction is not None:
+            _validate(isinstance(last_correction, dict) and last_correction["family"] in FAMILIES)
+            _validate(last_correction["outcome"] in {"reanchored", "native_window_observed", "not_sent"})
+            _validate(all(_number(last_correction[k]) for k in ("previous_anchor", "finished_at")))
         _validate(runtime.get("next_family") is None or runtime["next_family"] in FAMILIES)
         _validate(runtime.get("observed_offset_seconds") is None or _number(runtime["observed_offset_seconds"]))
         retry = runtime.get("verification_retry")
@@ -286,7 +297,8 @@ def observation(account, status, now):
     observed = observed_epoch(status)
     window = native_window(status, family)
     weekly = native_window(status, family, "weekly")
-    if (status.label != account.label or observed is None or not -30 <= now - observed <= 120
+    if (status.label != account.label or models.is_synthetic_status(status)
+            or observed is None or not -30 <= now - observed <= 120
             or window is None or weekly is None):
         raise StaggerError("Fresh complete native quota evidence required.")
     if verified_unanchored(status, family):
@@ -361,7 +373,21 @@ def decide(runtime, observations, now):
     """Pure recurring policy. Never replay a missed slot or consume an active one."""
     runtime = dict(runtime)
     anchors = dict(runtime.get("anchors", {}))
+    corrections = dict(runtime.get("anchor_corrections", {}))
     active = {f: v["anchor"] for f, v in observations.items() if v["anchor"] is not None}
+    # None reaches this function only after paired native reads prove an unused
+    # sliding horizon. Ordinary expiration and clock rollback are not corrections.
+    for f, anchor in list(anchors.items()):
+        if f not in active and anchor <= now < anchor + PERIOD:
+            corrections[f] = {"anchor": anchor, "detected_at": now}
+            del anchors[f]
+    restored = set(active) & set(corrections)
+    for f in sorted(restored):
+        correction = corrections.pop(f)
+        runtime["last_anchor_correction"] = {
+            "family": f, "previous_anchor": correction["anchor"],
+            "finished_at": now, "outcome": "native_window_observed",
+        }
     anchors.update(active)
     phase = runtime.get("phase")
     if phase is None and active:
@@ -371,9 +397,9 @@ def decide(runtime, observations, now):
     offset = ((active["claude_gpt"] - active["gemini"]) % PERIOD) if len(active) == 2 else None
     aligned = offset is not None and abs(offset - OFFSET) <= TOLERANCE
     # An external request that changed a window becomes the surviving reference.
-    changed = [f for f in active if f in runtime.get("anchors", {})
+    changed = [f for f in active if f in restored or (f in runtime.get("anchors", {})
                and abs(active[f] - runtime["anchors"][f]) > TOLERANCE
-               and abs((active[f] - phase - (OFFSET if f == "claude_gpt" else 0) + PERIOD / 2) % PERIOD - PERIOD / 2) > TOLERANCE]
+               and abs((active[f] - phase - (OFFSET if f == "claude_gpt" else 0) + PERIOD / 2) % PERIOD - PERIOD / 2) > TOLERANCE)]
     if changed:
         f = changed[-1]
         phase = active[f] - (OFFSET if f == "claude_gpt" else 0)
@@ -408,6 +434,15 @@ def decide(runtime, observations, now):
         if attempt and attempt["family"] == f:
             minimum = max(minimum, attempt["at"] + PERIOD)
         slot = normal_slot
+        if f in corrections:
+            # This is a new phase start, not replay of a missed scheduled slot.
+            peer = next(other for other in FAMILIES if other != f)
+            minimum = max(minimum, corrections[f]["detected_at"],
+                          anchors.get(peer, now - OFFSET) + OFFSET,
+                          (observations[peer].get("not_before") or 0) - PERIOD + OFFSET)
+            if attempt and attempt["family"] == peer:
+                minimum = max(minimum, attempt["at"] + OFFSET)
+            slot = now
         if retry and f == retry["family"]:
             if minimum > retry["expires_at"]:
                 _finish_verification_retry(runtime, "skipped", "cooldown_exceeds_grace", now)
@@ -416,8 +451,8 @@ def decide(runtime, observations, now):
                 slot = retry["slot_at"]
         candidates.append((max(now, slot, minimum), f))
     next_at, next_family = min(candidates) if candidates else (None, None)
-    state = "degraded" if blockers else "aligned" if aligned else "realigning" if len(active) == 2 else "scheduled"
-    return {**runtime, "anchors": anchors, "phase": phase, "state": state,
+    state = "degraded" if blockers else "aligned" if aligned else "realigning" if len(active) == 2 or corrections else "scheduled"
+    return {**runtime, "anchors": anchors, "anchor_corrections": corrections, "phase": phase, "state": state,
             "observed_offset_seconds": offset, "next_at": next_at, "next_family": next_family,
             "reason": blockers or None, "evaluated_at": now}
 
@@ -460,6 +495,8 @@ def status(*, directory=None, daemon_running=None):
                 "reason", "next_at", "next_family", "observed_offset_seconds", "evaluated_at")}, "reason": reason,
             "verification_retry": runtime.get("verification_retry"),
             "last_recovery": runtime.get("last_recovery"),
+            "anchor_corrections": runtime.get("anchor_corrections", {}),
+            "last_anchor_correction": runtime.get("last_anchor_correction"),
             "next_check_at": (runtime.get("verification_retry", {}).get("retry_at")
                               if state == "rechecking" else None),
             "observation_age_seconds": age,
@@ -579,6 +616,7 @@ def tick(*, directory=None, fetch=None, send=None, now=None, sleep=None):
                     _finish_verification_retry(runtime, "claimed", "evidence_verified", clock())
                 else:
                     recovering = None
+                correcting = runtime.get("anchor_corrections", {}).get(f)
                 runtime.update(state="attempting", attempt={"family": f, "at": clock(), "outcome": "attempting"})
                 save(data, directory)
                 event = send(accounts[f], config, statuses[f], automatic=True,
@@ -586,6 +624,12 @@ def tick(*, directory=None, fetch=None, send=None, now=None, sleep=None):
                              send_notification=False, daemon_log=True)
                 if event.dispatch_state == "not_sent":
                     runtime.pop("attempt", None)
+                    if correcting:
+                        runtime["anchor_corrections"].pop(f)
+                        runtime["last_anchor_correction"] = {
+                            "family": f, "previous_anchor": correcting["anchor"],
+                            "finished_at": clock(), "outcome": "not_sent",
+                        }
                     if recovering:
                         runtime["last_recovery"].update(outcome="skipped", reason="request_not_sent", finished_at=clock())
                     raise StaggerError("Request not sent; will recheck eligibility on the next poll: " + (event.error or "unavailable"))
@@ -601,8 +645,14 @@ def tick(*, directory=None, fetch=None, send=None, now=None, sleep=None):
                     runtime["attempt"]["outcome"] = "unconfirmed"
                     raise StaggerError("Accepted request has no confirmed session anchor.")
                 # Bootstrap and late recovery use the actual confirmed anchor.
-                if not runtime.get("anchors") or recovering:
+                if not runtime.get("anchors") or recovering or correcting:
                     runtime["phase"] = observations[f]["anchor"] - (OFFSET if f == "claude_gpt" else 0)
+                if correcting:
+                    runtime["anchor_corrections"].pop(f)
+                    runtime["last_anchor_correction"] = {
+                        "family": f, "previous_anchor": correcting["anchor"],
+                        "finished_at": clock(), "outcome": "reanchored",
+                    }
                 if recovering:
                     runtime["last_recovery"].update(outcome="recovered", reason="anchor_confirmed",
                                                     finished_at=clock(), anchor=observations[f]["anchor"])
@@ -682,7 +732,8 @@ def daemon_step(config, *, directory=None):
                 save(data, directory)
     cli._daemon_log("stagger", state=result["state"], next_at=result.get("next_at"), reason=result.get("reason"),
                     next_check_at=result.get("next_check_at"), verification_retry=result.get("verification_retry"),
-                    last_recovery=result.get("last_recovery"))
+                    last_recovery=result.get("last_recovery"), anchor_corrections=result.get("anchor_corrections"),
+                    last_anchor_correction=result.get("last_anchor_correction"))
     return result
 
 
@@ -710,6 +761,11 @@ def render(console, payload):
     last = payload.get("last_recovery")
     if last:
         lines.append(f"Last slot recovery: {last['family']} · {last['outcome']} · {last['reason']}")
+    for family in payload.get("anchor_corrections", {}):
+        lines.append(f"Correcting {family}: previous anchor disproven; waiting for a safe new start.")
+    correction = payload.get("last_anchor_correction")
+    if correction:
+        lines.append(f"Last anchor correction: {correction['family']} · {correction['outcome']}")
     if payload.get("reason"):
         lines.append("Waiting: " + str(payload["reason"]))
     if payload.get("evaluated_at") and payload.get("evidence_fresh") is False:

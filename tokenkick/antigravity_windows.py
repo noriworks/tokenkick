@@ -4,7 +4,7 @@ from dataclasses import replace
 from datetime import datetime
 import math
 
-from .models import AccountState, AccountStatus
+from .models import AccountState, AccountStatus, is_synthetic_status
 
 OBSERVATION_DELAY_SECONDS = 6
 MIN_OBSERVATION_SECONDS = 5
@@ -24,6 +24,7 @@ def observed_epoch(status: AccountStatus) -> float | None:
 def native_window(status: AccountStatus, family: str, kind: str = "session") -> dict | None:
     if (
         status.source_detail != "antigravity-cli"
+        or is_synthetic_status(status)
         or status.stale
         or status.error
         or status.state == AccountState.UNKNOWN

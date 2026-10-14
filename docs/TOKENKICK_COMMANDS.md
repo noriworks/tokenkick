@@ -1064,6 +1064,16 @@ and `verification_retry` details (family, original slot, cutoff and retry count)
 The terminal displays the same information. These read deadlines do not authorize
 a generation request and do not change the normal healthy polling interval.
 
+If a previously accepted anchor should still be active but fresh paired native reads prove
+an unused sliding window, the daemon retracts that observed anchor and persists an
+`anchor_corrections` entry. It schedules a new start respecting actual request cooldowns,
+quota and permissions, and at least 150 minutes after the other family's surviving
+anchor/request. It never treats unknown or synthetic readings as proof of an unused window.
+Once the corrective request and its anchor are confirmed, ongoing slots use that actual
+anchor. External activity can supersede a pending correction. Terminal and MCP status show
+the pending corrections and `last_anchor_correction`; alignment is reported only from both
+current native windows. Ordinary expiration and missed slots do not trigger this path.
+
 A failed/unconfirmed generation does not automatically retry. After inspecting
 history, `--action recover` performs native read-only reconciliation after a full
 five-hour cooldown and leaves the group paused. Explicit resume is then required.

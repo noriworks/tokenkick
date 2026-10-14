@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Correct adopted Antigravity anchors when fresh paired native reads prove the window is
+  unused again. Persist a safe new start, retain request cooldowns and peer spacing, and
+  continue recurring staggering from the confirmed replacement anchor. Terminal/MCP status
+  explains pending and completed corrections; synthetic observations cannot authorize them.
+
 - Confirm Codex weekly-only kicks from a matching seven-day native reset deadline that remains
   fixed across fresh observations. Reconcile pending history without another request, distinguish
   weekly evidence from session confirmation, and reject stale, moving or ambiguous reset clocks.

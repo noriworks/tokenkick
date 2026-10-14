@@ -1026,3 +1026,236 @@ def test_safe_refusal_recovers_on_next_poll_without_explicit_recovery(env):
     provider.now = result["next_at"]
     provider.tick()
     assert len(provider.sent) == 1
+
+
+def adopted_then_unused(family="gemini"):
+    """A fixed-looking rollover is adopted without a TokenKick generation."""
+    activate()
+    peer = next(f for f in stagger.FAMILIES if f != family)
+    p = UncertainClockProvider(T + 18020, {family: T + 18000, peer: T + 9052})
+    assert p.tick()["state"] == "aligned"
+    assert not p.sent
+    p.anchors.pop(family)
+    p.now = T + 20700
+    return p, peer
+
+
+@pytest.mark.parametrize("family", stagger.FAMILIES)
+def test_disproven_adopted_anchor_restarts_recurring_phase(env, family):
+    p, peer = adopted_then_unused(family)
+    result = p.tick()
+    assert [f for f, _ in p.sent] == [family]
+    assert result["last_anchor_correction"]["outcome"] == "reanchored"
+    assert result["last_anchor_correction"]["previous_anchor"] == T + 18000
+    assert result["anchor_corrections"] == {}
+    anchor = p.sent[0][1]
+    assert result["next_family"] == peer
+    assert result["next_at"] == anchor + stagger.OFFSET
+    assert result["state"] == "realigning"  # Current peer still has its old window.
+    for _ in range(5):
+        p.now = result["next_at"]
+        result = p.tick()  # Reloads the persisted state every time.
+    assert [f for f, _ in p.sent] == [family, peer, family, peer, family, peer]
+    for previous, current in zip(p.sent, p.sent[1:]):
+        assert stagger.OFFSET <= current[1] - previous[1] <= stagger.OFFSET + 20
+    assert result["state"] == "aligned"
+
+
+def test_unknown_then_unanchored_corrects_without_forcing_unknown_clock(env):
+    p, _ = adopted_then_unused()
+    p.uncertain = True
+    assert p.tick()["state"] == "blocked"
+    assert not p.sent
+    assert stagger.load()["runtime"]["anchors"]["gemini"] == T + 18000
+    p.uncertain = False
+    p.now += 600
+    assert p.tick()["last_anchor_correction"]["outcome"] == "reanchored"
+    assert len(p.sent) == 1
+
+
+def test_correction_waits_for_peer_spacing_and_survives_restart(env):
+    p, peer = adopted_then_unused()
+    p.anchors[peer] = p.now - 60  # Recent external peer activity must be preserved.
+    result = p.tick()
+    assert not p.sent
+    assert result["next_family"] == "gemini"
+    assert result["next_at"] == p.anchors[peer] + stagger.OFFSET
+    assert "gemini" not in stagger.load()["runtime"]["anchors"]
+    assert "gemini" in result["anchor_corrections"]
+    result = p.tick()
+    assert not p.sent
+    p.now = result["next_at"]
+    assert p.tick()["last_anchor_correction"]["outcome"] == "reanchored"
+    assert [f for f, _ in p.sent] == ["gemini"]
+
+
+def test_correction_retains_durable_request_cooldown(env, monkeypatch):
+    from tokenkick import antigravity_automation
+    p, _ = adopted_then_unused()
+    allowed = p.now + 1200
+    monkeypatch.setattr(antigravity_automation, "attempt_retry_at",
+                        lambda directory, account: allowed if account.antigravity_family == "gemini" else None)
+    result = p.tick()
+    assert not p.sent
+    assert result["next_at"] == allowed
+    p.now = allowed
+    p.tick()
+    assert len(p.sent) == 1 and p.sent[0][1] >= allowed
+
+
+@pytest.mark.parametrize("blocker", ["quota", "reserve", "uncertain_guard", "unconfirmed", "pause"])
+def test_anchor_correction_does_not_bypass_safety_controls(env, monkeypatch, blocker):
+    from tokenkick import antigravity_automation
+    p, _ = adopted_then_unused()
+    if blocker == "quota":
+        p.weekly["gemini"] = 100
+    elif blocker == "reserve":
+        config = Config.load()
+        config.accounts[0].weekly_reserve_threshold_percent = 5
+        config.save()
+    elif blocker == "uncertain_guard":
+        def guard(*args):
+            raise ValueError("Previous request unconfirmed")
+        monkeypatch.setattr(antigravity_automation, "attempt_retry_at", guard)
+    elif blocker == "unconfirmed":
+        data = stagger.load()
+        data["runtime"]["attempt"] = {"family": "gemini", "at": p.now - 1, "outcome": "unconfirmed"}
+        stagger.save(data)
+    else:
+        plan = stagger.preview("pause")
+        stagger.apply("pause", expected=plan["fingerprint"])
+    result = p.tick()
+    assert not p.sent
+    assert result["state"] in {"degraded", "blocked", "paused"}
+
+
+def test_both_disproven_anchors_never_send_simultaneously(env):
+    p, peer = adopted_then_unused()
+    # The peer's saved anchor should still be active too, but now both are idle.
+    p.anchors.pop(peer)
+    result = p.tick()
+    assert len(p.sent) == 1
+    assert result["next_at"] == p.sent[0][1] + stagger.OFFSET
+    assert result["anchor_corrections"]
+    p.now = result["next_at"]
+    result = p.tick()
+    assert len(p.sent) == 2 and p.sent[0][0] != p.sent[1][0]
+    assert result["anchor_corrections"] == {}
+    assert result["state"] == "aligned"
+
+
+@pytest.mark.parametrize("failure", ["failed", "post_read", "not_sent"])
+def test_corrective_dispatch_failure_never_replays_immediately(env, failure):
+    p, _ = adopted_then_unused()
+    original = p.send
+    fetch = p.fetch
+    def read(*args):
+        if failure == "post_read" and p.sent:
+            raise ValueError("Native read unavailable")
+        return fetch(*args)
+    p.fetch = read
+    def send(*args, **kwargs):
+        if failure == "not_sent":
+            return SimpleNamespace(dispatch_state="not_sent", error="Preflight refused")
+        p.fail = failure == "failed"
+        event = original(*args, **kwargs)
+        return event
+    p.send = send
+    assert p.tick()["state"] == "blocked"
+    count = len(p.sent)
+    p.now += 600
+    result = p.tick()
+    assert len(p.sent) == count
+    if failure == "not_sent":
+        assert result["last_anchor_correction"]["outcome"] == "not_sent"
+        assert result["next_at"] > p.now
+    else:
+        assert result["state"] == "blocked"
+
+
+def test_external_window_supersedes_pending_correction(env):
+    p, peer = adopted_then_unused()
+    p.anchors[peer] = p.now - 30
+    assert p.tick()["anchor_corrections"]
+    p.now += 100
+    p.anchors["gemini"] = p.now
+    result = p.tick()
+    assert not p.sent
+    assert result["anchor_corrections"] == {}
+    assert result["last_anchor_correction"]["outcome"] == "native_window_observed"
+    assert stagger.load()["runtime"]["phase"] == p.anchors["gemini"]
+    assert result["next_at"] >= p.anchors[result["next_family"]] + stagger.PERIOD
+
+
+@pytest.mark.parametrize("value", [[], {"wrong": {"anchor": T, "detected_at": T+1}},
+    {"gemini": {"anchor": float("nan"), "detected_at": T+1}},
+    {"gemini": {"anchor": T, "detected_at": T-1}},
+    {"gemini": {"anchor": T, "detected_at": T+stagger.PERIOD}}, {"gemini": {}}])
+def test_malformed_anchor_correction_fails_closed(env, value):
+    activate()
+    data = stagger.load()
+    data["runtime"]["anchor_corrections"] = value
+    stagger.path().write_text(json.dumps(data))
+    assert stagger.status()["state"] == "blocked"
+
+
+def test_pending_anchor_correction_is_visible_in_terminal_and_mcp_status(env):
+    p, peer = adopted_then_unused()
+    p.anchors[peer] = p.now - 30
+    result = p.tick()
+    out = io.StringIO()
+    stagger.render(Console(file=out, width=160), result)
+    assert "previous anchor disproven" in out.getvalue()
+    assert result["state"] == "realigning"
+    def run(argv, **kwargs):
+        response = CliRunner().invoke(cli.cli, argv)
+        assert response.exit_code == 0, response.output
+        return json.loads(response.output)
+    core = TokenKickMCPCore()
+    env.monkeypatch.setattr(core, "_run", run)
+    assert core.tokenkick_stagger_status()["payload"]["anchor_corrections"] == result["anchor_corrections"]
+
+
+@pytest.mark.parametrize("fault", ["stale", "synthetic", "error"])
+def test_bad_native_data_cannot_retract_an_adopted_anchor(env, fault):
+    p, _ = adopted_then_unused()
+    fetch = p.fetch
+    def read(*args):
+        status = fetch(*args)
+        if fault == "synthetic":
+            return models.mark_synthetic_status(status, "fixture")
+        return replace(status, **({"stale": True} if fault == "stale" else {"error": "unavailable"}))
+    p.fetch = read
+    assert p.tick()["state"] == "blocked"
+    assert not p.sent
+    assert stagger.load()["runtime"]["anchors"]["gemini"] == T + 18000
+    assert not stagger.load()["runtime"]["anchor_corrections"]
+
+
+def test_pending_correction_never_dispatches_before_clock_rollback(env):
+    p, peer = adopted_then_unused()
+    p.anchors[peer] = p.now - 30
+    result = p.tick()
+    detected = result["anchor_corrections"]["gemini"]["detected_at"]
+    p.now = detected - 100
+    result = p.tick()
+    assert not p.sent
+    assert result["next_at"] >= detected
+
+
+def test_pending_correction_retains_confirmed_runtime_attempt_cooldown(env):
+    p, _ = adopted_then_unused()
+    data = stagger.load()
+    attempt_at = T + 18000
+    data["runtime"]["attempt"] = {"family": "gemini", "at": attempt_at, "outcome": "confirmed"}
+    stagger.save(data)
+    result = p.tick()
+    assert not p.sent
+    assert "gemini" in result["anchor_corrections"]
+    assert result["next_at"] >= min(attempt_at + stagger.PERIOD, p.anchors["claude_gpt"] + stagger.PERIOD)
+    # When the peer goes first, its new anchor imposes another spacing constraint.
+    for _ in range(3):
+        p.now = result["next_at"]
+        result = p.tick()
+    gemini = next(at for f, at in p.sent if f == "gemini")
+    assert gemini >= attempt_at + stagger.PERIOD
