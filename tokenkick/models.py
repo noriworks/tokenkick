@@ -668,6 +668,13 @@ class KickEvent:
     codex_provider_session_resets_at: Optional[float] = None
     codex_provider_session_used_percent: Optional[float] = None
     codex_provider_stale: Optional[bool] = None
+    codex_account_fingerprint: Optional[str] = None
+    codex_pre_weekly_resets_at: Optional[float] = None
+    codex_weekly_evidence_reset_at: Optional[float] = None
+    codex_weekly_evidence_observed_at: Optional[str] = None
+    codex_provider_weekly_resets_at: Optional[float] = None
+    codex_weekly_inferred_anchor_at: Optional[float] = None
+    codex_weekly_anchor_match_delta_seconds: Optional[float] = None
     evidence_response: Optional[bool] = None
     evidence_tokens: Optional[bool] = None
     evidence_provider_moved: Optional[bool] = None

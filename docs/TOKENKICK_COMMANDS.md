@@ -1073,3 +1073,21 @@ MCP agents use `tokenkick_stagger_status`, `tokenkick_stagger_preview` and
 `tokenkick_stagger_apply`. Enable/resume requires `confirm`, `quota_ack` and
 `accept_risk` with the one-use preview token. The CLI, menu and MCP all change the
 same persisted policy. Do not create a Hermes/Codex cron job to maintain recurrence.
+
+### Codex weekly confirmation
+
+Weekly kicks and session kicks send minimal generation requests, but their confirmation evidence
+is separate. A successful session request can start an unused weekly window too; it does not move
+an already-running weekly deadline. Weekly-only Pro accounts do not need a five-hour window to
+confirm a weekly kick.
+
+Weekly history becomes confirmed after two fresh native readings, at least 30 seconds apart,
+retain a seven-day deadline whose inferred start matches the successful request within 30 seconds.
+Zero rounded usage does not prevent confirmation. A known pre-existing deadline, changing clock,
+wrong account/bucket, stale data or ambiguous requests cannot confirm it. Ordinary daemon polling
+or live status refreshes reconcile pending history; checking cached status alone does not.
+
+History records `weekly_reset_clock` with the weekly deadline and observation timestamps. Earlier
+pending records can reconcile during their current seven-day window; future requests also store
+an account fingerprint and pre-request weekly deadline. Weekly confirmation does not confirm a
+session or train session surface rankings. No extra generation is sent to obtain confirmation.

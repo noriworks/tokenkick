@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Confirm Codex weekly-only kicks from a matching seven-day native reset deadline that remains
+  fixed across fresh observations. Reconcile pending history without another request, distinguish
+  weekly evidence from session confirmation, and reject stale, moving or ambiguous reset clocks.
+
 - Auto-kick window enablement now resumes master. Master pause/resume preserves saved weekly/session
   choices, including weekly-only setups. Paused preferences and empty selections are explicit in
   terminal and macOS UI; MCP previews show exact changes and reject previews from the old policy.

@@ -14126,7 +14126,7 @@ def test_kick_label_force_bypasses_already_session_kicked(monkeypatch):
     assert kicked == ["phantom", "phantom", "phantom", "phantom"]
 
 
-def test_codex_direct_weekly_kick_marks_command_only_when_pre_status_missing(monkeypatch):
+def test_codex_direct_weekly_kick_stays_pending_when_pre_status_missing(monkeypatch):
     account = AccountConfig(
         label="codex",
         provider="codex",
@@ -14157,13 +14157,13 @@ def test_codex_direct_weekly_kick_marks_command_only_when_pre_status_missing(mon
 
     assert event.success is True
     assert event.confirmed is False
-    assert event.evidence_provider_moved is None
-    assert event.codex_confirmation_method == "none"
-    assert event.post_kick_status == "not_checked"
-    assert event.error == CODEX_PROVIDER_MOVEMENT_NOT_CONFIRMED_ERROR
+    assert event.evidence_provider_moved is False
+    assert event.codex_confirmation_method == "pending_weekly_reset_clock"
+    assert event.post_kick_status == "pending"
+    assert event.error == "Weekly reset-clock confirmation pending; waiting for stable native observations."
 
 
-def test_codex_direct_weekly_kick_confirms_when_provider_moves(monkeypatch):
+def test_codex_direct_weekly_kick_does_not_confirm_from_generic_provider_movement(monkeypatch):
     account = AccountConfig(
         label="codex",
         provider="codex",
@@ -14213,11 +14213,11 @@ def test_codex_direct_weekly_kick_confirms_when_provider_moves(monkeypatch):
     )
 
     assert event.success is True
-    assert event.confirmed is True
-    assert event.evidence_provider_moved is True
-    assert event.codex_confirmation_method == "provider_moved"
-    assert event.post_kick_status == "moved"
-    assert event.error is None
+    assert event.confirmed is False
+    assert event.evidence_provider_moved is False
+    assert event.codex_confirmation_method == "pending_weekly_reset_clock"
+    assert event.post_kick_status == "pending"
+    assert event.error == "Weekly reset-clock confirmation pending; waiting for stable native observations."
 
 
 def test_daemon_codex_weekly_kick_rechecks_live_status_and_skips_active(monkeypatch, capsys):
@@ -15849,7 +15849,7 @@ def test_fire_all_single_surface_subset_uses_fire_all_path(monkeypatch):
     assert len(recorded) == 1
     assert recorded[0].codex_attempt == 1
     assert recorded[0].codex_max_attempts == 1
-    assert recorded[0].codex_confirmation_method == "pending_reset_clock"
+    assert recorded[0].codex_confirmation_method == "pending_weekly_reset_clock"
 
 
 def test_fire_all_pending_attempt_blocks_next_session_poll(monkeypatch):

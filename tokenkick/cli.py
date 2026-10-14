@@ -27,7 +27,7 @@ from rich.console import Console
 from rich.table import Table
 from rich.text import Text
 
-from . import auto_controls
+from . import auto_controls, codex_weekly_confirmation
 from .antigravity import (
     antigravity_cli_binary,
     has_complete_antigravity_quota_windows,
@@ -4869,9 +4869,10 @@ def _mark_codex_fire_all_pending_attempt(event: KickEvent) -> None:
     event.confirmed = False
     event.evidence_provider_moved = False
     event.post_kick_status = "pending"
-    event.codex_confirmation_method = "pending_reset_clock"
+    weekly = (event.kick_type or event.kind) == "kick"
+    event.codex_confirmation_method = "pending_weekly_reset_clock" if weekly else "pending_reset_clock"
     if event.error is None or event.error == CODEX_NO_GENERATION_EVIDENCE_ERROR:
-        event.error = CODEX_SESSION_ANCHOR_PENDING_ERROR
+        event.error = codex_weekly_confirmation.PENDING_ERROR if weekly else CODEX_SESSION_ANCHOR_PENDING_ERROR
 
 
 def _record_codex_fire_all_cluster(
@@ -5071,6 +5072,8 @@ def _run_kick_attempt(
         event.codex_max_attempts = max_attempts
         event.codex_attempt_started_at = attempt_started_at
         event.codex_attempt_finished_at = attempt_finished_at
+        if kick_type == "kick":
+            codex_weekly_confirmation.prepare_attempt(account, event, pre_status)
     if event.success and account.provider == "antigravity":
         event.confirmed = False
         event.post_kick_status = "pending"
@@ -5631,54 +5634,19 @@ def _verify_codex_kick_provider_movement(
     pre_status: AccountStatus | None,
     config: Config | None,
 ) -> KickEvent:
-    if pre_status is None or pre_status.state == AccountState.UNKNOWN or pre_status.stale:
-        event.confirmed = False
-        event.evidence_provider_moved = None
-        event.post_kick_status = "not_checked"
-        event.codex_confirmation_method = "none"
-        if event.error != CODEX_NO_GENERATION_EVIDENCE_ERROR:
-            event.error = CODEX_PROVIDER_MOVEMENT_NOT_CONFIRMED_ERROR
-        return event
-
-    post_status = _fetch_codex_provider_movement_status(account, config)
-    if post_status is None or post_status.state == AccountState.UNKNOWN:
-        event.confirmed = False
-        event.evidence_provider_moved = False
-        event.post_kick_status = "unknown"
-        event.codex_confirmation_method = "none"
-        if event.error != CODEX_NO_GENERATION_EVIDENCE_ERROR:
-            event.error = CODEX_PROVIDER_MOVEMENT_NOT_CONFIRMED_ERROR
-        return event
-
-    _attach_codex_provider_confirmation_diagnostics(event, post_status)
-    if event.codex_provider_stale is True:
-        event.confirmed = False
-        event.evidence_provider_moved = False
-        event.post_kick_status = "pending"
-        event.codex_confirmation_method = "none"
-        if event.error != CODEX_NO_GENERATION_EVIDENCE_ERROR:
-            event.error = CODEX_PROVIDER_MOVEMENT_NOT_CONFIRMED_ERROR
-        return event
-
-    if _provider_status_moved(pre_status, post_status):
-        event.confirmed = True
-        event.evidence_provider_moved = True
-        event.post_kick_status = "moved"
-        event.codex_confirmation_method = "provider_moved"
-        event.codex_attribution = CODEX_ATTRIBUTION_STRONG
-        if event.error in {
-            CODEX_NO_GENERATION_EVIDENCE_ERROR,
-            CODEX_PROVIDER_MOVEMENT_NOT_CONFIRMED_ERROR,
-        }:
-            event.error = None
-        return event
-
+    # Weekly confirmation has its own durable stability check. A successful
+    # session, changed usage percentage or a single deadline read is insufficient.
     event.confirmed = False
     event.evidence_provider_moved = False
-    event.post_kick_status = "unchanged"
-    event.codex_confirmation_method = "none"
-    if event.error != CODEX_NO_GENERATION_EVIDENCE_ERROR:
-        event.error = CODEX_PROVIDER_MOVEMENT_NOT_CONFIRMED_ERROR
+    event.post_kick_status = "pending"
+    event.codex_confirmation_method = "pending_weekly_reset_clock"
+    if _event_has_generation_evidence(event):
+        event.error = codex_weekly_confirmation.PENDING_ERROR
+    if pre_status is None:
+        return event
+    post_status = _fetch_codex_provider_movement_status(account, config)
+    if post_status is not None:
+        codex_weekly_confirmation.observe_attempt(account, event, post_status, time.time())
     return event
 
 
@@ -5888,6 +5856,20 @@ def _apply_codex_late_attribution(
             continue
         if status.stale or status.state == AccountState.UNKNOWN:
             continue
+        try:
+            weekly_winners = (
+                codex_weekly_confirmation.reconcile(account, status)
+                if sum(a.label == account.label for a in accounts) == 1 else []
+            )
+        except (OSError, StateFileError):
+            weekly_winners = []
+        confirmed += len(weekly_winners)
+        if daemon_log:
+            for winner in weekly_winners:
+                _daemon_log("codex_weekly_confirmation", account=account.label,
+                            reset_at=winner.codex_provider_weekly_resets_at,
+                            anchor_at=winner.codex_weekly_inferred_anchor_at,
+                            surface=winner.codex_surface)
         inferred_anchor_at = _codex_status_inferred_anchor_at(status)
         if inferred_anchor_at is None:
             continue
@@ -10737,6 +10719,8 @@ def _compact_codex_method(method: str | None) -> str:
         return ""
     return {
         "pending_reset_clock": "pending",
+        "pending_weekly_reset_clock": "weekly pending",
+        "weekly_reset_clock": "weekly confirmed",
         "late_reset_clock": "late",
         "reset_clock": "reset",
         "provider_moved": "moved",
@@ -10829,6 +10813,10 @@ def _kick_event_evidence_summary(event: KickEvent) -> str:
         and event.codex_anchor_match_delta_seconds is not None
     ):
         parts.append(f"delta={round(event.codex_anchor_match_delta_seconds, 1)}s")
+    if event.codex_provider_weekly_resets_at is not None:
+        parts.append(f"weekly_reset_at={event.codex_provider_weekly_resets_at}")
+    if event.codex_weekly_anchor_match_delta_seconds is not None:
+        parts.append(f"weekly_delta={event.codex_weekly_anchor_match_delta_seconds:.1f}s")
     if event.codex_provider_stale is not None:
         parts.append(f"provider_stale={_yes_no(event.codex_provider_stale)}")
     if event.post_kick_status:
