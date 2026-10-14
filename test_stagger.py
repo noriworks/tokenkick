@@ -77,6 +77,332 @@ class Provider:
         return stagger.tick(fetch=self.fetch, send=self.send, now=lambda: self.now, sleep=self.sleep)
 
 
+class UncertainClockProvider(Provider):
+    """Native timestamps are complete but outside the verified idle horizon."""
+
+    uncertain = False
+
+    def fetch(self, account, config):
+        status = super().fetch(account, config)
+        if self.uncertain and account.antigravity_family == "gemini":
+            for window in status.quota_windows:
+                if window["family"] == "gemini" and window["window_kind"] == "session":
+                    window["resets_at"] = self.now + stagger.PERIOD + 60
+        return status
+
+
+def pending_reset_recovery():
+    activate()
+    p = UncertainClockProvider(T + 10000, {"gemini": T, "claude_gpt": T + 9000})
+    result = p.tick()
+    due = result["next_at"]
+    p.now = due + 19
+    p.uncertain = True
+    result = p.tick()
+    assert result["state"] == "rechecking"
+    assert result["next_at"] is None  # A read deadline is not a generation deadline.
+    assert result["next_check_at"] == p.now + 30
+    assert not p.sent
+    return p, due, result
+
+
+def test_uncertain_reset_recovers_persisted_slot_and_realigns_following_cycles(env):
+    p, due, result = pending_reset_recovery()
+    for delay in (60, 120):
+        p.now = result["next_check_at"]
+        result = p.tick()
+        assert result["next_check_at"] == p.now + delay
+        assert stagger.load()["runtime"]["verification_retry"]["expires_at"] == due + 300
+    # All evaluations reload the persisted state; this also covers process restart.
+    p.now = result["next_check_at"]
+    assert due + 120 < p.now < due + 300
+    p.uncertain = False
+    result = p.tick()
+    assert [f for f, _ in p.sent] == ["gemini"]
+    anchor = p.sent[0][1]
+    assert result["last_recovery"]["outcome"] == "recovered"
+    assert result["last_recovery"]["anchor"] == anchor
+    assert result["verification_retry"] is None
+    assert result["next_at"] == anchor + stagger.OFFSET
+    for _ in range(4):
+        p.now = result["next_at"]
+        result = p.tick()
+    assert [f for f, _ in p.sent] == ["gemini", "claude_gpt", "gemini", "claude_gpt", "gemini"]
+    for i in range(1, len(p.sent)):
+        assert abs(p.sent[i][1] - p.sent[i - 1][1] - stagger.OFFSET) <= stagger.TOLERANCE
+        if i >= 2:
+            assert p.sent[i][1] - p.sent[i - 2][1] >= stagger.PERIOD
+
+
+def test_reset_recheck_budget_is_persistent_and_never_extended(env):
+    p, due, result = pending_reset_recovery()
+    for count in (1, 2, 3):
+        assert stagger.load()["runtime"]["verification_retry"]["retry_count"] == count
+        p.now = result["next_check_at"]
+        result = p.tick()
+    assert result["state"] == "blocked"
+    assert result["verification_retry"] is None
+    assert result["next_check_at"] is None
+    assert result["last_recovery"]["reason"] == "verification_budget_exhausted"
+    assert result["last_recovery"]["expires_at"] == due + 300
+    p.now += 600
+    p.uncertain = False
+    assert p.tick()["next_at"] > p.now
+    assert not p.sent
+
+
+@pytest.mark.parametrize("delta", [-1000, 301])
+def test_unknown_clock_outside_known_slot_grace_has_no_rapid_retries(env, delta):
+    activate()
+    p = UncertainClockProvider(T + 10000, {"gemini": T, "claude_gpt": T + 9000})
+    due = p.tick()["next_at"]
+    p.now = due + delta
+    p.uncertain = True
+    result = p.tick()
+    assert result["state"] == "blocked"
+    assert result["verification_retry"] is None
+    assert not p.sent
+
+
+def test_native_cooldown_inside_grace_delays_recovered_request(env):
+    from tokenkick.antigravity_automation import _attempt_path
+    p, due, result = pending_reset_recovery()
+    file = _attempt_path(env.directory, env.accounts[0])
+    file.parent.mkdir(parents=True, exist_ok=True)
+    file.write_text(json.dumps({"attempted_at": T + 200, "retry_after": due + 200}))
+    p.now = result["next_check_at"]
+    p.uncertain = False
+    result = p.tick()
+    assert result["next_at"] == due + 200
+    assert result["next_check_at"] is None
+    assert not p.sent
+    assert stagger.wake_seconds(600, now=p.now) == 60
+    p.now = result["next_at"]
+    result = p.tick()
+    assert len(p.sent) == 1
+    assert p.sent[0][1] >= due + 200
+    assert result["last_recovery"]["outcome"] == "recovered"
+
+
+def test_preflight_refusal_of_recovered_slot_does_not_schedule_generation_retry(env):
+    p, due, _ = pending_reset_recovery()
+    p.now = due + 150
+    p.uncertain = False
+    p.send = lambda *a, **kw: SimpleNamespace(dispatch_state="not_sent", error="permissions changed")
+    result = p.tick()
+    assert result["state"] == "blocked"
+    assert result["next_check_at"] is None
+    assert result["last_recovery"]["reason"] == "request_not_sent"
+    assert stagger.load()["runtime"].get("attempt") is None
+    assert not p.sent
+
+
+def test_slow_dispatch_preflight_cannot_send_past_recovery_deadline(env, monkeypatch):
+    p, due, _ = pending_reset_recovery()
+    p.now = due + 280
+    p.uncertain = False
+    monkeypatch.setattr(stagger.time, "time", lambda: p.now)
+    def preflight(account, config, status, **kwargs):
+        p.now = due + 301
+        reason = stagger.send_guard(account, automatic=True, controller=True, status=status)
+        assert reason == "Recovery deadline passed during preflight; no stagger request sent."
+        return SimpleNamespace(dispatch_state="not_sent", error=reason)
+    p.send = preflight
+    result = p.tick()
+    assert result["state"] == "blocked"
+    assert result["last_recovery"]["outcome"] == "skipped"
+    assert not p.sent
+
+
+@pytest.mark.parametrize("elapsed", [301, 4 * stagger.PERIOD + 1000, -500])
+def test_pending_reset_recovery_does_not_replay_after_expiry_or_clock_jump(env, elapsed):
+    p, due, _ = pending_reset_recovery()
+    p.now = due + elapsed
+    p.uncertain = False
+    result = p.tick()
+    assert not p.sent
+    assert result["verification_retry"] is None
+    assert result["last_recovery"]["outcome"] == "skipped"
+    assert result["next_at"] > p.now
+
+
+def test_slow_native_read_consumes_recovery_grace(env):
+    p, due, _ = pending_reset_recovery()
+    p.now = due + 295
+    p.uncertain = False
+    result = p.tick()  # The independent read pair finishes after the cutoff.
+    assert result["last_recovery"]["reason"] == "grace_expired"
+    assert not p.sent
+
+
+def test_expired_recovery_does_not_block_a_genuinely_due_future_slot(env):
+    p, due, _ = pending_reset_recovery()
+    p.now = due + 4 * stagger.PERIOD
+    p.uncertain = False
+    result = p.tick()
+    assert p.sent == [("gemini", due + 4 * stagger.PERIOD + 6)]
+    assert result["last_recovery"]["outcome"] == "skipped"
+    assert result["last_recovery"]["reason"] == "grace_expired"
+    assert result["next_at"] > p.now
+
+
+@pytest.mark.parametrize("family", stagger.FAMILIES)
+def test_intervening_activity_cancels_retained_reset_slot(env, family):
+    p, due, _ = pending_reset_recovery()
+    p.now = due + 150
+    p.uncertain = False
+    p.anchors[family] = p.now
+    result = p.tick()
+    assert not p.sent
+    assert result["verification_retry"] is None
+    assert result["last_recovery"]["reason"] in {"activity_changed_phase", "family_already_active"}
+    assert result["next_at"] > p.now
+
+
+@pytest.mark.parametrize("blocker", ["reserve", "native_cooldown", "uncertain_native_attempt"])
+def test_recovery_keeps_quota_and_native_dispatch_guards(env, blocker):
+    from tokenkick.antigravity_automation import _attempt_path
+    p, due, _ = pending_reset_recovery()
+    p.now = due + 150
+    p.uncertain = False
+    if blocker == "reserve":
+        config = Config.load()
+        config.accounts[0].weekly_reserve_threshold_percent = 60
+        config.save()
+        p.weekly["gemini"] = 70
+    else:
+        file = _attempt_path(env.directory, env.accounts[0])
+        file.parent.mkdir(parents=True, exist_ok=True)
+        file.write_text(json.dumps({"attempted_at": due, "retry_after":
+                                   None if blocker == "uncertain_native_attempt" else due + stagger.PERIOD}))
+    result = p.tick()
+    assert not p.sent
+    assert result["verification_retry"] is None
+    assert result["last_recovery"]["outcome"] == "skipped"
+
+
+@pytest.mark.parametrize("action", ["pause", "disable"])
+def test_control_edits_cancel_pending_reset_recovery(env, action):
+    p, _, _ = pending_reset_recovery()
+    plan = stagger.preview(action)
+    stagger.apply(action, expected=plan["fingerprint"])
+    assert stagger.load()["runtime"].get("verification_retry") is None
+    p.now += 30
+    assert p.tick()["mode"] in {"paused", "disabled"}
+    assert not p.sent
+
+
+@pytest.mark.parametrize("failure", ["auth", "stale", "identity"])
+def test_unknown_gemini_clock_cannot_hide_invalid_other_family(env, failure):
+    p, _, result = pending_reset_recovery()
+    p.now = result["next_check_at"]
+    fetch = p.fetch
+    def bad(account, config):
+        status = fetch(account, config)
+        if account.antigravity_family == "claude_gpt":
+            return replace(status, **({"error": "authentication failed"} if failure == "auth" else
+                                      {"stale": True} if failure == "stale" else {"label": "wrong"}))
+        return status
+    p.fetch = bad
+    result = p.tick()
+    assert result["state"] == "blocked"
+    assert result["next_check_at"] is None
+    assert result["verification_retry"] is None
+    assert not p.sent
+
+
+@pytest.mark.parametrize("failure", ["send_failed", "post_send_read_failed", "post_send_unknown_clock", "no_anchor"])
+def test_recovered_slot_never_retries_an_uncertain_request(env, failure):
+    p, due, _ = pending_reset_recovery()
+    p.now = due + 150
+    p.uncertain = False
+    send = p.send
+    fetch = p.fetch
+    def native(account, config):
+        if failure == "post_send_read_failed" and p.sent:
+            raise OSError("fixture native read failure")
+        return fetch(account, config)
+    p.fetch = native
+    def uncertain(*args, **kwargs):
+        event = send(*args, **kwargs)
+        if failure == "post_send_unknown_clock":
+            p.anchors.pop("gemini")
+            p.uncertain = True
+        if failure == "no_anchor":
+            p.anchors.pop("gemini")
+        return event
+    p.fail = failure == "send_failed"
+    p.send = uncertain
+    result = p.tick()
+    assert result["state"] == "blocked"
+    assert result["verification_retry"] is None
+    assert result["last_recovery"]["outcome"] == "unconfirmed"
+    assert stagger.load()["runtime"]["attempt"]["outcome"] == "unconfirmed"
+    p.now += stagger.PERIOD * 2
+    p.uncertain = False
+    p.fetch = fetch
+    assert p.tick()["state"] == "blocked"
+    assert len(p.sent) == 1
+
+
+def test_reset_recheck_daemon_deadline_and_terminal_mcp_diagnostics(env, monkeypatch):
+    p, due, result = pending_reset_recovery()
+    monkeypatch.setattr(stagger.time, "time", lambda: p.now)
+    calls = []
+    def check(**kwargs):
+        calls.append(p.now)
+        return {"state": "rechecking"}
+    monkeypatch.setattr(stagger, "tick", check)
+    monkeypatch.setattr(cli, "_daemon_log", lambda *a, **kw: None)
+    assert stagger.wake_seconds(600, now=p.now) == 30
+    stagger.daemon_step(Config.load())
+    assert not calls
+    p.now = result["next_check_at"]
+    stagger.daemon_step(Config.load())
+    assert calls == [p.now]
+    core = TokenKickMCPCore()
+    runner = CliRunner()
+    def run(argv, **kwargs):
+        response = runner.invoke(cli.cli, argv)
+        assert response.exit_code == 0, response.output
+        return json.loads(response.output)
+    monkeypatch.setattr(core, "_run", run)
+    payload = core.tokenkick_stagger_status()["payload"]
+    assert payload["next_check_at"] == p.now
+    assert payload["next_at"] is None
+    assert payload["verification_retry"]["expires_at"] == due + 300
+    output = io.StringIO()
+    stagger.render(Console(file=output, width=110), payload)
+    assert "rechecking" in output.getvalue()
+    assert "Recheck gemini reset:" in output.getvalue()
+    assert "Delayed slot: gemini" in output.getvalue()
+    assert "(1/3)" in output.getvalue()
+
+
+@pytest.mark.parametrize("field,value", [("retry_count", 4), ("expires_at", T), ("retry_at", float("inf"))])
+def test_corrupt_persisted_retry_blocks_automation(env, field, value):
+    pending_reset_recovery()
+    data = stagger.load()
+    data["runtime"]["verification_retry"][field] = value
+    stagger.path().write_text(json.dumps(data))
+    assert stagger.status()["state"] == "blocked"
+    with pytest.raises(stagger.StaggerError):
+        Provider().tick()
+
+
+def test_corrupt_recovery_audit_fails_closed_instead_of_crashing_render(env):
+    pending_reset_recovery()
+    data = stagger.load()
+    data["runtime"]["last_recovery"] = {"family": "gemini", "outcome": "claimed",
+                                        "reason": "evidence_verified", "finished_at": T}
+    stagger.save(data)
+    payload = stagger.status()
+    assert payload["state"] == "blocked"
+    output = io.StringIO()
+    stagger.render(Console(file=output, width=110), payload)
+    assert "Invalid/unsupported stagger state" in output.getvalue()
+
+
 def test_three_cycles_persist_across_restarts_with_no_duplicate_or_early_requests(env):
     activate()
     provider = Provider()

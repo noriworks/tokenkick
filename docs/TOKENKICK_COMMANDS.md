@@ -1041,6 +1041,22 @@ Status shows controller ownership, target/observed offset, next action, daemon
 availability, last evaluation and blockers. Scheduling is best effort: outages,
 weekly exhaustion, reserve thresholds and manual activity can delay alignment.
 The daemon wakes for deadlines without refreshing unrelated providers each minute.
+If an already scheduled slot encounters complete native data with an inconclusive
+session clock, the daemon retains that slot and rechecks after 30, 60 and 120 seconds.
+These are at most three extra read-only checks, bounded by five minutes after the
+original slot; the counter and deadline survive restarts. A verified idle family
+may start late within this grace only while quota, permission and dispatch guards
+permit it. The confirmed anchor becomes the scheduling reference for later slots.
+External activity, expired grace or control changes cancel the retained recovery;
+outage slots are not replayed. Authentication, stale-data and malformed-data errors
+do not trigger these rapid checks.
+
+During recovery, status shows `rechecking`, a separate `next_check_at` read deadline,
+and `verification_retry` details (family, original slot, cutoff and retry count).
+`last_recovery` records whether the slot was recovered, skipped or left unconfirmed.
+The terminal displays the same information. These read deadlines do not authorize
+a generation request and do not change the normal healthy polling interval.
+
 A failed/unconfirmed generation does not automatically retry. After inspecting
 history, `--action recover` performs native read-only reconciliation after a full
 five-hour cooldown and leaves the group paused. Explicit resume is then required.

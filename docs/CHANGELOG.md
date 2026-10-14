@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Recover scheduled Antigravity stagger slots after inconclusive native reset
+  observations with up to three bounded read retries and a five-minute deadline.
+  Persist the retry budget across restarts, preserve all dispatch/quota guards,
+  and realign later slots from the confirmed start. Uncertain requests still
+  require explicit recovery; missed outage slots are not replayed.
+- Expose separate reset-recheck deadlines and recovered/skipped slot diagnostics
+  in terminal and MCP status. Validate both families before retrying evidence.
 - Restore unattended Claude usage refresh in daemon and detached helper passes.
 - Preserve failed direct-probe metadata through discovery so rate-limit backoff
   and diagnostics survive cached-data fallback.

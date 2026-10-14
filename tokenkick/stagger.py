@@ -26,10 +26,22 @@ FAMILIES = ("gemini", "claude_gpt")
 PERIOD = 18000
 OFFSET = 9000
 TOLERANCE = 120
+RECOVERY_GRACE = 300
+EVIDENCE_RETRY_DELAYS = (30, 60, 120)
 
 
 class StaggerError(ValueError):
     pass
+
+
+class WindowEvidencePending(StaggerError):
+    """Complete native data exists, but the session clock is inconclusive."""
+
+    def __init__(self, family, observed, reset):
+        self.family = family
+        self.observed = observed
+        self.reset = reset
+        super().__init__(f"{family}: session anchor is unverified; recheck native observations.")
 
 
 def path(directory: Path | None = None) -> Path:
@@ -78,6 +90,23 @@ def load(directory: Path | None = None):
         _validate(all(k in FAMILIES and _number(v) for k, v in runtime.get("anchors", {}).items()))
         _validate(runtime.get("next_family") is None or runtime["next_family"] in FAMILIES)
         _validate(runtime.get("observed_offset_seconds") is None or _number(runtime["observed_offset_seconds"]))
+        retry = runtime.get("verification_retry")
+        if retry is not None:
+            _validate(isinstance(retry, dict))
+            _validate(retry["family"] in FAMILIES and retry["blocked_family"] in FAMILIES)
+            _validate(all(_number(retry[k]) for k in (
+                "slot_at", "expires_at", "retry_at", "phase", "observed_at", "reset_at")))
+            _validate(retry["expires_at"] == retry["slot_at"] + RECOVERY_GRACE)
+            _validate(retry["slot_at"] - TOLERANCE <= retry["retry_at"] <= retry["expires_at"])
+            _validate(type(retry["retry_count"]) is int and 1 <= retry["retry_count"] <= len(EVIDENCE_RETRY_DELAYS))
+        _validate(runtime.get("state") != "rechecking" or retry is not None)
+        recovery = runtime.get("last_recovery")
+        if recovery is not None:
+            _validate(isinstance(recovery, dict) and recovery["family"] in FAMILIES)
+            _validate(recovery["outcome"] in {"claimed", "recovered", "skipped", "unconfirmed"})
+            _validate(isinstance(recovery["reason"], str) and _number(recovery["finished_at"]))
+            _validate(_number(recovery["slot_at"]) and _number(recovery["expires_at"]))
+            _validate(recovery["expires_at"] == recovery["slot_at"] + RECOVERY_GRACE)
         attempt = runtime.get("attempt")
         if attempt is not None:
             _validate(attempt["family"] in FAMILIES and _number(attempt["at"]))
@@ -247,6 +276,7 @@ def apply(action, gemini=None, claude=None, *, expected, accept_risk=False, dire
         data["group"]["mode"] = "enabled" if enabled else {"pause": "paused", "disable": "disabled", "recover": "paused"}[action]
         data["runtime"].update(state="awaiting_evidence" if enabled else data["group"]["mode"],
                                reason=None, next_at=None, next_family=None)
+        _finish_verification_retry(data["runtime"], "skipped", "control_changed", time.time())
         save(data, directory)
         return status(directory=directory)
 
@@ -264,7 +294,7 @@ def observation(account, status, now):
     elif window.get("anchor_state") == "anchored" and window["resets_at"] > now:
         anchor = window["resets_at"] - PERIOD
     else:
-        raise StaggerError("Session anchor is unverified; refresh independent native observations.")
+        raise WindowEvidencePending(family, observed, window["resets_at"])
     reserve = account.weekly_reserve_threshold_percent
     reason = None
     if weekly["used_percent"] >= 100 and weekly["resets_at"] > now:
@@ -274,8 +304,62 @@ def observation(account, status, now):
     return {"anchor": anchor, "blocker": reason}
 
 
+def _finish_verification_retry(runtime, outcome, reason, now):
+    retry = runtime.pop("verification_retry", None)
+    if retry is not None:
+        runtime["last_recovery"] = {
+            **retry, "outcome": outcome, "reason": reason, "finished_at": now,
+        }
+
+
+def _observations(accounts, statuses, now):
+    """Do not let one ambiguous clock hide another member's invalid evidence."""
+    observations, pending = {}, None
+    for family, account in accounts.items():
+        try:
+            observations[family] = observation(account, statuses[family], now)
+        except WindowEvidencePending as exc:
+            pending = pending or exc
+    if pending is not None:
+        raise pending
+    return observations
+
+
+def _schedule_verification_retry(runtime, error, now):
+    """Retain one known slot; never renew its absolute deadline or a sent request."""
+    attempt = runtime.get("attempt")
+    if (runtime.get("state") in {"attempting", "verifying"}
+            or attempt and attempt["outcome"] != "confirmed"):
+        return False
+    retry = runtime.get("verification_retry")
+    if retry is None:
+        due, family, phase = (runtime.get(k) for k in ("next_at", "next_family", "phase"))
+        if (family not in FAMILIES or not _number(due) or not _number(phase)
+                or not due - TOLERANCE <= now <= due + RECOVERY_GRACE
+                or attempt and attempt["family"] == family and attempt["at"] >= due):
+            return False
+        retry = {"family": family, "slot_at": due, "expires_at": due + RECOVERY_GRACE,
+                 "phase": phase, "retry_count": 0}
+    retry = {**retry, "blocked_family": error.family,
+             "observed_at": error.observed, "reset_at": error.reset}
+    count = retry["retry_count"]
+    if (now < retry["slot_at"] - TOLERANCE or count >= len(EVIDENCE_RETRY_DELAYS)
+            or now + EVIDENCE_RETRY_DELAYS[count] > retry["expires_at"]):
+        # Only persist a validated pending record; the finished audit may have
+        # no retry_at if the initial read already consumed the whole grace.
+        runtime["verification_retry"] = retry
+        _finish_verification_retry(runtime, "skipped", "verification_budget_exhausted", now)
+        return False
+    runtime["verification_retry"] = {**retry, "retry_count": count + 1,
+                                      "retry_at": now + EVIDENCE_RETRY_DELAYS[count]}
+    runtime.update(state="rechecking", reason=str(error), next_at=None, next_family=None,
+                   evaluated_at=now, recovery="bounded_native_recheck")
+    return True
+
+
 def decide(runtime, observations, now):
     """Pure recurring policy. Never replay a missed slot or consume an active one."""
+    runtime = dict(runtime)
     anchors = dict(runtime.get("anchors", {}))
     active = {f: v["anchor"] for f, v in observations.items() if v["anchor"] is not None}
     anchors.update(active)
@@ -293,6 +377,21 @@ def decide(runtime, observations, now):
     if changed:
         f = changed[-1]
         phase = active[f] - (OFFSET if f == "claude_gpt" else 0)
+    retry = runtime.get("verification_retry")
+    if retry:
+        family = retry["family"]
+        invalid = (
+            "grace_expired" if now > retry["expires_at"] else
+            "clock_moved_backwards" if now < retry["slot_at"] - TOLERANCE else
+            "activity_changed_phase" if phase != retry["phase"] else
+            "family_already_active" if family in active else
+            "quota_blocked" if observations[family]["blocker"] else
+            "cooldown_exceeds_grace" if (observations[family].get("not_before") or 0) > retry["expires_at"] else
+            None
+        )
+        if invalid:
+            _finish_verification_retry(runtime, "skipped", invalid, now)
+            retry = None
     candidates, blockers = [], {}
     for f in FAMILIES:
         info = observations[f]
@@ -301,13 +400,21 @@ def decide(runtime, observations, now):
             continue
         base = phase + (OFFSET if f == "claude_gpt" else 0)
         earliest = max(now - TOLERANCE, anchors.get(f, now - PERIOD) + PERIOD - TOLERANCE)
-        slot = base + max(0, math.ceil((earliest - base) / PERIOD)) * PERIOD
+        normal_slot = base + max(0, math.ceil((earliest - base) / PERIOD)) * PERIOD
+        minimum = info.get("not_before") or 0
         if f in anchors:
-            slot = max(slot, anchors[f] + PERIOD)
+            minimum = max(minimum, anchors[f] + PERIOD)
         attempt = runtime.get("attempt")
         if attempt and attempt["family"] == f:
-            slot = max(slot, attempt["at"] + PERIOD)
-        candidates.append((max(now, slot, info.get("not_before") or 0), f))
+            minimum = max(minimum, attempt["at"] + PERIOD)
+        slot = normal_slot
+        if retry and f == retry["family"]:
+            if minimum > retry["expires_at"]:
+                _finish_verification_retry(runtime, "skipped", "cooldown_exceeds_grace", now)
+                retry = None
+            else:
+                slot = retry["slot_at"]
+        candidates.append((max(now, slot, minimum), f))
     next_at, next_family = min(candidates) if candidates else (None, None)
     state = "degraded" if blockers else "aligned" if aligned else "realigning" if len(active) == 2 else "scheduled"
     return {**runtime, "anchors": anchors, "phase": phase, "state": state,
@@ -351,11 +458,15 @@ def status(*, directory=None, daemon_running=None):
             "target_offset_minutes": 150, "members": group["members"] if group else {},
             "daemon_running": daemon_running, **{k: runtime.get(k) for k in (
                 "reason", "next_at", "next_family", "observed_offset_seconds", "evaluated_at")}, "reason": reason,
+            "verification_retry": runtime.get("verification_retry"),
+            "last_recovery": runtime.get("last_recovery"),
+            "next_check_at": (runtime.get("verification_retry", {}).get("retry_at")
+                              if state == "rechecking" else None),
             "observation_age_seconds": age,
             "evidence_fresh": age is not None and -30 <= age <= max_age,
             "operational": mode == "enabled" and daemon_running is True
             and age is not None and -30 <= age <= max_age
-            and state not in {"blocked", "paused", "awaiting_evidence"}}
+            and state not in {"blocked", "paused", "awaiting_evidence", "rechecking"}}
 
 
 def send_guard(account, *, automatic, controller=False, directory=None, status=None):
@@ -382,6 +493,11 @@ def send_guard(account, *, automatic, controller=False, directory=None, status=N
             or not attempt or attempt["family"] != account.antigravity_family
             or attempt["outcome"] != "attempting"):
         return "No due, claimed stagger slot for this family."
+    recovery = runtime.get("last_recovery")
+    if (recovery and recovery["outcome"] == "claimed"
+            and recovery["family"] == account.antigravity_family
+            and time.time() > recovery["expires_at"]):
+        return "Recovery deadline passed during preflight; no stagger request sent."
     if status is None or not verified_unanchored(status, account.antigravity_family):
         return "Session changed during preflight; no stagger request sent."
     info = observation(selected[account.antigravity_family], status, time.time())
@@ -437,16 +553,20 @@ def tick(*, directory=None, fetch=None, send=None, now=None, sleep=None):
                 raise StaggerError("Antigravity automatic quota-use consent is missing.")
             if conflicts(config, accounts):
                 raise StaggerError("Conflicting pending or work-window schedule; cancel it before resuming.")
-            observations = {f: observation(a, statuses[f], clock()) for f, a in accounts.items()}
             attempt = runtime.get("attempt")
             if attempt and attempt["outcome"] != "confirmed":
                 # A stable window is evidence of activity, not proof that an
                 # ambiguous request was ours. Never auto-clear the durable guard.
                 raise StaggerError("Previous request unconfirmed; inspect history and use explicit recovery.")
             from .antigravity_automation import attempt_retry_at
+            # Validate durable dispatch guards before deciding whether an evidence
+            # failure is eligible for automatic read-only recovery.
+            retry_limits = {f: attempt_retry_at(
+                directory if directory is not None else models.CONFIG_DIR, a)
+                for f, a in accounts.items()}
+            observations = _observations(accounts, statuses, clock())
             for family, account in accounts.items():
-                observations[family]["not_before"] = attempt_retry_at(
-                    directory if directory is not None else models.CONFIG_DIR, account)
+                observations[family]["not_before"] = retry_limits[family]
             runtime = decide(runtime, observations, clock())
             data["runtime"] = runtime
             save(data, directory)
@@ -454,6 +574,11 @@ def tick(*, directory=None, fetch=None, send=None, now=None, sleep=None):
             if f and runtime["next_at"] <= clock() and observations[f]["anchor"] is None:
                 # The normal executor reloads permissions/identity and quota under
                 # ownership, checks eligibility and records its own durable guard.
+                recovering = runtime.get("verification_retry")
+                if recovering and recovering["family"] == f:
+                    _finish_verification_retry(runtime, "claimed", "evidence_verified", clock())
+                else:
+                    recovering = None
                 runtime.update(state="attempting", attempt={"family": f, "at": clock(), "outcome": "attempting"})
                 save(data, directory)
                 event = send(accounts[f], config, statuses[f], automatic=True,
@@ -461,6 +586,8 @@ def tick(*, directory=None, fetch=None, send=None, now=None, sleep=None):
                              send_notification=False, daemon_log=True)
                 if event.dispatch_state == "not_sent":
                     runtime.pop("attempt", None)
+                    if recovering:
+                        runtime["last_recovery"].update(outcome="skipped", reason="request_not_sent", finished_at=clock())
                     raise StaggerError("Request not sent; will recheck eligibility on the next poll: " + (event.error or "unavailable"))
                 if not (event.success and event.confirmed):
                     runtime["attempt"]["outcome"] = "unconfirmed"
@@ -469,16 +596,30 @@ def tick(*, directory=None, fetch=None, send=None, now=None, sleep=None):
                 runtime.update(state="verifying", next_at=None, next_family=None)
                 save(data, directory)
                 verified = read_pair(accounts, Config.load(), fetch, sleep)
-                observations = {fam: observation(a, verified[fam], clock()) for fam, a in accounts.items()}
+                observations = _observations(accounts, verified, clock())
                 if observations[f]["anchor"] is None:
                     runtime["attempt"]["outcome"] = "unconfirmed"
                     raise StaggerError("Accepted request has no confirmed session anchor.")
-                # First bootstrap uses the actual anchor, not dispatch time.
-                if not runtime.get("anchors"):
+                # Bootstrap and late recovery use the actual confirmed anchor.
+                if not runtime.get("anchors") or recovering:
                     runtime["phase"] = observations[f]["anchor"] - (OFFSET if f == "claude_gpt" else 0)
+                if recovering:
+                    runtime["last_recovery"].update(outcome="recovered", reason="anchor_confirmed",
+                                                    finished_at=clock(), anchor=observations[f]["anchor"])
                 runtime = decide(runtime, observations, clock())
             data["runtime"] = runtime
         except Exception as exc:
+            # Once a request has been claimed, no evidence retry may turn into
+            # an automatic replacement generation, including verification errors.
+            if runtime.get("state") == "verifying":
+                runtime["attempt"]["outcome"] = "unconfirmed"
+            if runtime.get("last_recovery", {}).get("outcome") == "claimed":
+                runtime["last_recovery"].update(outcome="unconfirmed", reason="request_outcome_unconfirmed", finished_at=clock())
+            if isinstance(exc, WindowEvidencePending) and _schedule_verification_retry(runtime, exc, clock()):
+                data["runtime"] = runtime
+                save(data, directory)
+                return status(directory=directory)
+            _finish_verification_retry(runtime, "skipped", "recovery_blocked", clock())
             data["runtime"] = {**runtime, "state": "blocked", "reason": str(exc),
                                "next_at": None, "next_family": None, "evaluated_at": clock(),
                                "recovery": "explicit" if runtime.get("attempt", {}).get("outcome") in {"attempting", "unconfirmed"} else "next_poll"}
@@ -495,10 +636,15 @@ def wake_seconds(interval, directory=None, now=None):
     if not data["enabled"]:
         return interval
     now = time.time() if now is None else now
-    due = data.get("next_at")
+    due = _next_deadline(data)
     # Wake to notice control edits without performing an expensive quota read on
     # every wake. The daemon adapter below selects when evaluation is necessary.
     return min(interval, 60, max(1, due - now) if due is not None else 60)
+
+
+def _next_deadline(payload):
+    deadlines = [payload.get(k) for k in ("next_at", "next_check_at")]
+    return min((v for v in deadlines if _number(v)), default=None)
 
 
 def daemon_step(config, *, directory=None):
@@ -507,7 +653,7 @@ def daemon_step(config, *, directory=None):
     if not current["enabled"]:
         return current
     now = time.time()
-    due = current.get("next_at")
+    due = _next_deadline(current)
     last = current.get("evaluated_at") or 0
     if now >= last and now - last < config.poll_interval_minutes * 60 and (due is None or due > now):
         return current
@@ -534,7 +680,9 @@ def daemon_step(config, *, directory=None):
                     notify_stagger(message, route)
                 data["runtime"]["notified"] = signature
                 save(data, directory)
-    cli._daemon_log("stagger", state=result["state"], next_at=result.get("next_at"), reason=result.get("reason"))
+    cli._daemon_log("stagger", state=result["state"], next_at=result.get("next_at"), reason=result.get("reason"),
+                    next_check_at=result.get("next_check_at"), verification_retry=result.get("verification_retry"),
+                    last_recovery=result.get("last_recovery"))
     return result
 
 
@@ -552,6 +700,16 @@ def render(console, payload):
     if payload.get("next_at"):
         when = datetime.fromtimestamp(payload["next_at"], timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M:%S %Z")
         lines.append(f"Next: {payload['next_family']} at {when}")
+    retry = payload.get("verification_retry")
+    if retry:
+        deadline = datetime.fromtimestamp(retry["expires_at"], timezone.utc).astimezone().strftime("%H:%M:%S %Z")
+        lines.append(f"Delayed slot: {retry['family']} · recovery closes {deadline}")
+        if payload.get("next_check_at"):
+            when = datetime.fromtimestamp(payload["next_check_at"], timezone.utc).astimezone().strftime("%H:%M:%S %Z")
+            lines.append(f"Recheck {retry['blocked_family']} reset: {when} ({retry['retry_count']}/{len(EVIDENCE_RETRY_DELAYS)})")
+    last = payload.get("last_recovery")
+    if last:
+        lines.append(f"Last slot recovery: {last['family']} · {last['outcome']} · {last['reason']}")
     if payload.get("reason"):
         lines.append("Waiting: " + str(payload["reason"]))
     if payload.get("evaluated_at") and payload.get("evidence_fresh") is False:
