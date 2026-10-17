@@ -55,6 +55,27 @@ provider data as a limitation instead of reporting a verified anchor.
 A release must retain the protected backup paths and checksums in its operator
 record. Keep account-specific paths and credentials out of public release notes.
 
+## Disk headroom and backup retention
+
+Before creating another release snapshot, measure free space and existing backup
+sizes. Budget for both the compressed archive and its fully extracted restore
+test, plus installation headroom. Repeatedly retaining extracted tests can fill
+the server even when individual archives are small.
+
+After a successful upgrade, propose retaining the two newest compressed rollback
+archives and removing older archives and disposable restore-test trees. Backup
+deletion requires explicit user authorization. Before cleanup, recheck the kept
+archives against their recorded SHA-256 hashes and independently verify the
+latest protected off-host copy. Keep restore-test results, checksums, deployment
+records and cleanup manifests; mark removed artifacts so historical verification
+records are not mistaken for available backups.
+
+Use an exact allowlist of inspected paths, reject symlinks or nested mounts, and
+check that no running process uses them. Never include live account homes,
+credentials, history or unrelated applications in release cleanup. Verify free
+space and service/configuration health afterward. Restoring an archive remains
+a separate, explicitly authorized operation.
+
 ## Scoped request-guard recovery
 
 An enabled account can still be blocked by a persisted request guard. Inspect
