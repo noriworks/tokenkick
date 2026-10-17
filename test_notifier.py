@@ -1,8 +1,11 @@
 """Tests for notification message formatting."""
 
 import sys
+from dataclasses import replace
 from datetime import datetime, timezone
 from types import SimpleNamespace
+
+import pytest
 
 from tokenkick.models import KickEvent, NotifyConfig, format_notification_timestamp
 from tokenkick.notifier import (
@@ -460,9 +463,67 @@ def test_notify_reset_event_sends_possible_confidence(monkeypatch):
     )
 
     assert delivered is True
-    assert calls[0][1]["headers"]["Title"] == "TokenKick - Global Reset"
+    assert calls[0][1]["headers"]["Title"] == "TokenKick - Quota reset"
     assert calls[0][1]["headers"]["Priority"] == "default"
     assert "Confidence: possible" in calls[0][1]["content"].decode()
+
+
+@pytest.mark.parametrize("backend", ["ntfy", "telegram"])
+@pytest.mark.parametrize("confidence,tag,icon,headline", [
+    ("confirmed", "tada", "🎉", "Codex quota reset detected — a fresh start!"),
+    ("likely", "sparkles", "✨", "Codex quota reset looks likely."),
+    ("possible", "arrows_counterclockwise", "🔄", "Possible Codex quota reset."),
+])
+def test_reset_news_has_one_positive_icon_and_preserves_confidence(
+    monkeypatch, backend, confidence, tag, icon, headline,
+):
+    calls = []
+    monkeypatch.setitem(sys.modules, "httpx", SimpleNamespace(
+        post=lambda *args, **kwargs: calls.append(kwargs) or SimpleNamespace(status_code=200),
+    ))
+    event = ResetEvent(
+        id="reset-news", detected_at="2026-10-15T00:00:00Z", provider="codex",
+        confidence=confidence, affected_accounts=["codex (personal)", "codex (work)"],
+        trigger="usage_drop", account_snapshots=[], total_quota_hours_lost=24,
+        previous_reset_predictions={}, new_reset_predictions={},
+        pending_kicks_invalidated=["codex (work)"], notification_sent=False,
+        summary="", detail="", failover_guidance="Legacy diagnostic guidance",
+    )
+    config = NotifyConfig(enabled=True, backend=backend, ntfy_topic="topic",
+                          telegram_bot_token="test-token", telegram_chat_id="123")
+    assert notify_reset_event(event, config)
+    assert len(calls) == 1
+    if backend == "ntfy":
+        headers = calls[0]["headers"]
+        assert headers == {"Title": "TokenKick - Quota reset", "Priority": "default", "Tags": tag}
+        body = calls[0]["content"].decode()
+        assert icon not in body  # The tag already supplies the single icon.
+    else:
+        body = calls[0]["json"]["text"]
+        assert body.startswith(f"{icon} TokenKick: ")
+        assert body.count(icon) == 1
+    assert headline in body
+    assert "Across accounts: codex (personal), codex (work)." in body
+    assert f"Confidence: {confidence}." in body
+    assert "Pending kicks cleared: codex (work)." in body
+    assert "Details: tk reset-log --detail reset-news" in body
+    assert "⚠" not in body and "lost" not in body and "Legacy diagnostic" not in body
+    # Presentation must not discard diagnostics from the saved event.
+    assert event.total_quota_hours_lost == 24
+    assert event.failover_guidance == "Legacy diagnostic guidance"
+
+    calls.clear()
+    observation = replace(event, trigger="single_account_usage_drop",
+                          affected_accounts=["codex (personal)"], pending_kicks_invalidated=[])
+    assert notify_reset_event(observation, config)
+    body = calls[0]["content"].decode() if backend == "ntfy" else calls[0]["json"]["text"]
+    assert "Accounts: codex (personal)." in body
+    assert "Across accounts" not in body and "Global" not in body
+    assert "Pending kicks cleared" not in body
+
+    calls.clear()
+    assert not notify_reset_event(event, replace(config, enabled=False))
+    assert not calls
 
 
 def test_notify_ntfy_message_returns_false_for_http_failure(monkeypatch):

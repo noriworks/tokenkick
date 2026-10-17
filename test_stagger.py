@@ -334,7 +334,7 @@ def test_unknown_gemini_clock_cannot_hide_invalid_other_family(env, failure):
 
 
 @pytest.mark.parametrize("failure", ["send_failed", "post_send_read_failed", "post_send_unknown_clock", "no_anchor"])
-def test_recovered_slot_never_retries_an_uncertain_request(env, failure):
+def test_recovered_slot_preserves_request_outcome_across_monitoring_failure(env, failure):
     p, due, _ = pending_reset_recovery()
     p.now = due + 150
     p.uncertain = False
@@ -358,13 +358,25 @@ def test_recovered_slot_never_retries_an_uncertain_request(env, failure):
     result = p.tick()
     assert result["state"] == "blocked"
     assert result["verification_retry"] is None
-    assert result["last_recovery"]["outcome"] == "unconfirmed"
-    assert stagger.load()["runtime"]["attempt"]["outcome"] == "unconfirmed"
-    p.now += stagger.PERIOD * 2
+    confirmed = failure != "send_failed"
+    assert result["last_recovery"]["outcome"] == ("recovered" if confirmed else "unconfirmed")
+    assert stagger.load()["runtime"]["attempt"]["outcome"] == ("confirmed" if confirmed else "unconfirmed")
+    # Recovery of monitoring must never resend the already-confirmed request.
     p.uncertain = False
     p.fetch = fetch
-    assert p.tick()["state"] == "blocked"
+    immediate = p.tick()
     assert len(p.sent) == 1
+    assert (immediate["state"] == "blocked") is not confirmed
+    p.now += stagger.PERIOD * 2
+    later = p.tick()
+    if not confirmed:
+        assert later["state"] == "blocked"
+        assert len(p.sent) == 1
+    else:
+        assert later["state"] != "blocked"
+        for family in stagger.FAMILIES:
+            times = [at for f, at in p.sent if f == family]
+            assert all(b - a >= stagger.PERIOD for a, b in zip(times, times[1:]))
 
 
 def test_reset_recheck_daemon_deadline_and_terminal_mcp_diagnostics(env, monkeypatch):
@@ -1530,3 +1542,71 @@ def test_changed_periodic_candidate_does_not_extend_read_budget(env):
     assert result['provisional_rollovers']['gemini']['expires_at'] == expires
     assert result['next_check_at'] is None
     assert not p.sent
+
+
+def test_legacy_confirmed_stagger_recovery_resumes_alternation_without_duplicate(env):
+    from tokenkick import stagger_recovery
+    from tokenkick.action_state import action_path
+    from tokenkick.antigravity_automation import _attempt_path
+    from tokenkick.models import KickEvent, account_key_string
+
+    activate()
+    p = Provider()
+    p.tick()
+    original_send = list(p.sent)
+    data = stagger.load()
+    attempt = data['runtime']['attempt']
+    at = attempt['at']
+    attempt['outcome'] = 'unconfirmed'  # 1.23.5 downgraded an already-confirmed send.
+    data['runtime'].update(state='blocked', reason='Previous request unconfirmed')
+    stagger.save(data)
+    a = Config.load().accounts[0]
+    action = {'state': 'completed', 'started_at': at+0.1, 'dispatched_at': at+2, 'completed_at': at+5}
+    cooldown = {'attempted_at': at+1, 'retry_after': at+18002}
+    for path, value in [(action_path(env.directory, account_key_string(a)), action),
+                        (_attempt_path(env.directory, a), cooldown)]:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(value))
+    history = [KickEvent(label=a.label, timestamp=at+3, kind='session', kick_type='session',
+                         success=True, confirmed=True, dispatch_state='sent', evidence_response=True,
+                         evidence_provider_moved=True, post_kick_status='confirmed')]
+    env.monkeypatch.setattr(stagger_recovery, 'load_kick_history', lambda **_: history)
+    p.now += 100
+    recovered = p.tick()
+    assert recovered['state'] == 'awaiting_evidence'
+    assert recovered['request_outcome'] == 'confirmed'
+    assert recovered['last_request_recovery']['confirmed_event_at'] == at+3
+    assert p.sent == original_send  # The reconciliation turn cannot send.
+    assert json.loads(_attempt_path(env.directory, a).read_text()) == cooldown
+    # Restart and history pruning do not lose the persisted reconciliation.
+    history.clear()
+    restarted = Provider(p.now, dict(p.anchors))
+    env.monkeypatch.setattr(stagger.time, 'time', lambda: restarted.now)
+    for _ in range(6):
+        result = restarted.tick()
+        assert result['state'] != 'blocked'
+        assert result['next_at'] is not None
+        restarted.now = result['next_at']
+    sent = original_send + restarted.sent
+    assert len(sent) >= 5
+    assert all(a[0] != b[0] for a, b in zip(sent, sent[1:]))
+    assert all(abs((b[1]-a[1])-stagger.OFFSET) <= 30 for a, b in zip(sent, sent[1:]))
+    for family in stagger.FAMILIES:
+        times = [at for f, at in sent if f == family]
+        assert all(b-a >= stagger.PERIOD for a, b in zip(times, times[1:]))
+
+
+def test_failed_refresh_is_not_reported_as_fresh_stagger_evidence(env):
+    activate()
+    p = Provider()
+    env.monkeypatch.setattr(stagger.time, 'time', lambda: p.now)
+    assert p.tick()['evidence_fresh']
+    def failed(*_a):
+        raise OSError('quota endpoint unavailable')
+    p.fetch = failed
+    p.now += 30
+    result = p.tick()
+    assert result['state'] == 'blocked'
+    assert not result['evidence_fresh']
+    assert result['request_outcome'] == 'confirmed'
+    assert len(p.sent) == 1

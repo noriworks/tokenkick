@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from .models import KickEvent, NotifyConfig, format_notification_timestamp
-from .reset_defense import ResetEvent
+from .reset_defense import ResetEvent, is_provider_reset_observation
 from .scheduling import PendingKick, ScheduleDecision, from_utc_iso
 
 PROVIDER_ACCEPTED_PHANTOM_KICK_ERROR = "Codex accepted usage, but session status is still ambiguous"
@@ -127,17 +127,23 @@ def notify_test(config: NotifyConfig) -> bool:
 
 
 def notify_reset_event(event: ResetEvent, config: NotifyConfig) -> bool:
-    """Notify that a likely or confirmed global provider reset was detected."""
+    """Share reset news without presenting quota renewal as an alarm."""
     if not config.enabled:
         return False
     message = _format_reset_event_message(event)
-    priority = "high" if event.confidence == "confirmed" else "default"
+    tags, icon = {
+        "confirmed": ("tada", "🎉"),
+        "likely": ("sparkles", "✨"),
+    }.get(event.confidence, ("arrows_counterclockwise", "🔄"))
+    # ntfy renders its tag as an icon; Telegram only displays the message body.
+    if config.backend == "telegram":
+        message = f"{icon} TokenKick: {message}"
     return _notify_raw(
         message,
         config,
-        title="TokenKick - Global Reset",
-        priority=priority,
-        tags="warning",
+        title="TokenKick - Quota reset",
+        priority="default",
+        tags=tags,
     )
 
 
@@ -225,16 +231,20 @@ def _should_send_kick_notification(event: KickEvent, config: NotifyConfig) -> bo
 
 
 def _format_reset_event_message(event: ResetEvent) -> str:
-    loss = ""
-    if event.total_quota_hours_lost is not None and event.total_quota_hours_lost > 0:
-        loss = f" ~{event.total_quota_hours_lost:g}h saved quota may be lost."
-    affected = ", ".join(event.affected_accounts)
-    guidance = f" {event.failover_guidance}" if event.failover_guidance else ""
-    return (
-        f"⚠️ TokenKick: Global reset detected on {event.provider.title()}. "
-        f"Affected: {affected}.{loss} Confidence: {event.confidence}. "
-        f"Run `tk reset-log` for details.{guidance}"
-    )
+    provider = event.provider.title()
+    if event.confidence == "confirmed":
+        headline = f"{provider} quota reset detected — a fresh start!"
+    elif event.confidence == "likely":
+        headline = f"{provider} quota reset looks likely."
+    else:
+        headline = f"Possible {provider} quota reset."
+    scope = "Accounts" if is_provider_reset_observation(event) else "Across accounts"
+    lines = [headline, f"{scope}: {', '.join(event.affected_accounts)}.",
+             f"Confidence: {event.confidence}."]
+    if event.pending_kicks_invalidated:
+        lines.append(f"Pending kicks cleared: {', '.join(event.pending_kicks_invalidated)}.")
+    lines.append(f"Details: tk reset-log --detail {event.id}")
+    return "\n".join(lines)
 
 
 def _format_schedule_decision_message(

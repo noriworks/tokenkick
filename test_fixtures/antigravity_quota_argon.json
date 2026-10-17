@@ -1,0 +1,56 @@
+{
+  "response": {
+    "groups": [
+      {
+        "displayName": "Gemini Models",
+        "buckets": [
+          {
+            "bucketId": "gemini-weekly",
+            "displayName": "Weekly Limit Remaining",
+            "window": "weekly",
+            "remainingFraction": 1,
+            "resetTime": 1800604800
+          },
+          {
+            "bucketId": "gemini-5h",
+            "displayName": "Five Hour Limit Remaining",
+            "window": "5h",
+            "remainingFraction": 1,
+            "resetTime": 1800018000
+          }
+        ]
+      },
+      {
+        "displayName": "Claude and GPT models",
+        "buckets": [
+          {
+            "bucketId": "3p-weekly",
+            "displayName": "Weekly Limit Remaining",
+            "window": "weekly",
+            "remainingFraction": 0.4239036,
+            "resetTime": 1800604800
+          },
+          {
+            "bucketId": "3p-5h",
+            "displayName": "Five Hour Limit Remaining",
+            "window": "5h",
+            "remainingFraction": 1,
+            "resetTime": 1800018000
+          }
+        ]
+      },
+      {
+        "displayName": "Gemini 4 Argon",
+        "buckets": [
+          {
+            "bucketId": "gemini-argon-wtu-weekly",
+            "displayName": "Gemini 4 Argon Weekly Limit",
+            "window": "weekly",
+            "remainingFraction": 1,
+            "resetTime": 1800604800
+          }
+        ]
+      }
+    ]
+  }
+}

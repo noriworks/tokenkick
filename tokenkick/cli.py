@@ -99,7 +99,7 @@ from .sources import (
 )
 from .scheduling import pending_transaction
 from .request_scope import run_scope, approve_targets, target_allowed, consume_target
-from .action_state import account_action, UncertainActionError
+from .action_state import account_action, action_blocker, UncertainActionError
 from . import antigravity_automation
 from .versioning import installed_version, read_daemon_pidfile, write_daemon_pidfile, pidfile_process_matches
 from .telegram_remote import (
@@ -1832,6 +1832,10 @@ def _kick_eligibility(
     allow_stale: bool = False,
 ) -> KickEligibility:
     resolved_provider = provider or (account.provider if account is not None else None)
+    if account is not None:
+        blocker = action_blocker(CONFIG_DIR, account_key_string(account))
+        if blocker:
+            return KickEligibility(False, reason=blocker)
     if is_synthetic_status(status):
         return KickEligibility(False, reason="predicted_status_requires_refresh")
     if resolved_provider == "codex" and not session_actions_allowed(account, status):
@@ -1846,6 +1850,9 @@ def _kick_eligibility(
             return KickEligibility(False, reason="antigravity_family_required")
         if not antigravity_automation.usable_status(account, status):
             return KickEligibility(False, reason="antigravity_live_quota_required")
+        from .antigravity import antigravity_model_quota_blocker
+        if antigravity_model_quota_blocker(account, status):
+            return KickEligibility(False, reason="antigravity_separate_model_quota")
         if antigravity_automation.attempt_blocked(CONFIG_DIR, account, status):
             return KickEligibility(False, reason="antigravity_attempt_already_sent")
         if status.used_percent >= 100 and status.resets_in_seconds > 0:
@@ -3232,6 +3239,9 @@ def _run_evaluate_account(
     stagger_state: KickStaggerState | None = None,
 ) -> tuple[str, dict, bool]:
     key = account_key_string(account)
+    blocker = action_blocker(CONFIG_DIR, key)
+    if blocker:
+        return "skipped", _run_skip(account, blocker, reason_code=blocker), False
     if account.provider == "gemini":
         return (
             "skipped",
@@ -4713,6 +4723,9 @@ def _kick_and_notify(
                     consume_target(account_key_string(account))
                     return _kick_and_notify_owned(account, config, status, **kwargs)
     except (StateFileLockTimeout, UncertainActionError) as exc:
+        if kwargs.get("daemon_log"):
+            _daemon_log("kick_skipped", account=account.label,
+                        reason="request_guard_blocked", error=str(exc))
         return KickEvent(label=account.label, success=False, confirmed=False, dispatch_state="not_sent", error=str(exc))
 
 
@@ -5061,6 +5074,12 @@ def _run_kick_attempt(
             if pre_status is None or not antigravity_automation.usable_status(account, pre_status):
                 return KickEvent(label=account.label, success=False, confirmed=False,
                                  error="Fresh complete Antigravity quota data is required.", dispatch_state="not_sent")
+            from .antigravity import antigravity_model_quota_blocker
+            model_blocker = antigravity_model_quota_blocker(account, pre_status, model_override)
+            if model_blocker:
+                return KickEvent(label=account.label, success=False, confirmed=False,
+                                 error=model_blocker,
+                                 dispatch_state="not_sent")
             kwargs["before_send"] = lambda: antigravity_automation.record_attempt(CONFIG_DIR, account, pre_status)
         attempt_started_at = time.time()
         event = kick_account(account, **kwargs)
@@ -5310,6 +5329,10 @@ def _kick_claude_usage_session(
     event.confirmed = False
     event.evidence_response = bool(event.response_text)
     event.evidence_tokens = _event_has_token_usage(event)
+    from .action_state import mark_action_awaiting_anchor, mark_action_verified
+    event.kick_type = kick_type
+    # Persist acceptance before a slow/interruptible read can lose its receipt.
+    mark_action_awaiting_anchor(event)
     try:
         probe_event, status = _run_claude_usage_touch(
             account, config, kind="probe", kick_type="status_probe",
@@ -5331,11 +5354,11 @@ def _kick_claude_usage_session(
         # A failed read must never erase the accepted generation from history.
         event.confirmed = False
     if not event.confirmed:
-        from .action_state import mark_action_uncertain
-        mark_action_uncertain()
         event.evidence_provider_moved = False
         event.post_kick_status = "provider_accepted"
-        event.error = "Claude request accepted; quota anchor unverified. Inspect usage before explicit recovery."
+        event.error = "Claude request accepted; quota anchor unverified. Waiting for fresh native window evidence."
+    else:
+        mark_action_verified()
     return event
 
 
@@ -8974,6 +8997,7 @@ def _resolve_single_kick_target(
             explanations = {
                 "active": "no reset is ready and no unstarted session has been verified",
                 "antigravity_live_quota_required": "fresh native quota data for this family is required",
+                "antigravity_separate_model_quota": "Argon has a separate weekly quota; clear the model override to use Flash Low",
                 "antigravity_attempt_already_sent": "a previous attempt is still guarded; automatic retry is suppressed",
                 "weekly_exhausted": "the weekly quota is exhausted",
                 "session_exhausted": "the session quota is exhausted",
@@ -15032,6 +15056,20 @@ def _daemon_poll_once(
         loop_config, daemon_log=True, allow_claude_usage=True,
     )
     statuses_by_key = _cache_statuses_by_key_from_pairs(refresh_accounts, refresh_statuses)
+    from .claude_action_recovery import reconcile as reconcile_claude_action
+    recovery_history = load_kick_history(limit=1000)
+    for account in accounts:
+        status = statuses_by_key.get(account_key_string(account))
+        if status is not None:
+            recovered = reconcile_claude_action(
+                CONFIG_DIR, account, status, recovery_history,
+                cooldown_seconds=max(60, interval),
+            )
+            if recovered:
+                _daemon_log("claude_request_guard_recovered", account=account.label, **recovered)
+        blocker = action_blocker(CONFIG_DIR, account_key_string(account))
+        if blocker and account.auto_kick:
+            _daemon_log("auto_kick_skipped", account=account.label, reason=blocker)
     from .status_rendering import notify_dormant_accounts
     notify_dormant_accounts(refresh_statuses, {a.label: a for a in accounts}, loop_config)
     cache_entries_after_refresh = _load_status_cache_entries()

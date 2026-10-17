@@ -97,7 +97,7 @@ def load(directory: Path | None = None):
             _number(runtime["rollover_check_at"]) and bool(rollovers)
             and runtime["rollover_check_at"] <= min(c["expires_at"] for c in rollovers.values())))
         _validate(runtime.get("state") != "verifying_rollover" or bool(rollovers))
-        for key in ("phase", "evaluated_at", "next_at"):
+        for key in ("phase", "evaluated_at", "next_at", "evidence_observed_at"):
             _validate(runtime.get(key) is None or _number(runtime[key]))
         _validate(isinstance(runtime.get("anchors", {}), dict))
         _validate(all(k in FAMILIES and _number(v) for k, v in runtime.get("anchors", {}).items()))
@@ -135,6 +135,14 @@ def load(directory: Path | None = None):
         if attempt is not None:
             _validate(attempt["family"] in FAMILIES and _number(attempt["at"]))
             _validate(attempt["outcome"] in {"attempting", "unconfirmed", "confirmed"})
+        receipt = runtime.get("last_request_recovery")
+        if receipt is not None:
+            _validate(receipt["family"] in FAMILIES
+                      and receipt["method"] == "confirmed_history_and_dispatch_guards")
+            _validate(all(_number(receipt[k]) for k in (
+                "attempt_at", "confirmed_event_at", "retry_after", "reconciled_at")))
+            _validate(receipt["attempt_at"] <= receipt["confirmed_event_at"] <= receipt["reconciled_at"])
+            _validate(receipt["retry_after"] >= receipt["attempt_at"] + PERIOD)
     except (KeyError, TypeError, AttributeError, ValueError) as exc:
         raise StaggerError("Invalid/unsupported stagger state; automatic Antigravity requests are blocked.") from exc
     return data
@@ -310,6 +318,11 @@ def observation(account, status, now):
     observed = observed_epoch(status)
     window = native_window(status, family)
     weekly = native_window(status, family, "weekly")
+    if status.error:
+        from .antigravity import ANTIGRAVITY_REFRESH_ERRORS, antigravity_refresh_error_code
+        code = antigravity_refresh_error_code(status)
+        if code:
+            raise StaggerError(f"{family}: {ANTIGRAVITY_REFRESH_ERRORS[code]}")
     if (status.label != account.label or models.is_synthetic_status(status)
             or observed is None or not -30 <= now - observed <= 120
             or window is None or weekly is None):
@@ -540,8 +553,8 @@ def status(*, directory=None, daemon_running=None):
             state, reason = "blocked", "Saved stagger ownership has no policy; reconfigure or explicitly disable it."
     max_age = 720
     age = None
-    if runtime.get("evaluated_at") is not None:
-        age = time.time() - runtime["evaluated_at"]
+    if runtime.get("evidence_observed_at") is not None:
+        age = time.time() - runtime["evidence_observed_at"]
     if mode == "enabled":
         try:
             config = Config.load()
@@ -558,6 +571,8 @@ def status(*, directory=None, daemon_running=None):
                 "reason", "next_at", "next_family", "observed_offset_seconds", "evaluated_at")}, "reason": reason,
             "verification_retry": runtime.get("verification_retry"),
             "last_recovery": runtime.get("last_recovery"),
+            "last_request_recovery": runtime.get("last_request_recovery"),
+            "request_outcome": runtime.get("attempt", {}).get("outcome"),
             "anchor_corrections": runtime.get("anchor_corrections", {}),
             "last_anchor_correction": runtime.get("last_anchor_correction"),
             "provisional_rollovers": runtime.get("provisional_rollovers", {}),
@@ -644,6 +659,13 @@ def tick(*, directory=None, fetch=None, send=None, now=None, sleep=None):
         if data["revision"] != initial["revision"] or data["group"] != group:
             return status(directory=directory)
         runtime = data["runtime"]
+        runtime["evidence_observed_at"] = None
+        if read_error is None and all(
+            statuses[f].label == accounts[f].label and observed_epoch(statuses[f]) is not None
+            and native_window(statuses[f], f) is not None
+            and native_window(statuses[f], f, "weekly") is not None for f in FAMILIES
+        ):
+            runtime["evidence_observed_at"] = min(observed_epoch(s) for s in statuses.values())
         try:
             if read_error is not None:
                 raise read_error
@@ -657,9 +679,18 @@ def tick(*, directory=None, fetch=None, send=None, now=None, sleep=None):
                 raise StaggerError("Conflicting pending or work-window schedule; cancel it before resuming.")
             attempt = runtime.get("attempt")
             if attempt and attempt["outcome"] != "confirmed":
-                # A stable window is evidence of activity, not proof that an
-                # ambiguous request was ours. Never auto-clear the durable guard.
-                raise StaggerError("Previous request unconfirmed; inspect history and use explicit recovery.")
+                from .stagger_recovery import confirmed_receipt
+                proof = confirmed_receipt(
+                    directory if directory is not None else models.CONFIG_DIR,
+                    accounts[attempt["family"]], attempt, clock())
+                if proof is None:
+                    raise StaggerError("Previous request unconfirmed; inspect history and use explicit recovery.")
+                attempt["outcome"] = "confirmed"
+                runtime.update(last_request_recovery=proof, state="awaiting_evidence",
+                               reason="Confirmed request recovered from history; rechecking native windows next poll.",
+                               evaluated_at=clock(), next_at=None, next_family=None, recovery="next_poll")
+                save(data, directory)
+                return status(directory=directory)  # Reconciliation never sends.
             from .antigravity_automation import attempt_retry_at
             # Validate durable dispatch guards before deciding whether an evidence
             # failure is eligible for automatic read-only recovery.
@@ -710,8 +741,7 @@ def tick(*, directory=None, fetch=None, send=None, now=None, sleep=None):
                 verified = read_pair(accounts, Config.load(), fetch, sleep)
                 observations = _observations(accounts, verified, clock())
                 if observations[f]["anchor"] is None:
-                    runtime["attempt"]["outcome"] = "unconfirmed"
-                    raise StaggerError("Accepted request has no confirmed session anchor.")
+                    raise StaggerError("Request confirmed, but its session anchor is no longer visible; rechecking native windows next poll.")
                 # Bootstrap and late recovery use the actual confirmed anchor.
                 if not runtime.get("anchors") or recovering or correcting:
                     runtime["phase"] = observations[f]["anchor"] - (OFFSET if f == "claude_gpt" else 0)
@@ -727,13 +757,20 @@ def tick(*, directory=None, fetch=None, send=None, now=None, sleep=None):
                 if not _verify_rollovers(runtime, observations, verified, clock()):
                     runtime = decide(runtime, observations, clock())
             data["runtime"] = runtime
-        except Exception as exc:
-            # Once a request has been claimed, no evidence retry may turn into
-            # an automatic replacement generation, including verification errors.
-            if runtime.get("state") == "verifying":
-                runtime["attempt"]["outcome"] = "unconfirmed"
+        except Exception as error:
+            exc = error
+            # Monitoring can fail after the executor has already confirmed and
+            # durably recorded the request. Never downgrade that receipt. The
+            # normal next-poll path retains all dispatch cooldowns and spacing.
+            confirmed = runtime.get("attempt", {}).get("outcome") == "confirmed"
+            if runtime.get("state") == "verifying" and confirmed:
+                runtime["evidence_observed_at"] = None
+                exc = StaggerError("Request confirmed; post-request quota refresh unavailable. Rechecking native windows next poll.")
             if runtime.get("last_recovery", {}).get("outcome") == "claimed":
-                runtime["last_recovery"].update(outcome="unconfirmed", reason="request_outcome_unconfirmed", finished_at=clock())
+                runtime["last_recovery"].update(
+                    outcome="recovered" if confirmed else "unconfirmed",
+                    reason="request_confirmed_monitoring_pending" if confirmed else "request_outcome_unconfirmed",
+                    finished_at=clock())
             if isinstance(exc, WindowEvidencePending) and _schedule_verification_retry(runtime, exc, clock()):
                 data["runtime"] = runtime
                 save(data, directory)
@@ -836,6 +873,9 @@ def render(console, payload):
     correction = payload.get("last_anchor_correction")
     if correction:
         lines.append(f"Last anchor correction: {correction['family']} · {correction['outcome']}")
+    receipt = payload.get("last_request_recovery")
+    if receipt:
+        lines.append(f"Request receipt recovered: {receipt['family']} · already confirmed · no replacement request")
     for family in payload.get("provisional_rollovers", {}):
         lines.append(f"Verifying {family} rollover: zero use; no new request confirmed.")
     if payload.get("provisional_rollovers"):

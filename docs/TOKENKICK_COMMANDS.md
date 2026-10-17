@@ -829,6 +829,16 @@ Notes:
   an expensive interactive default. Actual selected models appear in history.
 - `tk accounts set-kick-model` and `clear-kick-model` are legacy/advanced
   equivalents.
+- Antigravity supports `Gemini 4 Argon (Low)` as an explicit override for the
+  Gemini quota family when that exact label is in the account's live `agy models`
+  catalog. Configure it with
+  `tk model set "antigravity" "Gemini 4 Argon (Low)"` (use your saved account
+  label). Restore automatic selection with `tk model clear "antigravity"`.
+  Automatic kicks still prefer Flash Low; Argon is not an automatic fallback.
+  Medium/High variants and use on the Claude/GPT family are rejected before dispatch.
+  Some plans expose a separate Argon weekly allowance. TokenKick retains that
+  additional quota separately in native status; when present, an Argon override
+  is blocked for ordinary Gemini kicks because it cannot anchor that window.
 
 ### App Mode And `tk app` (Native App Integration)
 

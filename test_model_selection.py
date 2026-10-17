@@ -141,6 +141,34 @@ def test_antigravity_catalog_parses_actual_tabular_format(monkeypatch):
     assert read_antigravity_models("/fixture/agy") == ["Gemini 3.8 Flash (Low)"]
 
 
+def test_argon_live_catalog_override_keeps_flash_automatic_default(monkeypatch):
+    catalog = (
+        "gemini-4-argon-medium\tGemini 4 Argon (Medium)\n"
+        "gemini-4-argon-high\tGemini 4 Argon (High)\n"
+        "gemini-4-argon-low\tGemini 4 Argon (Low)\n"
+        "gemini-3.8-flash-low\tGemini 3.8 Flash (Low)\n"
+        "claude-sonnet-5-5-low\tClaude Sonnet 5.5 (Low)\n"
+    )
+    monkeypatch.setattr("tokenkick.model_selection.subprocess.run", lambda *_a, **_kw:
+                        SimpleNamespace(returncode=0, stdout=catalog))
+    labels = read_antigravity_models("agy")
+    assert select_antigravity_model(labels, "gemini", "Gemini 4 Argon (Low)") == "Gemini 4 Argon (Low)"
+    assert select_antigravity_model(labels, "gemini") == "Gemini 3.8 Flash (Low)"
+    assert select_antigravity_model(labels, "claude_gpt") == "Claude Sonnet 5.5 (Low)"
+
+
+@pytest.mark.parametrize("labels,family,override", [
+    (["Gemini 4 Argon (Low)"], "claude_gpt", "Gemini 4 Argon (Low)"),
+    (["Gemini 4 Argon (Medium)"], "gemini", "Gemini 4 Argon (Medium)"),
+    (["Gemini 4 Argon (High)"], "gemini", "Gemini 4 Argon (High)"),
+    (["Gemini 3.8 Flash (Low)"], "gemini", "Gemini 4 Argon (Low)"),
+    (["Gemini 4 Argon (Low)"], "gemini", None),
+])
+def test_argon_does_not_bypass_effort_family_or_catalog_guards(labels, family, override):
+    with pytest.raises(ModelSelectionError):
+        select_antigravity_model(labels, family, override)
+
+
 @pytest.mark.parametrize("failure", [OSError("private"), subprocess.TimeoutExpired("agy", 30), None])
 def test_antigravity_catalog_failure_never_uses_old_default(monkeypatch, failure):
     def run(*_a, **_kw):

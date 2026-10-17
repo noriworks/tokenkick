@@ -552,6 +552,8 @@ def _render_status_table(
         )
         state_display = _status_state_display(
             s,
+            request_blocked=bool(account and _cli().action_blocker(
+                _cli().CONFIG_DIR, account_key_string(account))),
             provider=provider,
             stale=s.stale or blocking_refresh_failed,
             indirect=fallback_source,
@@ -911,6 +913,14 @@ def _status_action(
     account: AccountConfig | None = None,
 ) -> str:
     provider = _cli()._status_provider(status, providers_by_label)
+    if account is not None:
+        blocker = _cli().action_blocker(_cli().CONFIG_DIR, account_key_string(account))
+        if blocker:
+            return {
+                "request_awaiting_anchor": "Request accepted; awaiting quota evidence",
+                "request_outcome_uncertain": "Request uncertain; recovery required",
+                "request_recovery_cooldown": "Request guard recovered; next poll",
+            }[blocker]
     if _status_weekly_exhausted(status):
         return "Weekly exhausted"
     if _status_session_exhausted(status):
@@ -967,6 +977,8 @@ def _status_action(
         return "Weekly exhausted"
     if eligibility.reason == "antigravity_attempt_already_sent":
         return "Request already sent"
+    if eligibility.reason == "antigravity_separate_model_quota":
+        return "Argon has separate quota; clear model override"
     if eligibility.reason == "antigravity_live_quota_required":
         return "Refresh required"
     if eligibility.reason == "session_exhausted":
@@ -1127,7 +1139,10 @@ def _status_state_display(
     phantom_session: bool = False,
     codex_unconfirmed_session: bool = False,
     cached_refresh_unavailable: bool = False,
+    request_blocked: bool = False,
 ) -> str:
+    if request_blocked:
+        return "🟡 Request blocked"
     if _status_weekly_exhausted(status):
         display = "🔴 Weekly exhausted"
         return f"{display}*" if indirect else display

@@ -54,3 +54,53 @@ provider data as a limitation instead of reporting a verified anchor.
 
 A release must retain the protected backup paths and checksums in its operator
 record. Keep account-specific paths and credentials out of public release notes.
+
+## Scoped request-guard recovery
+
+An enabled account can still be blocked by a persisted request guard. Inspect
+its eligibility reason and history before recovery; do not delete action files
+or use `--force` just because a request is old. An accepted generation whose quota
+anchor is unknown is different from a failed generation.
+
+Claude's daemon reconciliation requires a matching accepted receipt and two distinct,
+fresh, direct observations of a fixed later quota window, at least 60 seconds apart.
+It rejects stale, synthetic, fallback, unknown-identity and moving-clock evidence.
+A later session can retire only a session request; a later week can retire either.
+The original outcome remains unconfirmed in history. Recovery records its evidence
+under the action lock and delays new dispatch by at least one polling interval.
+It never generates a replacement request. Malformed state or missing evidence
+remains blocked and visible for operator review.
+
+For an explicitly authorized state-only repair, protect the exact guard in a root-only
+backup, restore-test its bytes and keep a hash-verified independent off-host copy.
+Run the tested reconciliation policy against a temporary copy first. Under the live
+account lock, require the original hash and account identity to still match and
+revalidate current native evidence before replacing only that guard. Use the app
+user for the write; preserve controls, history and credentials. Do not install
+unpublished code into the running service. A one-time state repair on an older
+version does not deploy the new automatic recovery or status behavior.
+
+Rollback requires explicit authorization: first confirm no later provider action
+has occurred, preserve the recovered record, and restore only the original guard
+under its lock. Never overwrite a newer request record. Retain both backups and
+the recovery audit until the operator accepts the repair.
+
+## Antigravity confirmed-request reconciliation
+
+An enabled stagger can be blocked by two separate failures: a native quota
+schema/transport failure and a genuinely uncertain dispatch. Refresh success
+alone must not clear a dispatch guard.
+
+When the controller says `unconfirmed` but the corresponding generation history
+is already confirmed, the repaired daemon checks the account's completed action
+record and durable family cooldown under the account lock. Exactly one matching
+confirmed session history event with response and provider-movement evidence is
+required. It records `last_request_recovery` and returns without generating;
+normal scheduling resumes on a subsequent poll with fresh native observations.
+History and cooldown records are preserved. Unknown requests, conflicting
+records, missing history and active dispatch ownership remain blocked.
+
+Do not delete guard files, force a kick, or replay missed slots to fix a parser
+outage. Confirm that native monitoring reads both ordinary families and keeps
+the optional Argon weekly quota separate. A read-only candidate-parser check
+does not install the fix into the daemon; deployment is a separate operation.

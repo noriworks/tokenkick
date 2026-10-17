@@ -171,6 +171,39 @@ def test_native_invocation_is_economical_bounded_and_isolated(family, model, tmp
     assert invocation.cwd == tmp_path / "antigravity-kick-workspace"
 
 
+def test_argon_override_round_trip_settings_and_invocation_without_generation(monkeypatch):
+    argon = "Gemini 4 Argon (Low)"
+    original = account(auto_kick=False, weekly_auto_kick=False, session_auto_kick=False)
+    peer = account("claude_gpt")
+    Config(accounts=[original, peer]).save()
+    monkeypatch.setattr(cli_mod, "_load_accounts", lambda config: config.accounts)
+    monkeypatch.setattr("tokenkick.kicker.read_antigravity_models", lambda _: [
+        argon, "Gemini 3.8 Flash (Low)", "Claude Sonnet 5.5 (Low)",
+    ])
+    monkeypatch.setattr("tokenkick.kicker.subprocess.run", lambda *_a, **_k:
+                        pytest.fail("Settings and invocation preparation must not generate"))
+    runner = CliRunner()
+    result = runner.invoke(cli_mod.cli, ["model", "set", original.label, argon, "--json-output"])
+    assert result.exit_code == 0, result.output
+    saved = Config.load().accounts
+    assert saved == [replace(original, kick_model=argon), peer]
+    result = runner.invoke(cli_mod.cli, ["accounts", "list", "--json-output"])
+    assert result.exit_code == 0, result.output
+    rows = json.loads(result.output)["payload"]["accounts"]
+    assert next(row for row in rows if row["label"] == original.label)["kick_model"] == argon
+    invocation = kick_invocation_for_account(saved[0])
+    assert invocation.model == argon
+    assert invocation.command[invocation.command.index("--model") + 1] == argon
+    assert "--effort" not in invocation.command
+    assert "--sandbox" in invocation.command
+    assert "--disable-slash-commands" in invocation.command
+    assert invocation.command[invocation.command.index("--print-timeout") + 1] == "45s"
+    result = runner.invoke(cli_mod.cli, ["model", "clear", original.label, "--json-output"])
+    assert result.exit_code == 0, result.output
+    assert Config.load().accounts == [original, peer]
+    assert kick_invocation_for_account(Config.load().accounts[0]).model == "Gemini 3.8 Flash (Low)"
+
+
 def test_identity_mismatch_sends_no_request(monkeypatch):
     monkeypatch.setattr(
         "tokenkick.kicker.read_antigravity_cli_identity", lambda: "other@example.test"

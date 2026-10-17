@@ -1,5 +1,33 @@
 # Changelog
 
+## v1.23.6
+
+- Restore native Antigravity monitoring when Google advertises the separate
+  Argon weekly allowance. Preserve it separately from the four required quota
+  windows and reject invalid/ambiguous data. Block Argon overrides from kicking
+  ordinary Gemini windows on plans with that separate allowance.
+- Keep confirmed stagger requests confirmed if later monitoring fails. Reconcile
+  old downgraded controller records only from matching confirmed history,
+  completed dispatch ownership and a valid durable cooldown, without sending a
+  replacement request. Resume normal evaluation on a later poll. Report safe
+  refresh diagnostics and distinguish native-data freshness from polling activity.
+
+- Verify and document Gemini 4 Argon (Low) support through Antigravity's live
+  catalog and explicit model override. Keep Flash Low as the automatic choice;
+  add regression coverage for Argon selection and quota-family/effort guards.
+
+- Expose persisted request guards in eligibility, terminal status, JSON/MCP and
+  run previews instead of offering kicks that dispatch will silently refuse.
+  Distinguish accepted Claude requests awaiting quota evidence from uncertain
+  transport. Retire old Claude guards only after two fresh direct observations
+  of the same later native window and a matching accepted request receipt, with
+  durable audit evidence, ownership locking and a dispatch cooldown. Recovery
+  never resends or retroactively confirms the original request.
+
+- Make quota-reset notifications feel like good news: one positive icon, normal
+  priority and concise copy on ntfy and Telegram. Keep possible/likely resets
+  qualified, show cleared pending kicks, and link to the full reset diagnostics.
+
 ## v1.23.5
 
 - Treat zero-use Antigravity deadlines that roll forward by whole five-hour periods

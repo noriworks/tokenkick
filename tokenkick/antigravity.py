@@ -59,12 +59,51 @@ ANTIGRAVITY_QUOTA_WINDOW_SPECS: dict[str, dict[str, str | int]] = {
     },
 }
 ANTIGRAVITY_QUOTA_WINDOW_IDS = tuple(ANTIGRAVITY_QUOTA_WINDOW_SPECS)
+# Optional, separate weekly allowance on paid Pro plans. It cannot anchor the
+# Gemini five-hour window and must not be folded into that family's quota.
+ANTIGRAVITY_OPTIONAL_WINDOW_SPECS = {
+    "antigravity-quota-summary-argon-weekly": {
+        "family": "argon", "window_kind": "weekly", "window_minutes": 10080,
+    },
+}
+ANTIGRAVITY_ALL_WINDOW_SPECS = {
+    **ANTIGRAVITY_QUOTA_WINDOW_SPECS, **ANTIGRAVITY_OPTIONAL_WINDOW_SPECS,
+}
 ANTIGRAVITY_QUOTA_PARSE_ERROR = (
     "Antigravity quota windows were incomplete or unrecognized in provider data."
 )
 ANTIGRAVITY_QUOTA_SUMMARY_PARSE_ERROR = (
     "Antigravity quota summary was incomplete or unrecognized in provider data."
 )
+ANTIGRAVITY_REFRESH_ERRORS = {
+    "quota_schema": "Antigravity quota response changed or is incomplete; parser rejected it.",
+    "authentication": "Antigravity login or identity verification failed.",
+    "busy": "Another Antigravity quota refresh is running; retry on the next poll.",
+    "transport": "Antigravity quota endpoint is unavailable; retry on the next poll.",
+}
+
+
+def antigravity_refresh_error_code(status: AccountStatus) -> str | None:
+    """Stable diagnostics only: never persist unfiltered provider error text."""
+    if status.source_detail != ANTIGRAVITY_CLI_SOURCE_DETAIL or not status.error:
+        return None
+    if status.error in {ANTIGRAVITY_QUOTA_PARSE_ERROR, ANTIGRAVITY_QUOTA_SUMMARY_PARSE_ERROR}:
+        return "quota_schema"
+    text = status.error.lower()
+    if any(word in text for word in ("login", "identity", "credentials", "authentication")):
+        return "authentication"
+    if "already running" in text:
+        return "busy"
+    return "transport"
+
+
+def antigravity_model_quota_blocker(account, status: AccountStatus, override=None) -> str | None:
+    requested = override or account.kick_model or ""
+    if ("argon" in requested.lower() and any(
+            isinstance(w, dict) and w.get("family") == "argon" for w in status.quota_windows or [])):
+        return ("Argon has a separate weekly quota on this account; it cannot kick the Gemini window. "
+                "Clear the model override to use Flash Low.")
+    return None
 
 
 @dataclass(frozen=True)
@@ -416,7 +455,9 @@ def has_complete_antigravity_quota_windows(status: AccountStatus) -> bool:
     if not isinstance(quota_windows, list):
         return False
     ids = {window.get("id") for window in quota_windows if isinstance(window, dict)}
-    return ids == set(ANTIGRAVITY_QUOTA_WINDOW_IDS)
+    return (len(ids) == len(quota_windows)
+            and set(ANTIGRAVITY_QUOTA_WINDOW_IDS) <= ids
+            and ids <= set(ANTIGRAVITY_ALL_WINDOW_SPECS))
 
 
 def antigravity_family_status(status: AccountStatus, family: str | None) -> AccountStatus:
@@ -425,7 +466,6 @@ def antigravity_family_status(status: AccountStatus, family: str | None) -> Acco
         return status
     windows = status.quota_windows or []
     valid = (family in {"gemini", "claude_gpt"} and isinstance(windows, list)
-             and len(windows) == 4
              and all(isinstance(w, dict) and isinstance(w.get("id"), str) for w in windows)
              and has_complete_antigravity_quota_windows(status))
     if not valid:
@@ -434,7 +474,7 @@ def antigravity_family_status(status: AccountStatus, family: str | None) -> Acco
         if not isinstance(window, dict):
             valid = False
             break
-        spec = ANTIGRAVITY_QUOTA_WINDOW_SPECS.get(window.get("id"), {})
+        spec = ANTIGRAVITY_ALL_WINDOW_SPECS.get(window.get("id"), {})
         valid = valid and all(window.get(key) == spec.get(key) for key in ("family", "window_kind", "window_minutes"))
         for key in ("used_percent", "resets_at", "resets_in_seconds"):
             value = window.get(key)
@@ -466,11 +506,11 @@ def _antigravity_quota_windows_from_extra(
         if not isinstance(entry, dict):
             return None
         window_id = entry.get("id")
-        if not isinstance(window_id, str) or window_id not in ANTIGRAVITY_QUOTA_WINDOW_SPECS:
+        if not isinstance(window_id, str) or window_id not in ANTIGRAVITY_ALL_WINDOW_SPECS:
             return None
         if window_id in windows_by_id:
             return None
-        spec = ANTIGRAVITY_QUOTA_WINDOW_SPECS[window_id]
+        spec = ANTIGRAVITY_ALL_WINDOW_SPECS[window_id]
         window = entry.get("window")
         if not isinstance(window, dict):
             return None
@@ -502,9 +542,9 @@ def _antigravity_quota_windows_from_extra(
             "reset_evidence": "provider_timestamp",
         }
 
-    if set(windows_by_id) != set(ANTIGRAVITY_QUOTA_WINDOW_IDS):
+    if not set(ANTIGRAVITY_QUOTA_WINDOW_IDS) <= set(windows_by_id):
         return None
-    return [windows_by_id[window_id] for window_id in ANTIGRAVITY_QUOTA_WINDOW_IDS]
+    return [windows_by_id[key] for key in ANTIGRAVITY_ALL_WINDOW_SPECS if key in windows_by_id]
 
 
 def _antigravity_quota_summary_payload(data: Any) -> dict | None:
@@ -559,9 +599,9 @@ def _antigravity_quota_windows_from_summary(
                 return None
             windows_by_id[window_id] = window
 
-    if not saw_bucket or set(windows_by_id) != set(ANTIGRAVITY_QUOTA_WINDOW_IDS):
+    if not saw_bucket or not set(ANTIGRAVITY_QUOTA_WINDOW_IDS) <= set(windows_by_id):
         return None
-    return [windows_by_id[window_id] for window_id in ANTIGRAVITY_QUOTA_WINDOW_IDS]
+    return [windows_by_id[key] for key in ANTIGRAVITY_ALL_WINDOW_SPECS if key in windows_by_id]
 
 
 def _antigravity_summary_bucket_window(
@@ -576,14 +616,25 @@ def _antigravity_summary_bucket_window(
     ) or ""
     description = _string_value(bucket.get("description")) or ""
     searchable = " ".join([group_name, bucket_id_raw, bucket_name, description]).lower()
-    family = _antigravity_summary_family(searchable)
-    window_kind = _antigravity_summary_window_kind(searchable)
+    if "argon" in searchable:
+        # Recognize the exact provider bucket, never a generic Gemini substring.
+        if bucket_id_raw != "gemini-argon-wtu-weekly":
+            return None
+        family, window_kind = "argon", "weekly"
+    else:
+        family = _antigravity_summary_family(searchable)
+        window_kind = _antigravity_summary_window_kind(searchable)
+    declared_window = bucket.get("window")
+    if declared_window is not None and declared_window != (
+        "weekly" if window_kind == "weekly" else "5h"
+    ):
+        return None
     if family is None or window_kind is None:
         return None
     window_id = _antigravity_summary_window_id(family, window_kind)
     if window_id is None:
         return None
-    spec = ANTIGRAVITY_QUOTA_WINDOW_SPECS[window_id]
+    spec = ANTIGRAVITY_ALL_WINDOW_SPECS[window_id]
     remaining = bucket.get("remaining")
     remaining_fraction = None
     if isinstance(remaining, dict):
@@ -596,7 +647,7 @@ def _antigravity_summary_bucket_window(
         )
     if remaining_fraction is None:
         return None
-    if remaining_fraction < 0.0 or remaining_fraction > 1.0:
+    if not math.isfinite(remaining_fraction) or remaining_fraction < 0.0 or remaining_fraction > 1.0:
         return None
     used_percent = round(100.0 - remaining_fraction * 100.0, 6)
     reset = _antigravity_summary_reset(bucket)
@@ -642,7 +693,7 @@ def _antigravity_summary_window_kind(searchable: str) -> str | None:
 
 
 def _antigravity_summary_window_id(family: str, window_kind: str) -> str | None:
-    for window_id, spec in ANTIGRAVITY_QUOTA_WINDOW_SPECS.items():
+    for window_id, spec in ANTIGRAVITY_ALL_WINDOW_SPECS.items():
         if spec["family"] == family and spec["window_kind"] == window_kind:
             return window_id
     return None
@@ -651,6 +702,8 @@ def _antigravity_summary_window_id(family: str, window_kind: str) -> str | None:
 def _antigravity_summary_title(family: str, window_kind: str) -> str:
     if family == "gemini":
         prefix = "Gemini Models"
+    elif family == "argon":
+        prefix = "Gemini 4 Argon (separate quota)"
     else:
         prefix = "Claude and GPT models"
     suffix = "Weekly Limit" if window_kind == "weekly" else "Five Hour Limit"
@@ -704,12 +757,15 @@ def _antigravity_summary_reset(bucket: dict) -> tuple[float, int, str] | None:
 def _parse_antigravity_reset_timestamp(value: Any) -> float | None:
     parsed = _parse_reset_timestamp(value)
     if parsed is not None:
-        return parsed
+        return parsed if not isinstance(value, bool) and math.isfinite(parsed) else None
     if not isinstance(value, dict):
         return None
 
     seconds = _to_float_or_none(value.get("seconds", value.get("epochSeconds")))
-    nanos = _to_float_or_none(value.get("nanos", value.get("nanoseconds"))) or 0.0
+    raw_nanos = value.get("nanos", value.get("nanoseconds", 0))
+    nanos = _to_float_or_none(raw_nanos)
+    if nanos is None or not 0 <= nanos < 1_000_000_000:
+        return None
     if seconds is not None:
         return seconds + (nanos / 1_000_000_000)
 
@@ -760,10 +816,11 @@ def _most_constrained_antigravity_window(quota_windows: list[dict]) -> dict:
 
 
 def _to_float_or_none(value: Any) -> float | None:
-    if value is None:
+    if value is None or isinstance(value, bool):
         return None
     try:
-        return float(value)
+        number = float(value)
+        return number if math.isfinite(number) else None
     except (TypeError, ValueError):
         return None
 

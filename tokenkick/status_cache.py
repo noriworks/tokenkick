@@ -13,6 +13,7 @@ from dataclasses import fields, replace
 from datetime import datetime, timezone
 from pathlib import Path
 
+from .antigravity import ANTIGRAVITY_REFRESH_ERRORS, antigravity_refresh_error_code
 from .claude_monitoring import cooling_down, diagnostic_text, failure_count, parse_time
 from .direct import normalize_source_detail
 from .models import (
@@ -280,6 +281,10 @@ def _status_cache_entry_provider_age(entry: dict) -> str | None:
 
 def _status_cache_stale_reason(entry: dict) -> str | None:
     account = entry.get("account")
+    if isinstance(account, AccountConfig) and account.provider == "antigravity":
+        detail = ANTIGRAVITY_REFRESH_ERRORS.get(entry.get("refresh_diagnostic"))
+        if entry.get("refresh_error") and detail:
+            return detail
     if isinstance(account, AccountConfig) and account.provider == "claude":
         detail = diagnostic_text(entry)
         if detail:
@@ -394,6 +399,8 @@ def _status_cache_error_class(status: AccountStatus) -> str | None:
         return "IncompleteClaudeWeeklyReset"
     if status.state != AccountState.UNKNOWN or not status.error:
         return None
+    if antigravity_refresh_error_code(status) == "quota_schema":
+        return "QuotaSchemaError"
     error = status.error.lower()
     if "no session data" in error:
         return None
@@ -480,6 +487,9 @@ def _load_status_cache_entries() -> dict[str, dict]:
                 else status.observed_at or cached_at
             ),
             "refresh_error": refresh_error,
+            "refresh_diagnostic": (entry.get("refresh_diagnostic")
+                                   if isinstance(entry.get("refresh_diagnostic"), str)
+                                   and entry["refresh_diagnostic"] in ANTIGRAVITY_REFRESH_ERRORS else None),
             "last_direct_probe_at": last_direct_probe_at if isinstance(last_direct_probe_at, str) else None,
             "last_direct_probe_error": last_direct_probe_error,
             "direct_rate_limit_failures": failure_count(entry.get("direct_rate_limit_failures")),
@@ -513,7 +523,8 @@ def effective_cached_status(status: AccountStatus, entry: dict, config: Config) 
     age = max(0, int((_cli()._status_cache_now() - observed).total_seconds())) if observed else None
     return replace(
         status, stale=True, stale_seconds=age,
-        error=status.error or entry.get("refresh_error") or "Cached observation needs refresh.",
+        error=status.error or ANTIGRAVITY_REFRESH_ERRORS.get(entry.get("refresh_diagnostic"))
+        or entry.get("refresh_error") or "Cached observation needs refresh.",
     )
 
 
@@ -677,6 +688,7 @@ def _status_cache_entry_dict(entry: dict) -> dict:
         "cached_at": entry["cached_at"],
         "provider_observed_at": provider_observed_at,
         "refresh_error": entry.get("refresh_error"),
+        "refresh_diagnostic": entry.get("refresh_diagnostic"),
         "needs_refresh": bool(entry.get("needs_refresh", False)),
         "last_direct_probe_at": entry.get("last_direct_probe_at"),
         "direct_rate_limit_failures": failure_count(entry.get("direct_rate_limit_failures")),
@@ -760,8 +772,13 @@ def _save_status_cache(
             failure = failures_by_key.get(key) or (status and _status_cache_error_class(status))
             if failure:
                 existing = entries.get(key)
+                diagnostic = antigravity_refresh_error_code(status) if status is not None else None
+                if diagnostic:
+                    status = replace(status, error=ANTIGRAVITY_REFRESH_ERRORS[diagnostic],
+                                     source_diagnostics={"provider": "antigravity", "error_code": diagnostic})
                 if existing is not None:
                     existing["refresh_error"] = failure
+                    existing["refresh_diagnostic"] = diagnostic
                     existing["account"] = account
                     existing["cached_at"] = cached_at
                     existing["provider_observed_at"] = _entry_provider_observed_at(existing)
@@ -774,6 +791,7 @@ def _save_status_cache(
                         "cached_at": cached_at,
                         "provider_observed_at": status.observed_at or cached_at,
                         "refresh_error": failure,
+                        "refresh_diagnostic": diagnostic,
                     }
                     _apply_claude_probe_context_to_entry(entry, claude_probe_context)
                     entries[key] = entry
