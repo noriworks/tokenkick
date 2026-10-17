@@ -1,5 +1,20 @@
 # Changelog
 
+## v1.23.7
+
+- Suppress redundant Claude weekly requests when fresh direct evidence shows an
+  already-running week, including rounded zero usage. Preserve future eligible
+  session automation and monitoring diagnostics.
+- Reconcile accepted weekly-request guards against an existing week only with a
+  matching receipt and two fresh, positive-use observations at least two minutes
+  apart. Bound reset rounding against the original deadline; preserve history,
+  account locking and cooldowns, without sending a replacement request.
+- Distinguish accepted requests awaiting weekly evidence from genuinely uncertain
+  requests in terminal and JSON/MCP diagnostics.
+- Show the separate Argon 4 weekly allowance in normal terminal status, once per
+  identity, with cache freshness and monitor-only labeling. Show stagger ownership
+  and scheduled slots instead of suggesting immediate kicks for managed accounts.
+
 ## v1.23.6
 
 - Restore native Antigravity monitoring when Google advertises the separate

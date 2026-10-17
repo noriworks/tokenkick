@@ -100,6 +100,7 @@ from .sources import (
 from .scheduling import pending_transaction
 from .request_scope import run_scope, approve_targets, target_allowed, consume_target
 from .action_state import account_action, action_blocker, UncertainActionError
+from .claude_action_recovery import normalize_status as normalize_claude_status, weekly_window_active
 from . import antigravity_automation
 from .versioning import installed_version, read_daemon_pidfile, write_daemon_pidfile, pidfile_process_matches
 from .telegram_remote import (
@@ -1831,6 +1832,7 @@ def _kick_eligibility(
     pending_kick: PendingKick | None = None,
     allow_stale: bool = False,
 ) -> KickEligibility:
+    status = normalize_claude_status(status)
     resolved_provider = provider or (account.provider if account is not None else None)
     if account is not None:
         blocker = action_blocker(CONFIG_DIR, account_key_string(account))
@@ -2029,6 +2031,7 @@ def _session_quota_exhausted(status: AccountStatus) -> bool:
 
 
 def _long_kick_eligible(status: AccountStatus) -> bool:
+    status = normalize_claude_status(status)
     return status.state == AccountState.FRESH or _weekly_reset_ready(status)
 
 
@@ -2047,6 +2050,7 @@ def _session_kick_eligible(
     *,
     allow_stale: bool = False,
 ) -> bool:
+    status = normalize_claude_status(status)
     resolved_provider = provider or (account.provider if account is not None else None)
     if resolved_provider == "codex" and not session_actions_allowed(account, status):
         return False
@@ -5323,6 +5327,9 @@ def _kick_claude_usage_session(
     kick_type: str = "session",
 ) -> KickEvent:
     """Generation acceptance and a verified quota anchor are separate evidence."""
+    if kick_type == "kick" and pre_status is not None and weekly_window_active(pre_status):
+        return KickEvent(label=account.label, success=False, confirmed=False, dispatch_state="not_sent",
+                         error="Claude weekly window is already active; no weekly request needed.")
     event = kick_account(account, record=False, phantom_recovery=False, model_override=model_override)
     if not event.success:
         return event

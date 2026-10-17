@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import math
+
+from .claude_action_recovery import guard_diagnostic, normalize_status
 
 from rich.markup import escape
 from rich.table import Table
 from rich.text import Text
 
-from .claude_monitoring import diagnostic_text, diagnostics
+from .claude_monitoring import diagnostic_text, diagnostics, parse_time
 from .kicker import KICKABLE_PROVIDERS, account_is_kickable
 from .codex_limits import display_status as codex_display_status, session_limit_info
 from .models import (
@@ -327,6 +330,60 @@ def _format_pending_kick_cell(pending: PendingKick | None, *, verbose: bool = Fa
     return rendered
 
 
+def _stagger_action(account):
+    from . import stagger
+    if account is None or not stagger.owns(account, _cli().CONFIG_DIR):
+        return None
+    payload = _cli()._stagger_status_payload()
+    state = payload.get("state", "unknown")
+    if state in {"blocked", "paused", "degraded", "disabled"} or not payload.get("daemon_running"):
+        return "Stagger " + (state if payload.get("daemon_running") else "daemon stopped")
+    if payload.get("next_family") == account.antigravity_family and payload.get("next_at"):
+        return "Stagger: " + datetime.fromtimestamp(payload["next_at"]).astimezone().strftime("%H:%M %Z")
+    return "Stagger: " + ("waiting for peer" if state in {"scheduled", "aligned"} else state.replace("_", " "))
+
+
+def _additional_weekly_quotas(status):
+    return [dict(w, monitor_only=True) for w in status.quota_windows or []
+            if isinstance(w, dict) and w.get("id") == "antigravity-quota-summary-argon-weekly"
+            and w.get("family") == "argon" and w.get("window_kind") == "weekly"
+            and w.get("window_minutes") == 10080
+            and type(w.get("used_percent")) in (int, float) and math.isfinite(w["used_percent"])
+            and 0 <= w["used_percent"] <= 100
+            and all(w.get(k) is None or (type(w[k]) in (int, float) and math.isfinite(w[k]))
+                    for k in ("resets_at", "resets_in_seconds"))]
+
+
+def _render_argon_rows(table, statuses, accounts_by_label, cache_entries, show_queued):
+    # Both family rows carry the same provider response. Prefer its newest copy.
+    selected = {}
+    for status in statuses:
+        account = accounts_by_label.get(status.label)
+        if account is None or account.provider != "antigravity":
+            continue
+        quotas = _additional_weekly_quotas(status)
+        if len(quotas) != 1:
+            continue
+        key = account.identity_provider_id or account.identity_email or account.label
+        observed = parse_time(status.observed_at)
+        old = parse_time(selected[key][0].observed_at) if key in selected else None
+        if key not in selected or (observed is not None and (old is None or observed > old)):
+            selected[key] = (status, account, quotas[0])
+    for status, account, quota in selected.values():
+        entry = cache_entries.get(account_key_string(account), {})
+        observed = parse_time(status.observed_at)
+        age = (datetime.now(timezone.utc) - observed).total_seconds() if observed else None
+        cached = (status.stale or status.error or entry.get("refresh_error") or entry.get("needs_refresh")
+                  or age is None or not -30 <= age <= 900)
+        row = [Text("Argon 4" + (f" ({account.label})" if len(selected) > 1 else "")),
+               "Weekly (cached)" if cached else "Weekly quota", _format_antigravity_quota_reset(quota),
+               _format_used_percent(quota["used_percent"])]
+        if show_queued:
+            row.append("")
+        row.append("Monitor only; separate allowance")
+        table.add_row(*row)
+
+
 def _status_rows_as_dict(
     statuses: list[AccountStatus],
     accounts: list[AccountConfig],
@@ -336,7 +393,7 @@ def _status_rows_as_dict(
     pending = _pending_by_label()
     accounts_by_label = {account.label: account for account in accounts}
     cache_entries = cache_entries or {}
-    history = _cli().load_kick_history(limit=200)
+    history = _cli().load_kick_history(limit=1000)
     rows = []
     for status in _sort_statuses(statuses, accounts):
         account = accounts_by_label.get(status.label)
@@ -346,10 +403,15 @@ def _status_rows_as_dict(
         limit_info = session_limit_info(account, status) if account and account.provider == "codex" else {}
         if account is not None:
             status = codex_display_status(account, status)
+        status = normalize_status(status)
         row = status.to_dict()
         if account is not None:
             from . import stagger
             row["automation_owner"] = stagger.ownership(account, _cli().CONFIG_DIR)
+            row["automation_action"] = _stagger_action(account)
+            diagnostic = guard_diagnostic(_cli().CONFIG_DIR, account, history)
+            if diagnostic:
+                row["request_recovery"] = diagnostic
         if account is not None and account.provider == "claude":
             probe = getattr(status, "_claude_probe_context", None)
             monitoring_entry = dict(entry or {})
@@ -378,6 +440,7 @@ def _status_rows_as_dict(
             row["schedule_weekdays"] = schedule.weekdays if schedule is not None else None
             row["schedule_weekends"] = schedule.weekends if schedule is not None else None
             if account.provider == "antigravity":
+                row["additional_quotas"] = _additional_weekly_quotas(status)
                 quota_targets = _antigravity_quota_targets(status)
                 if account.antigravity_family:
                     quota_targets = [target for target in quota_targets if target["family"] == account.antigravity_family]
@@ -632,7 +695,7 @@ def _render_status_table(
         table.add_row(*session_row)
         if verbose and provider == "antigravity" and isinstance(s.quota_windows, list):
             for window in s.quota_windows:
-                if not isinstance(window, dict):
+                if not isinstance(window, dict) or window.get("family") == "argon":
                     continue
                 quota_row = [
                     "",
@@ -645,6 +708,7 @@ def _render_status_table(
                 quota_row.append("")
                 table.add_row(*quota_row)
 
+    _render_argon_rows(table, sorted_statuses, accounts_by_label, cache_entries, show_queued_column)
     _cli().console.print(table)
     from . import stagger
     stagger.render(_cli().console, _cli()._stagger_status_payload())
@@ -652,6 +716,8 @@ def _render_status_table(
     fresh = []
     for s in sorted_statuses:
         account = accounts_by_label.get(s.label)
+        if account is not None and stagger.owns(account, _cli().CONFIG_DIR):
+            continue
         cache_entry = (
             cache_entries.get(account_key_string(account)) if account is not None else None
         )
@@ -916,11 +982,18 @@ def _status_action(
     if account is not None:
         blocker = _cli().action_blocker(_cli().CONFIG_DIR, account_key_string(account))
         if blocker:
+            diagnostic = guard_diagnostic(_cli().CONFIG_DIR, account, _cli().load_kick_history(limit=1000))
+            if diagnostic and diagnostic["accepted"]:
+                return "Accepted request; checking " + ("weekly evidence" if diagnostic["request_kind"] == "kick" else "later window")
             return {
                 "request_awaiting_anchor": "Request accepted; awaiting quota evidence",
                 "request_outcome_uncertain": "Request uncertain; recovery required",
                 "request_recovery_cooldown": "Request guard recovered; next poll",
             }[blocker]
+    managed = _stagger_action(account)
+    if managed:
+        return managed
+    status = normalize_status(status)
     if _status_weekly_exhausted(status):
         return "Weekly exhausted"
     if _status_session_exhausted(status):
@@ -1141,6 +1214,7 @@ def _status_state_display(
     cached_refresh_unavailable: bool = False,
     request_blocked: bool = False,
 ) -> str:
+    status = normalize_status(status)
     if request_blocked:
         return "🟡 Request blocked"
     if _status_weekly_exhausted(status):

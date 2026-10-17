@@ -87,6 +87,14 @@ Claude's daemon reconciliation requires a matching accepted receipt and two dist
 fresh, direct observations of a fixed later quota window, at least 60 seconds apart.
 It rejects stale, synthetic, fallback, unknown-identity and moving-clock evidence.
 A later session can retire only a session request; a later week can retire either.
+For an accepted weekly request sent against an already-active week, recovery can
+also use two fresh direct observations with positive weekly usage, at least two
+minutes apart. The inferred week must predate the request by more than five
+minutes. Deadline rounding is limited to 60 seconds against the original
+observation, never a moving reference. This records `existing_weekly_window`;
+it does not claim the request started that week. Rounded zero usage can suppress
+a redundant weekly request but cannot retire its guard.
+
 The original outcome remains unconfirmed in history. Recovery records its evidence
 under the action lock and delays new dispatch by at least one polling interval.
 It never generates a replacement request. Malformed state or missing evidence

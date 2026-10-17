@@ -44,7 +44,7 @@ def test_guard_blocks_eligibility_terminal_json_and_dispatch(case, tmp_path, mon
     send = Mock(side_effect=AssertionError('duplicate generation'))
     monkeypatch.setattr(cli, '_kick_and_notify_owned', send)
     assert cli._kick_eligibility(a, s, history=h).reason == 'request_outcome_uncertain'
-    assert status_rendering._status_action(s, {a.label: 'claude'}, a) == 'Request uncertain; recovery required'
+    assert status_rendering._status_action(s, {a.label: 'claude'}, a) == 'Accepted request; checking later window'
     row = status_rendering._status_rows_as_dict([s], [a], Config())[0]
     assert not row['kickable'] and row['kick_blocked_reason'] == 'request_outcome_uncertain'
     assert 'blocked' in status_rendering._status_state_display(s, request_blocked=True)
@@ -229,8 +229,14 @@ def test_recovery_never_reenters_its_own_active_request(case, tmp_path):
         assert path.read_bytes() == before
 
 
-def test_daemon_reconciles_before_dispatch_and_next_poll_cannot_duplicate(case, tmp_path, monkeypatch):
+@pytest.mark.parametrize("existing_week", [False, True])
+def test_daemon_reconciles_before_dispatch_and_next_poll_cannot_duplicate(case, tmp_path, monkeypatch, existing_week):
     a, s, h, now, path = case
+    a = replace(a, session_auto_kick=True)
+    if existing_week:
+        s = replace(s, used_percent=2, resets_at=now + 3 * 86400, resets_in_seconds=3 * 86400)
+        h[0] = replace(h[0], kind='kick', kick_type='kick')
+    separation = 120 if existing_week else 60
     config = Config(accounts=[a], poll_interval_minutes=10)
     monkeypatch.setattr(cli.Config, 'load', lambda: config)
     monkeypatch.setattr(cli, '_migrate_codex_home_keys_if_needed', lambda c, **kw: c)
@@ -244,7 +250,7 @@ def test_daemon_reconciles_before_dispatch_and_next_poll_cannot_duplicate(case, 
     monkeypatch.setattr(cli, '_daemon_log', log)
     # Stop after the real recovery phase to isolate unrelated poll side effects.
     monkeypatch.setattr(status_rendering, 'notify_dormant_accounts', Mock(side_effect=RuntimeError('after recovery')))
-    for tick in [now, now + 60]:
+    for tick in [now, now + separation]:
         monkeypatch.setattr(time, 'time', lambda: tick)
         current = replace(s, observed_at=iso(tick))
         monkeypatch.setattr(cli, '_refresh_status_cache', lambda *args, **kw: ([a], [current]))
@@ -256,15 +262,20 @@ def test_daemon_reconciles_before_dispatch_and_next_poll_cannot_duplicate(case, 
     result = cli._kick_and_notify(a, config, current, automatic=True, kick_type='kick')
     assert result.dispatch_state == 'not_sent'
     send.assert_not_called()
-    monkeypatch.setattr(time, 'time', lambda: now + 661)
+    monkeypatch.setattr(time, 'time', lambda: now + separation + 601)
     def dispatch(*args, **kwargs):
         action_state.mark_action_dispatched()
-        event = KickEvent(label=a.label, timestamp=now + 661, kind='kick', kick_type='kick')
+        event = KickEvent(label=a.label, timestamp=now + separation + 601, kind='session', kick_type='session')
         h.append(event)
         return event
     send.side_effect = dispatch
-    assert cli._kick_and_notify(a, config, current, automatic=True, kick_type='kick').confirmed
+    # The active week is no longer a reason to send; a future due session is.
     assert cli._kick_and_notify(a, config, current, automatic=True, kick_type='kick').dispatch_state == 'not_sent'
+    send.assert_not_called()
+    current = replace(current, state=AccountState.ACTIVE, observed_at=iso(now + separation + 601),
+                      session_resets_at=now + separation + 600, session_resets_in_seconds=-1, session_window_minutes=300)
+    assert cli._kick_and_notify(a, config, current, automatic=True, kick_type='session').confirmed
+    assert cli._kick_and_notify(a, config, current, automatic=True, kick_type='session').dispatch_state == 'not_sent'
     assert send.call_count == 1
 
 

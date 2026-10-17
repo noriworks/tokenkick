@@ -837,7 +837,10 @@ Notes:
   Automatic kicks still prefer Flash Low; Argon is not an automatic fallback.
   Medium/High variants and use on the Claude/GPT family are rejected before dispatch.
   Some plans expose a separate Argon weekly allowance. TokenKick retains that
-  additional quota separately in native status; when present, an Argon override
+  additional quota separately in native status and shows an **Argon 4** monitor-only
+  weekly row in the normal terminal view, once per underlying identity. Cached
+  data is labeled; this does not enable Argon automation or create a session quota.
+  JSON/MCP exposes it under `additional_quotas`. When present, an Argon override
   is blocked for ordinary Gemini kicks because it cannot anchor that window.
 
 ### App Mode And `tk app` (Native App Integration)
@@ -1129,3 +1132,18 @@ History records `weekly_reset_clock` with the weekly deadline and observation ti
 pending records can reconcile during their current seven-day window; future requests also store
 an account fingerprint and pre-request weekly deadline. Weekly confirmation does not confirm a
 session or train session surface rankings. No extra generation is sent to obtain confirmation.
+
+
+### Accepted requests and managed status actions
+
+An accepted Claude request can remain blocked while its quota effect is unverified.
+Status distinguishes this from uncertain transport and exposes the recovery
+requirement in `request_recovery` in JSON/MCP. A fresh already-active weekly window
+suppresses another weekly request even when usage rounds to zero; eligible future
+sessions remain independent. Safe automatic guard recovery requires a matching
+receipt and repeated native evidence, preserves historical confirmation, and
+waits through a cooldown before another dispatch. See [server recovery](SERVER_RECOVERY.md).
+
+Stagger-managed account actions show their controller state or next scheduled
+slot. These accounts are excluded from the general “kick now” banner. Explicit
+manual commands retain their existing safeguards.
